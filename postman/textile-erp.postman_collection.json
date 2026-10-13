@@ -1,0 +1,1268 @@
+{
+  "item": [
+    {
+      "id": "5d0195bc-0f33-410d-aef1-ea91fb8458df",
+      "name": "Health check",
+      "request": {
+        "description": {
+          "content": "ok when the server and database are both up.",
+          "type": "text/plain"
+        },
+        "url": {
+          "path": [
+            "health"
+          ],
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "raw": "{{baseUrl}}/health"
+        },
+        "method": "GET",
+        "auth": {
+          "type": "noauth",
+          "noauth": []
+        }
+      },
+      "response": [],
+      "event": []
+    },
+    {
+      "id": "cb886048-c811-46d1-8276-25b24e0e7c5c",
+      "name": "Auth (all users)",
+      "item": [
+        {
+          "id": "cb452ec5-52c4-429d-a93a-67a5b1219ad4",
+          "name": "Login (super admin)",
+          "request": {
+            "description": {
+              "content": "Super admins: no companyCode.",
+              "type": "text/plain"
+            },
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "login"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/login"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyCode\": \"{{superAdminCode}}\",\n  \"email\": \"admin@example.com\",\n  \"password\": \"your-password\"\n}"
+            },
+            "auth": {
+              "type": "noauth",
+              "noauth": []
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "ce2adcab-a8eb-46dc-b3fa-9a931aaa82a8",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.accessToken) pm.collectionVariables.set('accessToken', b.accessToken);",
+                  "if (b.refreshToken) pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "adef84f2-c8d2-412e-adec-44239f04105d",
+          "name": "Login (company admin / user)",
+          "request": {
+            "description": {
+              "content": "Client admins and company users: company code + email + password.",
+              "type": "text/plain"
+            },
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "login"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/login"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyCode\": \"{{companyCode}}\",\n  \"email\": \"waqas@example.com\",\n  \"password\": \"Waqas-Pass-123\"\n}"
+            },
+            "auth": {
+              "type": "noauth",
+              "noauth": []
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "2a3b5f2f-f09a-4973-b9eb-5083940da8cb",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.accessToken) pm.collectionVariables.set('accessToken', b.accessToken);",
+                  "if (b.refreshToken) pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "30f2e440-cd69-44c6-be67-849c06c5dcd4",
+          "name": "Me",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "me"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/me"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "aef20a10-1b50-41d1-882d-0ea4369b1591",
+          "name": "Refresh token",
+          "request": {
+            "description": {
+              "content": "Gives a new access + refresh token. The old refresh token stops working.",
+              "type": "text/plain"
+            },
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "refresh"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/refresh"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth",
+              "noauth": []
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "db49d00a-a0f5-4580-9fc1-93a77ae9a7f8",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.accessToken) pm.collectionVariables.set('accessToken', b.accessToken);",
+                  "if (b.refreshToken) pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "12ea2ad8-6ed5-4c6b-9794-73db955c8d8b",
+          "name": "Change password",
+          "request": {
+            "description": {
+              "content": "Ends every session; log in again with the new password.",
+              "type": "text/plain"
+            },
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "change-password"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/change-password"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"your-password\",\n  \"newPassword\": \"New-Password-123\"\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "b092a832-46a3-4b06-8a89-2c76e8940570",
+          "name": "Logout (this device)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "logout"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/logout"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "auth": {
+              "type": "noauth",
+              "noauth": []
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "c2a20bfe-7f01-485b-b1cc-ca0cdd317e90",
+          "name": "Logout from all devices",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "logout-all"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/logout-all"
+            },
+            "method": "POST"
+          },
+          "response": [],
+          "event": []
+        }
+      ],
+      "event": []
+    },
+    {
+      "id": "ec378d23-2829-4d4a-99b3-3b43aa9c0fd7",
+      "name": "Super admins (super admin only)",
+      "item": [
+        {
+          "id": "5b8089fa-67d6-4a05-8403-47156b120485",
+          "name": "List super admins",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins?page=1&limit=25"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "99e96e2c-62a9-4495-8677-594b61a5021d",
+          "name": "Create super admin",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ali Khan\",\n  \"email\": \"ali@example.com\",\n  \"password\": \"Ali-Pass-12345\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "a3aac8d0-fd3c-4334-a8d2-c86aaedaa022",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.id) pm.collectionVariables.set('superAdminId', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "8ea0eae4-4177-4b79-9b3f-c8a86382852d",
+          "name": "Update super admin (rename / switch off)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins",
+                "{{superAdminId}}"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins/{{superAdminId}}"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ali Raza\",\n  \"isActive\": true\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "a889fdf8-0e3e-4aa9-8556-07939cd8d19f",
+          "name": "Reset super admin password",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins",
+                "{{superAdminId}}",
+                "reset-password"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins/{{superAdminId}}/reset-password"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPassword\": \"Reset-Pass-12345\"\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "name": "Super admins login code",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins",
+                "login-code"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins/login-code"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.collectionVariables.set(\"superAdminCode\", pm.response.json().code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "New super admins login code (old stops working)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "super-admins",
+                "login-code",
+                "new"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/super-admins/login-code/new"
+            },
+            "method": "POST"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.collectionVariables.set(\"superAdminCode\", pm.response.json().code);"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "event": []
+    },
+    {
+      "id": "61da45ab-e8a8-483d-83c2-d92b541dfb92",
+      "name": "Companies (super admin only)",
+      "item": [
+        {
+          "id": "76cbdc11-2a3e-445f-89d4-ff1045ccddf2",
+          "name": "List companies",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/companies?page=1&limit=25"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "c6009972-1560-4d1d-be35-18727459c3ac",
+          "name": "Register company (with first client admin, no services)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/companies"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Waqas Textile\",\n  \"contactPerson\": \"Waqas Owais\",\n  \"phone\": \"0300-1234567\",\n  \"address\": \"Faisalabad\",\n  \"admin\": {\n    \"name\": \"Waqas Owais\",\n    \"email\": \"waqas@example.com\",\n    \"password\": \"Waqas-Pass-123\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "83e7c602-a708-4f62-9885-c8ac00ce7727",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.id) pm.collectionVariables.set('companyId', b.id);",
+                  "if (b.code) pm.collectionVariables.set('companyCode', b.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "ec8ebc19-cb6f-4016-bc15-2d1d96d3b68c",
+          "name": "Company details",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "5ded9b68-5eab-4b52-8e2e-2e7190e21b21",
+          "name": "Update company (switch off: isActive false)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"0300-7654321\",\n  \"isActive\": true\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "name": "New company code (old code stops working)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}",
+                "new-code"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}/new-code"
+            },
+            "method": "POST"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.collectionVariables.set(\"companyCode\", pm.response.json().code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "60461185-f76f-4fab-904d-a08f0ff5c6e1",
+          "name": "Give services to company",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}",
+                "services"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}/services"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PUT",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serviceIds\": [\n    \"<service id>\",\n    \"<service id>\"\n  ]\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        }
+      ],
+      "event": []
+    },
+    {
+      "id": "ae1a491b-075a-45e6-bb94-f19ccda44239",
+      "name": "Services (super admin only)",
+      "item": [
+        {
+          "id": "de2c314e-5ada-446b-9c4d-e2cb3bc0c490",
+          "name": "List services",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "services"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/services"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "8895498a-9413-440c-ae2c-9ac70b79fd34",
+          "name": "Add service",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "services"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/services"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"WASHING\",\n  \"name\": \"Washing\",\n  \"kind\": \"PROCESS\",\n  \"tracksColour\": true\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "id": "445168d6-8e5a-4127-abfb-697b0783feaf",
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.id) pm.collectionVariables.set('serviceId', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "35a2a427-1251-43fe-be15-e39644219ac6",
+          "name": "Update service (switch off: isActive false)",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "services",
+                "{{serviceId}}"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/services/{{serviceId}}"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PATCH",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Washing\",\n  \"isActive\": true\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "889c3171-4980-4ea8-8e87-f495d6c0b179",
+          "name": "Companies that have this service",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "services",
+                "{{serviceId}}",
+                "companies"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/services/{{serviceId}}/companies"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "62a78eab-311a-45a2-8c10-66ebb7b8ada2",
+          "name": "Give this service to companies",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "services",
+                "{{serviceId}}",
+                "companies"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/services/{{serviceId}}/companies"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "PUT",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyIds\": [\n    \"{{companyId}}\"\n  ]\n}"
+            }
+          },
+          "response": [],
+          "event": []
+        }
+      ],
+      "event": []
+    },
+    {
+      "name": "Company users (company admin only)",
+      "item": [
+        {
+          "name": "Company admin login (saves clientAdminToken)",
+          "request": {
+            "description": {
+              "content": "Client admins and company users: company code + email + password.",
+              "type": "text/plain"
+            },
+            "url": {
+              "path": [
+                "v1",
+                "auth",
+                "login"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "raw": "{{baseUrl}}/v1/auth/login"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyCode\": \"{{companyCode}}\",\n  \"email\": \"waqas@example.com\",\n  \"password\": \"Waqas-Pass-123\"\n}"
+            },
+            "auth": {
+              "type": "noauth",
+              "noauth": []
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.accessToken) pm.collectionVariables.set(\"clientAdminToken\", b.accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List users",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users?page=1&limit=25",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ]
+            },
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "Add user",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users"
+              ]
+            },
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ali Operator\",\n  \"email\": \"ali@example.com\",\n  \"password\": \"Ali-Pass-12345\",\n  \"services\": [\n    {\n      \"serviceId\": \"{{serviceId}}\",\n      \"access\": \"FULL\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.id) pm.collectionVariables.set(\"userId\", b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User details",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "Update user (rename / switch off)",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ali Raza\",\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Reset user password",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/{{userId}}/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{userId}}",
+                "reset-password"
+              ]
+            },
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPassword\": \"Ali-New-Pass-1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "Set user services (whole list)",
+          "request": {
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/{{userId}}/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{userId}}",
+                "services"
+              ]
+            },
+            "method": "PUT",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{clientAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"services\": [\n    {\n      \"serviceId\": \"{{serviceId}}\",\n      \"access\": \"VIEW\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "id": "a78ba916-b9a3-4e84-b13d-a4ef9eaed48b",
+      "name": "Audit log (super admin only)",
+      "item": [
+        {
+          "id": "3d840583-251b-42a3-a807-34e732b4ee1f",
+          "name": "List audit log",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "audit-logs"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/audit-logs?page=1&limit=25"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        },
+        {
+          "id": "3aace958-3abc-43d2-ade0-6e695a21e215",
+          "name": "Audit log of one record",
+          "request": {
+            "url": {
+              "path": [
+                "v1",
+                "audit-logs"
+              ],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "entityType",
+                  "value": "User"
+                },
+                {
+                  "key": "entityId",
+                  "value": "{{superAdminId}}"
+                }
+              ],
+              "raw": "{{baseUrl}}/v1/audit-logs?entityType=User&entityId={{superAdminId}}"
+            },
+            "method": "GET"
+          },
+          "response": [],
+          "event": []
+        }
+      ],
+      "event": []
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "type": "string",
+        "value": "{{accessToken}}",
+        "key": "token"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "type": "any",
+      "value": "http://localhost:3000/api",
+      "key": "baseUrl"
+    },
+    {
+      "type": "any",
+      "value": "",
+      "key": "accessToken"
+    },
+    {
+      "type": "any",
+      "value": "",
+      "key": "refreshToken"
+    },
+    {
+      "type": "any",
+      "value": "",
+      "key": "superAdminId"
+    },
+    {
+      "type": "any",
+      "value": "",
+      "key": "companyId"
+    },
+    {
+      "type": "any",
+      "value": "",
+      "key": "serviceId"
+    },
+    {
+      "key": "companyCode",
+      "value": ""
+    },
+    {
+      "key": "superAdminCode",
+      "value": "",
+      "description": "npm run superadmin:code"
+    },
+    {
+      "key": "clientAdminToken",
+      "value": ""
+    },
+    {
+      "key": "userId",
+      "value": ""
+    }
+  ],
+  "info": {
+    "_postman_id": "a9b78bb3-0c29-4049-8b95-a36a00a98acd",
+    "name": "Textile ERP API",
+    "description": "Steps 2a-2b: one login for everyone (company code for company people), super admins, companies, services, audit log.\n\n1. Set baseUrl (default http://localhost:3000/api).\n2. Run \"Login\" first: it saves accessToken and refreshToken automatically.\n3. Access token lasts 15 minutes; run \"Refresh token\" to get a new one.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  }
+}

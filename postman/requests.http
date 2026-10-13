@@ -1,0 +1,299 @@
+### Textile ERP API: VS Code ke andar se chalane ke liye
+### VS Code men "REST Client" extension (Huachao Mao) install karen,
+### phir har request ke upar "Send Request" likha aayega, us par click karen.
+### Pehle "Login" chalayen: baqi requests uska token khud utha leti hen.
+
+@baseUrl = http://localhost:3000/api
+@token = {{login.response.body.accessToken}}
+@refreshToken = {{login.response.body.refreshToken}}
+
+### Health check
+GET {{baseUrl}}/health
+
+### Login (super admin: super admins ka code; "npm run superadmin:code" se dekhen)
+# @name login
+POST {{baseUrl}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "companyCode": "YAHAN-SUPER-ADMIN-CODE",
+  "email": "admin@example.com",
+  "password": "your-password"
+}
+
+### Login (company admin / user: company code ke saath)
+# @name companyLogin
+POST {{baseUrl}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "companyCode": "YAHAN-COMPANY-CODE",
+  "email": "waqas@example.com",
+  "password": "Waqas-Pass-123"
+}
+
+### Me (main kon hun)
+GET {{baseUrl}}/v1/auth/me
+Authorization: Bearer {{token}}
+
+### List super admins
+GET {{baseUrl}}/v1/super-admins?page=1&limit=25
+Authorization: Bearer {{token}}
+
+### Create super admin
+# @name created
+POST {{baseUrl}}/v1/super-admins
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Ali Khan",
+  "email": "ali@example.com",
+  "password": "Ali-Pass-12345"
+}
+
+### Update super admin (naam badalna / isActive false = band)
+PATCH {{baseUrl}}/v1/super-admins/{{created.response.body.id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Ali Raza",
+  "isActive": true
+}
+
+### Reset super admin password
+POST {{baseUrl}}/v1/super-admins/{{created.response.body.id}}/reset-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "newPassword": "Reset-Pass-12345"
+}
+
+### List services (ids yahan se milengi)
+GET {{baseUrl}}/v1/services
+Authorization: Bearer {{token}}
+
+### Add service
+POST {{baseUrl}}/v1/services
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "code": "WASHING",
+  "name": "Washing",
+  "kind": "PROCESS"
+}
+
+### Register company (services baad men di jayengi)
+# @name company
+POST {{baseUrl}}/v1/companies
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Waqas Textile",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "admin": {
+    "name": "Waqas Owais",
+    "email": "waqas@example.com",
+    "password": "Waqas-Pass-123"
+  }
+}
+
+### List companies
+GET {{baseUrl}}/v1/companies?page=1&limit=25
+Authorization: Bearer {{token}}
+
+### Company details
+GET {{baseUrl}}/v1/companies/{{company.response.body.id}}
+Authorization: Bearer {{token}}
+
+### Update company (isActive false = band)
+PATCH {{baseUrl}}/v1/companies/{{company.response.body.id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "phone": "0300-7654321",
+  "isActive": true
+}
+
+### Company ka naya code (purana foran band)
+POST {{baseUrl}}/v1/companies/{{company.response.body.id}}/new-code
+Authorization: Bearer {{token}}
+
+### Company ko services dena (List services wali ids)
+PUT {{baseUrl}}/v1/companies/{{company.response.body.id}}/services
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "serviceIds": []
+}
+
+### Ek service kai companies ko dena (URL men service id, Body men company ids)
+PUT {{baseUrl}}/v1/services/YAHAN-SERVICE-ID/companies
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "companyIds": []
+}
+
+### Service kin companies ke paas he
+GET {{baseUrl}}/v1/services/YAHAN-SERVICE-ID/companies
+Authorization: Bearer {{token}}
+
+### Audit log
+GET {{baseUrl}}/v1/audit-logs?page=1&limit=25
+Authorization: Bearer {{token}}
+
+### Refresh token (naya token joda)
+POST {{baseUrl}}/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### Change password (iske baad dobara Login karna hoga)
+POST {{baseUrl}}/v1/auth/change-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "currentPassword": "your-password",
+  "newPassword": "New-Password-123"
+}
+
+### Logout (is device se)
+POST {{baseUrl}}/v1/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### ===== Company admin: apne users (pehle company admin ke code+email+password se login karen) =====
+
+### Company admin login
+# @name caLogin
+POST {{baseUrl}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "companyCode": "YAHAN-COMPANY-CODE",
+  "email": "waqas@example.com",
+  "password": "Waqas-Pass-123"
+}
+
+### Naya user (serviceId: company admin ke login jawab men services[].id)
+# @name newUser
+POST {{baseUrl}}/v1/users
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Ali Operator",
+  "email": "ali@example.com",
+  "password": "Ali-Pass-12345",
+  "services": [
+    { "serviceId": "YAHAN-SERVICE-ID", "access": "FULL" }
+  ]
+}
+
+### Users ki list
+GET {{baseUrl}}/v1/users?page=1&limit=25
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+
+### User ki detail
+GET {{baseUrl}}/v1/users/{{newUser.response.body.id}}
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+
+### User ki services badalna (poori list)
+PUT {{baseUrl}}/v1/users/{{newUser.response.body.id}}/services
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "services": [
+    { "serviceId": "YAHAN-SERVICE-ID", "access": "VIEW" }
+  ]
+}
+
+### User ka naam badalna / band karna
+PATCH {{baseUrl}}/v1/users/{{newUser.response.body.id}}
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "isActive": true
+}
+
+### User ka password reset
+POST {{baseUrl}}/v1/users/{{newUser.response.body.id}}/reset-password
+Authorization: Bearer {{caLogin.response.body.accessToken}}
+Content-Type: application/json
+
+{
+  "newPassword": "Ali-New-Pass-1"
+}
+
+### Service screen: companies with hasService (checkbox list)
+GET {{baseUrl}}/v1/services/YAHAN-SERVICE-ID/company-options
+Authorization: Bearer {{token}}
+
+### Give a service to ticked companies (only adds)
+POST {{baseUrl}}/v1/services/YAHAN-SERVICE-ID/companies
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "companyIds": ["YAHAN-COMPANY-ID"] }
+
+### ---------- Step 3: Grey inward (client admin token) ----------
+### Add a customer
+POST {{baseUrl}}/v1/customers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "code": 130, "name": "AZ Textiles" }
+
+### Add a quality
+POST {{baseUrl}}/v1/qualities
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "name": "CANVAS 10X7/72X30=65.50\"" }
+
+### Continue numbering from the old system
+PUT {{baseUrl}}/v1/grey-lots/numbering
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nextLotNo": 2437, "nextTypeNo": 613 }
+
+### Add a grey lot
+POST {{baseUrl}}/v1/grey-lots
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "inwardDate": "2026-10-13", "customerId": "YAHAN-CUSTOMER-ID", "qualityId": "YAHAN-QUALITY-ID", "inwardMeters": 2000, "pieces": 28, "dcNo": "5011" }
+
+### List lots
+GET {{baseUrl}}/v1/grey-lots?page=1&limit=25
+Authorization: Bearer {{token}}
+
+### Active toggle
+PUT {{baseUrl}}/v1/grey-lots/YAHAN-LOT-ID/active
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "isActive": false }
+
+### Approve
+POST {{baseUrl}}/v1/grey-lots/YAHAN-LOT-ID/approve
+Authorization: Bearer {{token}}

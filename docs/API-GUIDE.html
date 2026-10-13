@@ -1,0 +1,1407 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Textile ERP APIs</title><style>
+body{font-family:Segoe UI,Arial,sans-serif;color:#1d2433;font-size:12.5px;line-height:1.5;margin:0}
+h1{font-size:24px;margin:0 0 4px} h2{font-size:17px;border-bottom:2px solid #2563eb;padding-bottom:4px;margin-top:26px;page-break-after:avoid}
+h3{font-size:14px;margin:0 0 6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.num{background:#2563eb;color:#fff;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.api{border:1px solid #dbe2ee;border-radius:8px;padding:10px 12px;margin:10px 0;page-break-inside:avoid}
+.line{display:flex;gap:8px;align-items:center;margin:6px 0}
+.m{font-weight:700;font-size:11px;padding:2px 7px;border-radius:4px;color:#fff}
+.GET{background:#059669}.POST{background:#d97706}.PATCH{background:#7c3aed}.PUT{background:#2563eb}.DELETE{background:#dc2626}
+code{font-family:Consolas,monospace;background:#f1f5f9;padding:1px 5px;border-radius:4px;font-size:12px}
+pre{background:#0f172a;color:#e2e8f0;padding:8px 10px;border-radius:6px;font-size:10.5px;white-space:pre-wrap;word-break:break-all;margin:4px 0}
+.lbl{font-weight:600;font-size:11.5px;margin-top:6px}
+.tag{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px}
+.sa{background:#fee2e2;color:#991b1b}.all{background:#dcfce7;color:#166534}.pub{background:#e0e7ff;color:#3730a3}.ca{background:#fef3c7;color:#92400e}
+.note{background:#fffbeb;border-left:3px solid #d97706;padding:6px 8px;margin:6px 0}
+.muted{color:#64748b}
+table{border-collapse:collapse;width:100%;margin:6px 0} td,th{border:1px solid #dbe2ee;padding:5px 7px;text-align:left;vertical-align:top} th{background:#f1f5f9}
+.box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;margin:10px 0}
+ul.fields{margin:4px 0;padding-left:18px}
+.cover{border-bottom:3px solid #2563eb;padding-bottom:10px;margin-bottom:10px}
+</style></head><body>
+<div class="cover"><h1>Textile ERP: APIs ki guide</h1>
+<div class="muted">Front end ke liye | Steps 1, 2a, 2b | 10 October 2026 | Har jawab asal API chala kar liya gaya he</div></div>
+
+<h2>1. Shuru karne se pehle (sirf 3 baaten)</h2>
+<div class="box">
+<p><b>a) Base URL:</b> har API ke aage yeh lagta he: <code>http://SERVER-ADDRESS:3000/api</code><br>
+Maslan login ka poora URL: <code>http://192.168.1.10:3000/api/v1/auth/login</code>. Asal address backend wala dega.</p>
+<p><b>b) Har request ke header:</b><br>
+<code>Content-Type: application/json</code> (jab Body bhejni ho)<br>
+<code>Authorization: Bearer ACCESS-TOKEN</code> (login ke baad har API men; sirf jahan "Token nahi chahiye" likha ho wahan nahi)</p>
+<p><b>c) CORS:</b> aapka front end jis address par chalta he (maslan <code>http://localhost:5173</code>) woh backend wale ko bata den, woh use allow karega. Warna browser "CORS error" dega.</p>
+</div>
+
+<h2>2. Login ka poora tareeqa (sab se zaroori)</h2>
+<table><tr><th>Kaun</th><th>Login screen par kya likhega</th></tr>
+<tr><td>Super admin</td><td><b>Super admins ka code</b> (sab super admins ka ek hi, maslan <code>R4TW-9KXE</code>) + Email + Password</td></tr>
+<tr><td>Company ka admin (client admin) aur us ke users</td><td><b>Company code</b> (maslan <code>K7QM-4XPA</code>) + Email + Password</td></tr></table>
+<p>Login screen par 3 khane rakhen: <b>Company code</b> (zaroori, sab ke liye), Email, Password. Login ka jawab batata he:</p>
+<ul>
+<li><code>user.userType</code>: kaun sa dashboard kholna he. <code>SUPER_ADMIN</code> = super admin dashboard, <code>CLIENT_ADMIN</code> = company admin dashboard, <code>USER</code> = user dashboard.</li>
+<li><code>company</code>: kis company ka he (super admin ke liye <code>null</code>).</li>
+<li><code>services</code>: menu men sirf yahi dikhayen. <code>access</code> = <code>FULL</code> (add/edit kar sakta he) ya <code>VIEW</code> (sirf dekh aur report).</li>
+</ul>
+<h3 style="margin-top:12px">Token ka khel (simple)</h3>
+<ol>
+<li>Login par 2 token milte hen: <code>accessToken</code> (lamba, 15 minute chalta he) aur <code>refreshToken</code> (chhota, 7 din). Dono save karen (maslan localStorage).</li>
+<li>Har API ke saath header: <code>Authorization: Bearer accessToken</code></li>
+<li>Kisi API se <b>401</b> aaye: <code>/v1/auth/refresh</code> ko refreshToken bhejen. <b>Naya</b> accessToken aur <b>naya</b> refreshToken dono save karen (purana refreshToken ab band he). Phir wahi API dobara chalayen.</li>
+<li>Refresh bhi 401 de: tokens mita kar login screen par bhej den.</li>
+<li>Refresh ek waqt men <b>sirf ek dafa</b> chalayen. Ek purana refreshToken do dafa gaya to server security ke liye us user ke sab login khatam kar deta he.</li>
+<li>App khulte waqt <code>GET /v1/auth/me</code> chalayen: is se user, company aur menu (services) dobara mil jate hen.</li>
+</ol>
+
+<h2>3. Errors (sab ek hi shakal men aate hen)</h2>
+<pre>{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Validation failed",
+    "details": [
+      {
+        "field": "body.email",
+        "message": "email must be a valid email"
+      },
+      {
+        "field": "body.password",
+        "message": "password is not allowed to be empty"
+      }
+    ]
+  }
+}</pre>
+<table><tr><th>Status</th><th>Matlab</th><th>Front end kya kare</th></tr>
+<tr><td>400</td><td>Form ka data ghalat</td><td><code>details[].field</code> batata he kaun sa khana (<code>body.email</code> = email). Wahan <code>message</code> dikhayen.</td></tr>
+<tr><td>401</td><td>Login nahi / token khatam / ghalat password</td><td>Refresh karen (upar step 3), warna login screen.</td></tr>
+<tr><td>403</td><td>Is user ko ijazat nahi</td><td>Woh screen/button chhupa den.</td></tr>
+<tr><td>404</td><td>Record nahi mila</td><td>"Nahi mila" dikhayen.</td></tr>
+<tr><td>409</td><td>Pehle se mojood (maslan email)</td><td>message dikhayen.</td></tr>
+<tr><td>422</td><td>Qaide ke khilaf (maslan band service kisi company ko dena)</td><td>message dikhayen.</td></tr>
+<tr><td>429</td><td>Bohat zyada koshishen</td><td>"15 minute baad koshish karen".</td></tr>
+<tr><td>500</td><td>Server ki ghalti</td><td>"Kuch ghalat ho gaya" + <code>requestId</code> dikhayen.</td></tr></table>
+<p class="note">Body men sirf woh fields bhejen jo is guide men likhi hen. Koi faltu field bheji to 400 aata he. Password ka qaida: kam se kam 10 harf, ek capital, ek small, ek number.</p>
+
+<h2>4. Login aur apna account (sab ke liye)</h2>
+<section class="api"><h3><span class="num">1</span> Server chal raha he? <span class="tag pub">Token nahi chahiye</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/health</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "status": "ok"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">2</span> Login: super admin <span class="tag pub">Token nahi chahiye</span></h3>
+<p>Super admins ka code bhejna (company code wale khane men). Yeh code sab super admins ka ek hi he.</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/login</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "companyCode": "KXTC-AGHV",
+  "email": "admin@example.com",
+  "password": "Admin-Pass-123"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "accessToken": "eyJhbGciOiJI...",
+  "refreshToken": "IOIvM3BNN6nR...",
+  "tokenType": "Bearer",
+  "user": {
+    "id": "7afc49df-a6ce-4638-88bb-e340f6810731",
+    "name": "Fahad Ayaz",
+    "email": "admin@example.com",
+    "userType": "SUPER_ADMIN",
+    "companyId": null,
+    "isActive": true,
+    "lastLoginAt": "2026-10-12T09:41:54.627Z",
+    "createdAt": "2026-10-12T09:41:54.216Z"
+  },
+  "company": null,
+  "services": []
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">3</span> Login: company admin / company user <span class="tag pub">Token nahi chahiye</span></h3>
+<p>Company code + email + password. Code chhote harfon men ya dash ke baghair likha ho (<code>k7qm4xpa</code>) to bhi chal jata he.</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/login</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "companyCode": "YDS7-JH6M",
+  "email": "waqas@example.com",
+  "password": "Waqas-Pass-123"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "accessToken": "eyJhbGciOiJI...",
+  "refreshToken": "ZalCYJt3M6Yr...",
+  "tokenType": "Bearer",
+  "user": {
+    "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+    "name": "Waqas Owais",
+    "email": "waqas@example.com",
+    "userType": "CLIENT_ADMIN",
+    "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "isActive": true,
+    "lastLoginAt": "2026-10-12T09:41:56.599Z",
+    "createdAt": "2026-10-12T09:41:56.130Z"
+  },
+  "company": {
+    "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "name": "Waqas Textile",
+    "code": "YDS7-JH6M"
+  },
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+<p class="note">Ghalat code, email ya password par hamesha yahi ek jawab aata he (401): "Company code, email or password is incorrect". 5 ghalat koshishon par account 15 minute ke liye band ho jata he.</p>
+</section>
+<section class="api"><h3><span class="num">4</span> Main kon hun (app khulte waqt) <span class="tag all">Sab log</span></h3>
+<p>Login jaisa jawab, bas tokens ke baghair. Super admin ke liye company null aur services [] aata he.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/auth/me</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "user": {
+    "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+    "name": "Waqas Owais",
+    "email": "waqas@example.com",
+    "userType": "CLIENT_ADMIN",
+    "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "isActive": true,
+    "lastLoginAt": "2026-10-12T09:41:56.599Z",
+    "createdAt": "2026-10-12T09:41:56.130Z"
+  },
+  "company": {
+    "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "name": "Waqas Textile",
+    "code": "YDS7-JH6M"
+  },
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">5</span> Naya token (401 aane par) <span class="tag pub">Token nahi chahiye</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/refresh</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "refreshToken": "LOGIN-WALA-refreshToken"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "accessToken": "eyJhbGciOiJI...",
+  "refreshToken": "uZTQzvz7FHAs...",
+  "tokenType": "Bearer"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">6</span> Apna password badalna <span class="tag all">Sab log</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/change-password</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "currentPassword": "Purana-Pass-123",
+  "newPassword": "Naya-Pass-456"
+}</pre>
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+<p class="note">Is ke baad sab devices se logout ho jata he. User ko login screen par bhej den.</p>
+</section>
+<section class="api"><h3><span class="num">7</span> Logout (is device se) <span class="tag pub">Token nahi chahiye</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/logout</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "refreshToken": "refreshToken"
+}</pre>
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+<p class="note">Phir apne paas se dono tokens mita den. Sab devices se logout: <code>POST /v1/auth/logout-all</code> (token chahiye, Body nahi).</p>
+</section>
+
+<h2>5. Super admins (sirf super admin)</h2>
+<section class="api"><h3><span class="num">8</span> Super admins ki list <span class="tag sa">Super admin</span></h3>
+<p>Query men chahen to: <code>search=ali</code>, <code>isActive=true</code>, <code>page</code>, <code>limit</code> (max 100). <code>total</code> se pages banayen.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/super-admins?page=1&amp;limit=25</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "data": [
+    {
+      "id": "7afc49df-a6ce-4638-88bb-e340f6810731",
+      "name": "Fahad Ayaz",
+      "email": "admin@example.com",
+      "userType": "SUPER_ADMIN",
+      "companyId": null,
+      "isActive": true,
+      "lastLoginAt": "2026-10-12T09:41:54.627Z",
+      "createdAt": "2026-10-12T09:41:54.216Z"
+    },
+    {
+      "id": "164f56c3-78a3-4078-8ca9-47c7fdcd6511",
+      "name": "Ali Khan",
+      "email": "ali@example.com",
+      "userType": "SUPER_ADMIN",
+      "companyId": null,
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:55.369Z"
+    }
+  ],
+  "page": 1,
+  "limit": 25,
+  "total": 2
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">9</span> Naya super admin <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/super-admins</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Ali Khan",
+  "email": "ali@example.com",
+  "password": "Ali-Pass-12345"
+}</pre>
+
+<div class="lbl">Jawab: <b>201</b></div><pre>{
+  "id": "164f56c3-78a3-4078-8ca9-47c7fdcd6511",
+  "name": "Ali Khan",
+  "email": "ali@example.com",
+  "userType": "SUPER_ADMIN",
+  "companyId": null,
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:55.369Z"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">10</span> Super admin ka naam badalna / band karna <span class="tag sa">Super admin</span></h3>
+<p>Sirf <code>name</code> aur/ya <code>isActive</code>. Email ya password yahan nahi. Koi apne aap ko band nahi kar sakta.</p>
+<div class="line"><span class="m PATCH">PATCH</span><code>/api/v1/super-admins/:id</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Ali Raza",
+  "isActive": false
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "164f56c3-78a3-4078-8ca9-47c7fdcd6511",
+  "name": "Ali Raza",
+  "email": "ali@example.com",
+  "userType": "SUPER_ADMIN",
+  "companyId": null,
+  "isActive": false,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:55.369Z"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">11</span> Super admin ka password reset <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/super-admins/:id/reset-password</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "newPassword": "Reset-Pass-123"
+}</pre>
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+
+</section>
+<section class="api"><h3><span class="num">12</span> Super admins ka login code dekhna <span class="tag sa">Super admin</span></h3>
+<p>Yeh code sab super admins login par likhte hen.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/super-admins/login-code</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "code": "KXTC-AGHV"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">13</span> Super admins ka naya login code <span class="tag sa">Super admin</span></h3>
+<p>Body nahi. Code kisi ghalat bande tak pahunch jaye to naya ban jata he. <b>Purana code foran band</b>: baqi super admins ko naya code bata den (jo pehle se login hen woh chalte rehte hen).</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/super-admins/login-code/new</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "code": "KUGJ-5P73"
+}</pre>
+
+</section>
+
+<h2>6. Services (sirf super admin)</h2>
+<p>Platform ki 15 services pehle se bani hen: Grey Store, SO / Travel Card, Singeing, Dyeing, Dryer, Finishing, Stitching, Cutting, Printing, Stenter, Compacting, Folding, Chemical Store, Packing List, Gate Pass.</p>
+<section class="api"><h3><span class="num">14</span> Sab services ki list <span class="tag sa">Super admin</span></h3>
+<p>Yahan se har service ki <code>id</code> milti he. (Jawab men sirf pehli 3 dikhayi hen.) Sirf services chahiye, modules nahi: <code>?kind=PROCESS,FOLDING</code>.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/services</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "data": [
+    {
+      "id": "a054d89d-3183-4a4e-8db4-87fb0a65856a",
+      "code": "GREY_STORE",
+      "name": "Grey Store",
+      "kind": "MODULE",
+      "tracksColour": true,
+      "isActive": true,
+      "sortOrder": 10
+    },
+    {
+      "id": "dc113456-0458-4238-9da2-8256458d8a1a",
+      "code": "SO_CARD",
+      "name": "SO / Travel Card",
+      "kind": "MODULE",
+      "tracksColour": true,
+      "isActive": true,
+      "sortOrder": 20
+    },
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS",
+      "tracksColour": true,
+      "isActive": true,
+      "sortOrder": 30
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">15</span> Nayi service add karna <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/services</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "code": "WASHING",
+  "name": "Washing",
+  "kind": "PROCESS",
+  "tracksColour": true
+}</pre>
+<ul class="fields"><li><code>code</code>: capital harf, number aur _ (maslan WASHING). Baad men nahi badalta.</li><li><code>kind</code>: PROCESS (department), MODULE (screen), FOLDING</li><li><code>tracksColour</code>: job sheet par colour ka khana chahiye ya nahi</li></ul>
+<div class="lbl">Jawab: <b>201</b></div><pre>{
+  "id": "d382b29c-d1a8-49f3-954b-ae998bc7bacd",
+  "code": "WASHING",
+  "name": "Washing",
+  "kind": "PROCESS",
+  "tracksColour": true,
+  "isActive": true,
+  "sortOrder": 160
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">16</span> Service badalna / band karna <span class="tag sa">Super admin</span></h3>
+<p>Kuch bhi in men se: <code>name</code>, <code>isActive</code>, <code>tracksColour</code>, <code>sortOrder</code>. Band (<code>isActive:false</code>) service har company ke menu se foran hat jati he.</p>
+<div class="line"><span class="m PATCH">PATCH</span><code>/api/v1/services/:id</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Washing Plant"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "d382b29c-d1a8-49f3-954b-ae998bc7bacd",
+  "code": "WASHING",
+  "name": "Washing Plant",
+  "kind": "PROCESS",
+  "tracksColour": true,
+  "isActive": true,
+  "sortOrder": 160
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">17</span> Service kin companies ke paas he <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/services/:id/companies</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "service": {
+    "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+    "code": "PRINTING",
+    "name": "Printing",
+    "kind": "PROCESS",
+    "tracksColour": true,
+    "isActive": true,
+    "sortOrder": 90
+  },
+  "companies": [
+    {
+      "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "name": "Waqas Textile",
+      "code": "YWPS-4J83",
+      "isActive": true
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">18</span> Ek service kai companies ko dena <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m PUT">PUT</span><code>/api/v1/services/:id/companies</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "companyIds": [
+    "COMPANY-ID-1",
+    "COMPANY-ID-2"
+  ]
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "service": {
+    "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+    "code": "PRINTING",
+    "name": "Printing",
+    "kind": "PROCESS",
+    "tracksColour": true,
+    "isActive": true,
+    "sortOrder": 90
+  },
+  "companies": [
+    {
+      "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "name": "Waqas Textile",
+      "code": "YWPS-4J83",
+      "isActive": true
+    }
+  ]
+}</pre>
+<p class="note"><b>Poori list</b> bhejen: list wali companies ko service mil jati he, baqi sab se hat jati he. <code>[]</code> = sab se hata do. Screen: service page par har company ka checkbox.</p>
+</section>
+
+<h2>7. Companies (sirf super admin)</h2>
+<section class="api"><h3><span class="num">19</span> Company register karna <span class="tag sa">Super admin</span></h3>
+<p>Company aur us ka pehla admin ek saath bante hen. Company ko <b>MODULE wali services khud mil jati hen</b> (Grey Store, SO card, Chemical Store, Packing, Gate Pass). Baqi services toggle se (API 20a).</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/companies</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Waqas Textile",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "admin": {
+    "name": "Waqas Owais",
+    "email": "waqas@example.com",
+    "password": "Waqas-Pass-123"
+  }
+}</pre>
+<ul class="fields"><li><code>code</code> <b>na bhejen</b>: server khud random aur unique code banata he, maslan <code>K7QM-4XPA</code>, taake koi andaza na laga sake. Jawab men <code>code</code> aata he: yahi company admin ko den.</li><li><code>admin</code>: company ka pehla admin. Yahi company code se login karega.</li></ul>
+<div class="lbl">Jawab: <b>201</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YWPS-4J83",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "a054d89d-3183-4a4e-8db4-87fb0a65856a",
+      "code": "GREY_STORE",
+      "name": "Grey Store",
+      "kind": "MODULE"
+    },
+    {
+      "id": "dc113456-0458-4238-9da2-8256458d8a1a",
+      "code": "SO_CARD",
+      "name": "SO / Travel Card",
+      "kind": "MODULE"
+    },
+    {
+      "id": "11102fbc-a28e-43be-b15e-cae82361bd93",
+      "code": "CHEMICAL_STORE",
+      "name": "Chemical Store",
+      "kind": "MODULE"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">20</span> Company ko services dena <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m PUT">PUT</span><code>/api/v1/companies/:id/services</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "serviceIds": [
+    "SERVICE-ID-1",
+    "SERVICE-ID-2"
+  ]
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YWPS-4J83",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+      "code": "FOLDING",
+      "name": "Folding",
+      "kind": "FOLDING"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+<p class="note"><b>Poori list</b> bhejen: jo list men he woh milti he, baqi hat jati hen. Screen: company page par har service ka checkbox.</p>
+</section>
+<section class="api"><h3><span class="num">20a</span> Ek service ka toggle (on/off) <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m PUT">PUT</span><code>/api/v1/companies/:id/services/:serviceId</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "enabled": true
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YWPS-4J83",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+      "code": "FOLDING",
+      "name": "Folding",
+      "kind": "FOLDING"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+<p class="note"><code>enabled:true</code> = service do, <code>false</code> = wapas lo. Jawab men company ki poori detail (services ke saath) aati he. Screen: company page par services ki list <code>GET /v1/services?kind=PROCESS,FOLDING</code> se layen (MODULE wali <b>na dikhayen</b>, woh khud mil jati hen). Har ek ke saath toggle; on/off company detail ki <code>services</code> list se.</p>
+</section>
+<section class="api"><h3><span class="num">21</span> Companies ki list <span class="tag sa">Super admin</span></h3>
+<p>Query: <code>search</code>, <code>isActive</code>, <code>page</code>, <code>limit</code>.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/companies?page=1&amp;limit=25</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "data": [
+    {
+      "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "name": "Waqas Textile",
+      "code": "YWPS-4J83",
+      "contactPerson": "Waqas Owais",
+      "phone": "0300-1234567",
+      "address": "Faisalabad",
+      "isActive": true,
+      "createdAt": "2026-10-12T09:41:55.780Z",
+      "serviceCount": 5,
+      "userCount": 1
+    }
+  ],
+  "page": 1,
+  "limit": 25,
+  "total": 1
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">22</span> Ek company ki poori detail <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/companies/:id</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YWPS-4J83",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-1234567",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">23</span> Company badalna / band karna <span class="tag sa">Super admin</span></h3>
+<p>Kuch bhi in men se: <code>name</code>, <code>contactPerson</code>, <code>phone</code>, <code>address</code>, <code>isActive</code>. <code>isActive:false</code> par company ke sab log foran logout aur login band. Company code yahan se nahi badalta (agli API dekhen).</p>
+<div class="line"><span class="m PATCH">PATCH</span><code>/api/v1/companies/:id</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "phone": "0300-7654321"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YWPS-4J83",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-7654321",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">24a</span> Company ke admin ko edit karna <span class="tag sa">Super admin</span></h3>
+<p><code>userId</code> = company detail (API 22) ke <code>clientAdmins[].id</code>. Kuch bhi in men se: <code>name</code>, <code>email</code>, <code>isActive</code>. <code>isActive:false</code> par admin foran logout aur login band.</p>
+<div class="line"><span class="m PATCH">PATCH</span><code>/api/v1/companies/:id/admins/:userId</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Ali Raza",
+  "email": "ali.raza@example.com",
+  "isActive": true
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "1f42acfe-84e6-4c28-a6b1-7d07045eecd4",
+  "name": "Ali Raza",
+  "email": "ali.raza@example.com",
+  "userType": "CLIENT_ADMIN",
+  "companyId": "560ae703-e766-4f1b-bb56-a5b2f8aed343",
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:59.554Z"
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">24b</span> Company ke admin ka password reset <span class="tag sa">Super admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/companies/:id/admins/:userId/reset-password</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "newPassword": "Fresh-Pass-123"
+}</pre>
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+
+</section>
+<section class="api"><h3><span class="num">24c</span> Company delete karna <span class="tag sa">Super admin</span></h3>
+<p>Body nahi. Company list se hat jati he, us ke sab log foran logout aur login band. Data mita nahi jata (audit log aur record mahfooz rehte hen). Front end "Kya aap waqai delete karna chahte hen?" poochh kar chalaye.</p>
+<div class="line"><span class="m DELETE">DELETE</span><code>/api/v1/companies/:id</code></div>
+
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+
+</section>
+<section class="api"><h3><span class="num">24</span> Company ka naya code <span class="tag sa">Super admin</span></h3>
+<p>Body nahi. Agar code kisi ghalat bande tak pahunch jaye to naya random code ban jata he. <b>Purana code foran band</b>: company ke log naye code se login karenge (jo pehle se login hen woh chalte rehte hen).</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/companies/:id/new-code</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "name": "Waqas Textile",
+  "code": "YDS7-JH6M",
+  "contactPerson": "Waqas Owais",
+  "phone": "0300-7654321",
+  "address": "Faisalabad",
+  "isActive": true,
+  "createdAt": "2026-10-12T09:41:55.780Z",
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS"
+    }
+  ],
+  "clientAdmins": [
+    {
+      "id": "6bd44fb8-a534-4fb3-ad95-e97f6a13816a",
+      "name": "Waqas Owais",
+      "email": "waqas@example.com",
+      "userType": "CLIENT_ADMIN",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.130Z"
+    }
+  ],
+  "userCount": 1
+}</pre>
+
+</section>
+
+<h2>8. Company ke users (sirf company admin)</h2>
+<p>Company admin (client admin) apni company ke users banata he aur har user ko company ki services men se kuch deta he: <code>FULL</code> (add/edit) ya <code>VIEW</code> (sirf dekhna aur report). User usi <b>company code</b> se, apni email aur password ke saath login karta he. Company admin sirf apni company ke users dekh sakta he.</p>
+<p>Kaun si services de sakta he: company admin ke login ya <code>GET /v1/auth/me</code> ke jawab men <code>services</code> = company ki sab services. Wahan se har ek ki <code>id</code> le kar <code>serviceId</code> men bhejen.</p>
+<section class="api"><h3><span class="num">25</span> Naya user banana <span class="tag ca">Company admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/users</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Ali Operator",
+  "email": "ali@example.com",
+  "password": "Ali-Pass-12345",
+  "services": [
+    {
+      "serviceId": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "access": "FULL"
+    },
+    {
+      "serviceId": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+      "access": "VIEW"
+    }
+  ]
+}</pre>
+<ul class="fields"><li><code>services</code> (optional): <code>[{ serviceId, access }]</code>. <code>access</code> = <code>FULL</code> ya <code>VIEW</code>. Na bhejen to user ko koi service nahi milti (baad men API 29 se).</li><li>Sirf woh services de sakta he jo company ke paas hen, warna 422 (neeche).</li><li>Ek company men ek email ek hi dafa. Doosri company men wahi email chal sakti he.</li></ul>
+<div class="lbl">Jawab: <b>201</b></div><pre>{
+  "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+  "name": "Ali Operator",
+  "email": "ali@example.com",
+  "userType": "USER",
+  "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:56.961Z",
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+      "code": "FOLDING",
+      "name": "Folding",
+      "kind": "FOLDING",
+      "access": "VIEW"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">26</span> Aisi service dena jo company ke paas nahi <span class="tag ca">Company admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/users</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Bilal",
+  "email": "bilal@example.com",
+  "password": "Bilal-Pass-123",
+  "services": [
+    {
+      "serviceId": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+<div class="lbl">Jawab: <b>201</b></div><pre>{
+  "id": "a2ca9a06-7cb8-4f72-a7fe-d7a36e6bc4a1",
+  "name": "Bilal",
+  "email": "bilal@example.com",
+  "userType": "USER",
+  "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:57.330Z",
+  "services": [
+    {
+      "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+      "code": "SINGEING",
+      "name": "Singeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">27</span> Users ki list <span class="tag ca">Company admin</span></h3>
+<p>Query: <code>search</code>, <code>isActive</code>, <code>page</code>, <code>limit</code>.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/users?page=1&amp;limit=25</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "data": [
+    {
+      "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+      "name": "Ali Operator",
+      "email": "ali@example.com",
+      "userType": "USER",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:56.961Z",
+      "services": [
+        {
+          "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+          "code": "DYEING",
+          "name": "Dyeing",
+          "kind": "PROCESS",
+          "access": "FULL"
+        },
+        {
+          "id": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+          "code": "FOLDING",
+          "name": "Folding",
+          "kind": "FOLDING",
+          "access": "VIEW"
+        }
+      ]
+    },
+    {
+      "id": "a2ca9a06-7cb8-4f72-a7fe-d7a36e6bc4a1",
+      "name": "Bilal",
+      "email": "bilal@example.com",
+      "userType": "USER",
+      "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+      "isActive": true,
+      "lastLoginAt": null,
+      "createdAt": "2026-10-12T09:41:57.330Z",
+      "services": [
+        {
+          "id": "afbc010d-1794-4065-a151-1ac32ce72bb4",
+          "code": "SINGEING",
+          "name": "Singeing",
+          "kind": "PROCESS",
+          "access": "FULL"
+        }
+      ]
+    }
+  ],
+  "page": 1,
+  "limit": 25,
+  "total": 2
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">28</span> Ek user ki detail <span class="tag ca">Company admin</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/users/:id</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+  "name": "Ali Operator",
+  "email": "ali@example.com",
+  "userType": "USER",
+  "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:56.961Z",
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    },
+    {
+      "id": "f20ccbb1-5074-47c1-95ba-1ffa205312b1",
+      "code": "FOLDING",
+      "name": "Folding",
+      "kind": "FOLDING",
+      "access": "VIEW"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">29</span> User ki services badalna <span class="tag ca">Company admin</span></h3>
+
+<div class="line"><span class="m PUT">PUT</span><code>/api/v1/users/:id/services</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "services": [
+    {
+      "serviceId": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "access": "VIEW"
+    },
+    {
+      "serviceId": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+  "name": "Ali Operator",
+  "email": "ali@example.com",
+  "userType": "USER",
+  "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "isActive": true,
+  "lastLoginAt": null,
+  "createdAt": "2026-10-12T09:41:56.961Z",
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "VIEW"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+<p class="note"><b>Poori list</b> bhejen: jo list men he woh milti he, baqi hat jati hen. <code>[]</code> = sab hata do. User ka menu us ke agle <code>/v1/auth/me</code> par badal jata he. Screen: har service ke saath "None / View / Full" chunne ka khana.</p>
+</section>
+<section class="api"><h3><span class="num">30</span> User ka login (company code wahi company ka) <span class="tag pub">Token nahi chahiye</span></h3>
+<p>User ka menu: sirf us ki apni services, har ek ke saath <code>access</code>. <code>VIEW</code> wali service men add/edit ke button na dikhayen.</p>
+<div class="line"><span class="m POST">POST</span><code>/api/v1/auth/login</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "companyCode": "YDS7-JH6M",
+  "email": "ali@example.com",
+  "password": "Ali-Pass-12345"
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "accessToken": "eyJhbGciOiJI...",
+  "refreshToken": "giVdMZvoMO9d...",
+  "tokenType": "Bearer",
+  "user": {
+    "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+    "name": "Ali Operator",
+    "email": "ali@example.com",
+    "userType": "USER",
+    "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "isActive": true,
+    "lastLoginAt": "2026-10-12T09:41:57.726Z",
+    "createdAt": "2026-10-12T09:41:56.961Z"
+  },
+  "company": {
+    "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "name": "Waqas Textile",
+    "code": "YDS7-JH6M"
+  },
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "VIEW"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">31</span> User: main kon hun <span class="tag all">Sab log</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/auth/me</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "user": {
+    "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+    "name": "Ali Operator",
+    "email": "ali@example.com",
+    "userType": "USER",
+    "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "isActive": true,
+    "lastLoginAt": "2026-10-12T09:41:57.726Z",
+    "createdAt": "2026-10-12T09:41:56.961Z"
+  },
+  "company": {
+    "id": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+    "name": "Waqas Textile",
+    "code": "YDS7-JH6M"
+  },
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "VIEW"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">32</span> User ka naam badalna / band karna <span class="tag ca">Company admin</span></h3>
+<p>Sirf <code>name</code> aur/ya <code>isActive</code>. <code>isActive:false</code> par user foran logout aur login band.</p>
+<div class="line"><span class="m PATCH">PATCH</span><code>/api/v1/users/:id</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "name": "Ali Raza",
+  "isActive": true
+}</pre>
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "id": "a5ab86af-4e9b-407b-a04e-743c051a23c8",
+  "name": "Ali Raza",
+  "email": "ali@example.com",
+  "userType": "USER",
+  "companyId": "950d2afc-e26c-4952-9da9-0cc8f3cbb8b5",
+  "isActive": true,
+  "lastLoginAt": "2026-10-12T09:41:57.726Z",
+  "createdAt": "2026-10-12T09:41:56.961Z",
+  "services": [
+    {
+      "id": "1206c885-1ba6-4d9a-898a-17ac221461db",
+      "code": "DYEING",
+      "name": "Dyeing",
+      "kind": "PROCESS",
+      "access": "VIEW"
+    },
+    {
+      "id": "d435ebdb-c7fc-4806-80fb-288a6592abe1",
+      "code": "PRINTING",
+      "name": "Printing",
+      "kind": "PROCESS",
+      "access": "FULL"
+    }
+  ]
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">33</span> User ka password reset <span class="tag ca">Company admin</span></h3>
+
+<div class="line"><span class="m POST">POST</span><code>/api/v1/users/:id/reset-password</code></div>
+<div class="lbl">Body (bhejna he)</div><pre>{
+  "newPassword": "Ali-New-Pass-1"
+}</pre>
+
+<div class="lbl">Jawab: <b>204</b></div><p class="muted">Khaali jawab. Iska matlab kaam ho gaya.</p>
+<p class="note">User har device se logout ho jata he; naye password se login kare.</p>
+</section>
+<p class="note">Jab super admin company se koi service wapas le leta he, to us company ke sab users se bhi woh service khud hat jati he.</p>
+
+<h2>9. Audit log (sirf super admin)</h2>
+<section class="api"><h3><span class="num">34</span> Kis ne kya kiya <span class="tag sa">Super admin</span></h3>
+<p>Naya pehle. Query (sab optional): <code>action</code>, <code>actorId</code>, <code>companyId</code>, <code>entityType</code>, <code>entityId</code>, <code>from</code>, <code>to</code> (tareekh), <code>page</code>, <code>limit</code>.</p>
+<div class="line"><span class="m GET">GET</span><code>/api/v1/audit-logs?page=1&amp;limit=2</code></div>
+
+
+<div class="lbl">Jawab: <b>200</b></div><pre>{
+  "data": [
+    {
+      "id": "30",
+      "at": "2026-10-12T09:41:59.960Z",
+      "actorId": "7afc49df-a6ce-4638-88bb-e340f6810731",
+      "actorType": "SUPER_ADMIN",
+      "actorEmail": "admin@example.com",
+      "companyId": "560ae703-e766-4f1b-bb56-a5b2f8aed343",
+      "action": "COMPANY_DELETED",
+      "entityType": "Company",
+      "entityId": "560ae703-e766-4f1b-bb56-a5b2f8aed343",
+      "before": {
+        "id": "560ae703-e766-4f1b-bb56-a5b2f8aed343",
+        "code": "MP7G-WBGY",
+        "name": "Ali Mills",
+        "phone": null,
+        "address": null,
+        "isActive": true,
+        "createdAt": "2026-10-12T09:41:59.177Z",
+        "contactPerson": null
+      },
+      "after": {
+        "usersSwitchedOff": 1
+      },
+      "ip": "127.0.0.1",
+      "userAgent": null,
+      "requestId": "da6b7bb5-67f..."
+    },
+    {
+      "id": "29",
+      "at": "2026-10-12T09:41:59.947Z",
+      "actorId": "7afc49df-a6ce-4638-88bb-e340f6810731",
+      "actorType": "SUPER_ADMIN",
+      "actorEmail": "admin@example.com",
+      "companyId": "560ae703-e766-4f1b-bb56-a5b2f8aed343",
+      "action": "PASSWORD_RESET",
+      "entityType": "User",
+      "entityId": "1f42acfe-84e6-4c28-a6b1-7d07045eecd4",
+      "before": null,
+      "after": null,
+      "ip": "127.0.0.1",
+      "userAgent": null,
+      "requestId": "3da5163e-3c8..."
+    }
+  ],
+  "page": 1,
+  "limit": 2,
+  "total": 30
+}</pre>
+
+</section>
+
+<h2>10. Ijazat na ho to</h2>
+<section class="api"><h3><span class="num">35</span> Company admin ne super admin wali API kholi <span class="tag all">Sab log</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/companies</code></div>
+
+
+<div class="lbl">Jawab: <b>403</b></div><pre>{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "Not allowed"
+  }
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">36</span> User ne company admin wali API kholi <span class="tag all">Sab log</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/users</code></div>
+
+
+<div class="lbl">Jawab: <b>403</b></div><pre>{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "Not allowed"
+  }
+}</pre>
+
+</section>
+<section class="api"><h3><span class="num">37</span> Token ke baghair <span class="tag pub">Token nahi chahiye</span></h3>
+
+<div class="line"><span class="m GET">GET</span><code>/api/v1/auth/me</code></div>
+
+
+<div class="lbl">Jawab: <b>401</b></div><pre>{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Not signed in"
+  }
+}</pre>
+
+</section>
+
+<h2>11. Tayyar JavaScript function (copy kar len)</h2>
+<p>Yeh function token khud lagata he, 401 par khud refresh karta he, aur refresh bhi fail ho to login par bhej deta he.</p>
+<pre>const BASE_URL = 'http://SERVER-ADDRESS:3000/api';
+let refreshing = null;
+
+async function api(path, options = {}) {
+  const send = () =&gt; fetch(BASE_URL + path, {
+    method: options.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + localStorage.getItem('accessToken'),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  let res = await send();
+  if (res.status === 401 &amp;&amp; localStorage.getItem('refreshToken')) {
+    refreshing = refreshing || fetch(BASE_URL + '/v1/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: localStorage.getItem('refreshToken') }),
+    }).then(async (r) =&gt; {
+      if (!r.ok) throw new Error('logged out');
+      const t = await r.json();
+      localStorage.setItem('accessToken', t.accessToken);
+      localStorage.setItem('refreshToken', t.refreshToken);
+    }).finally(() =&gt; { refreshing = null; });
+    try { await refreshing; res = await send(); }
+    catch { localStorage.clear(); window.location.href = '/login'; return; }
+  }
+  const data = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw data.error;   // { code, message, details }
+  return data;
+}
+
+// Login
+async function login(companyCode, email, password) {
+  const res = await fetch(BASE_URL + '/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyCode, email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw data.error;
+  localStorage.setItem('accessToken', data.accessToken);
+  localStorage.setItem('refreshToken', data.refreshToken);
+  return data;   // data.user.userType se dashboard, data.services se menu
+}
+
+// Istemal
+const me = await api('/v1/auth/me');
+const companies = await api('/v1/companies?page=1&amp;limit=25');
+await api('/v1/companies', { method: 'POST', body: { name, admin: { name, email, password } } });
+await api('/v1/companies/' + id + '/services', { method: 'PUT', body: { serviceIds } });</pre>
+
+<h2>12. Screens jo abhi ban sakti hen</h2>
+<table><tr><th>Screen</th><th>APIs</th></tr>
+<tr><td>Login</td><td>2, 3</td></tr>
+<tr><td>Header (naam, logout, password badlo)</td><td>4, 6, 7</td></tr>
+<tr><td>Super admin: Super admins (aur un ka login code)</td><td>8, 9, 10, 11, 12, 13</td></tr>
+<tr><td>Super admin: Companies list + register</td><td>21, 19</td></tr>
+<tr><td>Super admin: Company detail (services ke checkbox, band/chalu, naya code)</td><td>22, 20, 23, 24, 14</td></tr>
+<tr><td>Super admin: Services list (add, band/chalu, companies ke checkbox)</td><td>14, 15, 16, 17, 18, 21</td></tr>
+<tr><td>Super admin: Audit log</td><td>34</td></tr>
+<tr><td>Company admin: Users list + naya user</td><td>27, 25 (services ke liye 4)</td></tr>
+<tr><td>Company admin: User detail (services None/View/Full, band/chalu, password reset)</td><td>28, 29, 32, 33</td></tr>
+<tr><td>User dashboard</td><td>4 (menu = services, har ek ka access)</td></tr></table>
+</body></html>
