@@ -21,5 +21,6 @@ router.post('/', validate(v.create), c.create);
 router.get('/:id', validate(v.get), c.get);
 router.patch('/:id', validate(v.update), c.update);
 router.put('/:id/status', validate(v.status), c.setStatus);
+router.put('/:id/operator', validate(v.operator), c.setOperator);
 
 module.exports = router;

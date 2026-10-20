@@ -9,7 +9,7 @@ const PASSWORD = 'Strong-Pass-123';
 async function clean() {
   // audit_logs refuses DELETE on purpose; TRUNCATE is blocked too, so tests disable the trigger briefly.
   await sequelize.query('ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_no_truncate');
-  await sequelize.query('TRUNCATE audit_logs, job_items, jobs, colours, so_card_moves, so_card_lots, so_cards, grey_lots, company_counters, customers, qualities, refresh_tokens, users, company_services, companies RESTART IDENTITY CASCADE');
+  await sequelize.query('TRUNCATE audit_logs, grey_lot_thaans, grey_returns, store_moves, store_inward_lines, store_inwards, store_items, store_brands, store_categories, vendors, folding_entries, job_items, jobs, colours, so_card_moves, so_card_lots, so_cards, grey_lots, company_counters, customers, qualities, refresh_tokens, users, company_services, companies RESTART IDENTITY CASCADE');
   await sequelize.query("DELETE FROM services WHERE code LIKE 'TEST%'");
   await sequelize.query('UPDATE services SET "isActive" = true');
   await sequelize.query('ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_no_truncate');

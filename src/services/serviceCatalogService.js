@@ -136,8 +136,8 @@ async function addCompanies(req, id, companyIds) {
   });
 }
 
-// The 5 built-in modules the system is built around; they can never be deleted.
-const CORE_MODULES = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'PACKING', 'GATE_PASS'];
+// The built-in modules the system is built around; they can never be deleted.
+const CORE_MODULES = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'GENERAL_STORE', 'PACKING', 'GATE_PASS'];
 
 // Deletes a service. Every company and user that had it loses it. Built-in modules cannot be deleted.
 async function remove(req, id) {

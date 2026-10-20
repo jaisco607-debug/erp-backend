@@ -44,7 +44,7 @@ test('two SO cards go to dyeing as one job; the other part goes separately; stat
     items: [{ soCardLotId: row(1, 1500).soCardLotId }, { soCardLotId: row(2, 3000).soCardLotId }],
   });
   expect(j1.status).toBe(201);
-  expect(j1.body).toMatchObject({ jobNo: 1, totalMeters: 4500, status: 'PENDING', statusText: 'Pending', sentText: 'Delivered to Dyeing', soNos: [1, 2], colour: { name: 'BLACK' } });
+  expect(j1.body).toMatchObject({ jobNo: 1, totalMeters: 4500, status: 'IN_WAY', statusText: 'In-Way', sentText: 'In-Way to Dyeing', soNos: [1, 2], colour: { name: 'BLACK' } });
   // card 1's 2000 m -> RED, its own job
   const j2 = (await request(app).post('/api/v1/jobs').set(t.auth).send({ departmentId: t.s.DYEING.id, colourId: t.red.id, items: [{ soCardLotId: row(1, 2000).soCardLotId }] })).body;
   expect(j2.jobNo).toBe(2);
@@ -71,14 +71,25 @@ test('two SO cards go to dyeing as one job; the other part goes separately; stat
   const fromDye = (await request(app).get(`/api/v1/jobs/form-data?fromDepartmentId=${t.s.DYEING.id}`).set(t.auth)).body;
   expect(fromDye.departments.map((d) => d.code)).toEqual(['PRINTING']);
   expect(fromDye.rows).toHaveLength(2);
+  for (const id of new Set(fromDye.rows.map((r) => r.job.id))) await request(app).put(`/api/v1/jobs/${id}/operator`).set(t.auth).send({ operatorName: 'Aslam', processDate: '2026-10-18' });
   const j3 = (await request(app).post('/api/v1/jobs').set(t.auth).send({ fromDepartmentId: t.s.DYEING.id, departmentId: t.s.PRINTING.id, items: fromDye.rows.map((r) => ({ jobItemId: r.jobItemId })) })).body;
   expect(j3).toMatchObject({ jobNo: 3, totalMeters: 4500, fromDepartment: { code: 'DYEING' }, department: { code: 'PRINTING' } });
   expect((await request(app).put(`/api/v1/jobs/${j1.body.id}/status`).set(t.auth).send({ status: 'PROCESSING' })).body.error.code).toBe('ALREADY_SENT_ON');
 
   // printing never got it: reject -> back in dyeing's "send on" rows, dyeing sees it
   expect(j3.canReject).toBe(true);
-  const rej = await request(app).put(`/api/v1/jobs/${j3.id}/status`).set(t.auth).send({ status: 'REJECTED' });
-  expect(rej.body.sentText).toBe('Rejected by Printing');
+  expect((await request(app).post(`/api/v1/departments/DYEING/jobs/${j3.id}/reject`).set(t.auth).send({ reason: 'x' })).body.error.code).toBe('JOB_WRONG_DEPARTMENT');
+  const rej = await request(app).post(`/api/v1/departments/PRINTING/jobs/${j3.id}/reject`).set(t.auth).send({ reason: 'Kapra nahi mila' });
+  expect(rej.body).toMatchObject({ sentText: 'Rejected by Printing', status: 'REJECTED', isRejected: true, rejectReason: 'Kapra nahi mila' });
+  expect(rej.body.rejectedBy).toBeTruthy();
+  expect((await request(app).post(`/api/v1/departments/PRINTING/jobs/${j3.id}/reject`).set(t.auth).send({})).body.error.code).toBe('JOB_REJECTED');
+  // cloth arrived after all: printing takes the reject back, dyeing sees Delivered again
+  const back = (await request(app).put(`/api/v1/departments/PRINTING/jobs/${j3.id}/status`).set(t.auth).send({ status: 'PROCESSING' })).body;
+  expect(back).toMatchObject({ status: 'PROCESSING', rejectReason: null, sentText: 'Delivered to Printing' });
+  expect((await request(app).get(`/api/v1/jobs/form-data?fromDepartmentId=${t.s.DYEING.id}`).set(t.auth)).body.rows).toHaveLength(0);
+  await request(app).post(`/api/v1/departments/PRINTING/jobs/${j3.id}/reject`).set(t.auth).send({});
+  await request(app).put(`/api/v1/jobs/${j3.id}/status`).set(t.auth).send({ status: 'PENDING' });
+  await request(app).put(`/api/v1/jobs/${j3.id}/status`).set(t.auth).send({ status: 'REJECTED' });
   const notice = (await request(app).get(`/api/v1/jobs?departmentId=${t.s.DYEING.id}&side=out&status=REJECTED`).set(t.auth)).body;
   expect(notice.data.map((j) => j.jobNo)).toEqual([3]);
   expect((await request(app).get(`/api/v1/jobs/form-data?fromDepartmentId=${t.s.DYEING.id}`).set(t.auth)).body.rows).toHaveLength(2);
@@ -113,11 +124,28 @@ test('department URLs by code: incoming, send-form, send, sent, rejected', async
   await request(app).put(`/api/v1/jobs/${inc.data[0].jobId}/status`).set(t.auth).send({ status: 'COMPLETE' });
   const form = (await request(app).get('/api/v1/departments/DYEING/send-form').set(t.auth)).body;
   expect(form.rows).toHaveLength(1);
+  await request(app).put(`/api/v1/jobs/${inc.data[0].jobId}/operator`).set(t.auth).send({ operatorName: 'Aslam', processDate: '2026-10-18' });
   const sent = await request(app).post('/api/v1/departments/DYEING/send').set(t.auth).send({ toDepartmentCode: 'PRINTING', items: [{ jobItemId: form.rows[0].jobItemId }] });
   expect(sent.status).toBe(201);
   expect((await request(app).get('/api/v1/departments/PRINTING/incoming').set(t.auth)).body.data).toHaveLength(1);
   await request(app).put(`/api/v1/jobs/${sent.body.id}/status`).set(t.auth).send({ status: 'REJECTED' });
   expect((await request(app).get('/api/v1/departments/DYEING/rejected').set(t.auth)).body.data).toHaveLength(1);
-  expect((await request(app).get('/api/v1/departments/DYEING/sent').set(t.auth)).body.data[0].sentText).toBe('Rejected by Printing');
+  const sentRow = (await request(app).get('/api/v1/departments/DYEING/sent').set(t.auth)).body.data[0];
+  expect(sentRow).toMatchObject({ sentText: 'Rejected by Printing', toDepartmentName: 'Printing', toDepartment: { code: 'PRINTING' }, fromDepartmentName: 'Dyeing' });
+  expect(sentRow.sentAt).toBeTruthy();
+  const soRow = (await request(app).get('/api/v1/departments/DYEING/sent?view=so').set(t.auth)).body.data[0];
+  expect(soRow).toMatchObject({ toDepartmentName: 'Printing' });
   expect((await request(app).get('/api/v1/departments/FINISHING/incoming').set(t.auth)).status).toBe(404);
+});
+
+test('sending from the SO card screen creates a job that shows in the department', async () => {
+  const t = await setup();
+  const r = await request(app).post(`/api/v1/so-cards/${t.card1.id}/send`).set(t.auth).send({ departmentId: t.s.DYEING.id, sentThrough: 'Rickshaw' });
+  expect(r.status).toBe(200);
+  expect(r.body.status).toBe('SENT');
+  const inc = (await request(app).get('/api/v1/departments/DYEING/incoming?view=so').set(t.auth)).body;
+  expect(inc.data.map((x) => [x.soCard.cardNo, x.meters])).toEqual([[1, 3500]]);
+  // same through the SO card edit screen
+  await request(app).patch(`/api/v1/so-cards/${t.card2.id}`).set(t.auth).send({ departmentId: t.s.PRINTING.id });
+  expect((await request(app).get('/api/v1/departments/PRINTING/incoming').set(t.auth)).body.data).toHaveLength(1);
 });

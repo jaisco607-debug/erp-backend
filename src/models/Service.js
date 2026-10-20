@@ -1,7 +1,7 @@
 // A service the platform offers to companies: a screen (Grey Store, Gate Pass) or a department (Dyeing, Folding).
 const { DataTypes, Model } = require('sequelize');
 
-const SERVICE_KINDS = ['MODULE', 'PROCESS', 'FOLDING'];
+const SERVICE_KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING'];
 
 class Service extends Model {}
 

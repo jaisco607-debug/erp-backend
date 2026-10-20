@@ -28,6 +28,8 @@ exports.lot = {
   setActive: async (req, res) => res.json(await greyLotService.setActive(req, req.params.id, req.body.isActive)),
   approve: async (req, res) => res.json(await greyLotService.setApproved(req, req.params.id, true)),
   unapprove: async (req, res) => res.json(await greyLotService.setApproved(req, req.params.id, false)),
+  giveBack: async (req, res) => res.json(await greyLotService.giveBack(req, req.params.id, req.body)),
+  undoGiveBack: async (req, res) => res.json(await greyLotService.undoGiveBack(req, req.params.id, req.params.returnId)),
   nextNumbers: async (req, res) => res.json(await greyLotService.nextNumbers(req)),
   setNextNumbers: async (req, res) => res.json(await greyLotService.setNextNumbers(req, req.body)),
 };

@@ -30,5 +30,8 @@ router.use('/v1/so-cards', require('./soCardRoutes'));
 router.use('/v1/colours', grey.colours);
 router.use('/v1/jobs', require('./jobRoutes'));
 router.use('/v1/departments', require('./departmentRoutes'));
+const store = require('./storeRoutes');
+router.use('/v1/vendors', store.vendors);
+router.use('/v1/stores', store.stores);
 
 module.exports = router;

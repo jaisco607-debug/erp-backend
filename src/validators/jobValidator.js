@@ -12,10 +12,13 @@ module.exports = {
       departmentId: Joi.string().guid(),
       side: Joi.string().valid('in', 'out').default('in'),
       view: Joi.string().valid('job', 'so').default('job'),
+      // side=in: active = still here (default), sent = already sent on, all
+      show: Joi.string().valid('active', 'sent', 'all').default('active'),
       status: Joi.string().uppercase().valid(...STATUSES),
       isReprocess: Joi.boolean(),
       colourId: Joi.string().guid(),
       search: Joi.string().trim().max(20),
+      soNo: Joi.number().integer().min(1),
       dateFrom: date,
       dateTo: date,
     }),
@@ -29,6 +32,7 @@ module.exports = {
       colourId: Joi.string().guid().allow(null),
       sentThrough: text(120),
       remarks: text(500),
+      instructions: text(1000),
       items: Joi.array().items(Joi.object({
         soCardLotId: Joi.string().guid(),
         meters: Joi.number().precision(2).positive().max(99999999),
@@ -36,7 +40,8 @@ module.exports = {
       }).xor('soCardLotId', 'jobItemId')).min(1).max(100).required(),
     }),
   },
-  status: { params: uuidParam, body: Joi.object({ status: Joi.string().uppercase().valid(...STATUSES).required() }) },
-  update: { params: uuidParam, body: Joi.object({ colourId: Joi.string().guid().allow(null), sentThrough: text(120), remarks: text(500) }).min(1) },
+  status: { params: uuidParam, body: Joi.object({ status: Joi.string().uppercase().valid(...STATUSES).required(), reason: Joi.string().trim().max(300).allow('', null) }) },
+  update: { params: uuidParam, body: Joi.object({ colourId: Joi.string().guid().allow(null), sentThrough: text(120), remarks: text(500), instructions: text(1000) }).min(1) },
   history: { params: uuidParam },
+  operator: { params: uuidParam, body: Joi.object({ operatorName: Joi.string().trim().max(80).allow('', null), processDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).allow(null) }).min(1) },
 };

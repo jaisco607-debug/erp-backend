@@ -4,6 +4,7 @@ exports.formData = async (req, res) => res.json(await jobService.formData(req, r
 exports.list = async (req, res) => res.json(await jobService.list(req, req.validatedQuery));
 exports.get = async (req, res) => res.json(await jobService.get(req, req.params.id));
 exports.create = async (req, res) => res.status(201).json(await jobService.create(req, req.body));
-exports.setStatus = async (req, res) => res.json(await jobService.setStatus(req, req.params.id, req.body.status));
+exports.setStatus = async (req, res) => res.json(await jobService.setStatus(req, req.params.id, req.body.status, req.body.reason));
+exports.setOperator = async (req, res) => res.json(await jobService.setOperator(req, req.params.id, req.body));
 exports.update = async (req, res) => res.json(await jobService.update(req, req.params.id, req.body));
 exports.history = async (req, res) => res.json(await jobService.soCardHistory(req, req.params.id));

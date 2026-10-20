@@ -40,7 +40,7 @@ test('registering a company makes a random code and its first client admin, with
   const res = await register(auth, {}, []);
   expect(res.status).toBe(201);
   expect(res.body.code).toMatch(CODE);
-  expect(res.body.services.map((x) => x.code).sort()).toEqual(['CHEMICAL_STORE', 'GATE_PASS', 'GREY_STORE', 'PACKING', 'SO_CARD']);
+  expect(res.body.services.map((x) => x.code).sort()).toEqual(['CHEMICAL_STORE', 'GATE_PASS', 'GENERAL_STORE', 'GREY_STORE', 'PACKING', 'SO_CARD']);
   const withServices = await request(app).post('/api/v1/companies').set(auth)
     .send({ name: 'X Mills', serviceIds: [], admin: { name: 'Xx', email: 'x@test.com', password: 'Xxxxx-Pass-123' } });
   expect(withServices.status).toBe(400);

@@ -2,6 +2,7 @@
 // both in one go: either both are saved or nothing is. A new company has no services yet;
 // the super admin gives them afterwards, from the company (setServices) or from a service (serviceCatalogService.setCompanies).
 const { Op } = require('sequelize');
+const chemicalCatalog = require('./chemicalCatalogService');
 const { sequelize, Company, Service, CompanyService, User, RefreshToken, UserService } = require('../models');
 const AppError = require('../utils/AppError');
 const { hashPassword } = require('../utils/password');
@@ -55,7 +56,7 @@ async function list({ page, limit, search, isActive }) {
     attributes: {
       include: [
         [sequelize.literal(`(SELECT count(*)::int FROM company_services cs JOIN services s ON s.id = cs."serviceId"
-          WHERE cs."companyId" = "Company"."id" AND s.kind <> 'MODULE')`), 'serviceCount'],
+          WHERE cs."companyId" = "Company"."id" AND s.kind NOT IN ('MODULE', 'PACKING'))`), 'serviceCount'],
         [sequelize.literal('(SELECT count(*)::int FROM users u WHERE u."companyId" = "Company"."id")'), 'userCount'],
       ],
     },
@@ -78,8 +79,10 @@ async function create(req, { name, contactPerson, phone, address, admin }) {
       { transaction },
     );
     // Every active MODULE service (Grey Store, SO card, Gate Pass ...) is given at once; the rest the super admin switches on.
-    const modules = await Service.findAll({ where: { kind: 'MODULE', isActive: true }, order: [['sortOrder', 'ASC']], transaction });
+    const modules = await Service.findAll({ where: { kind: ['MODULE', 'PACKING'], isActive: true }, order: [['sortOrder', 'ASC']], transaction });
     await CompanyService.bulkCreate(modules.map((s) => ({ companyId: company.id, serviceId: s.id, givenById: req.user.id })), { transaction });
+    // the client's default chemical list goes into the new company's Chemical Store
+    await chemicalCatalog.seed(sequelize, company.id, transaction);
     const clientAdmin = await User.create(
       {
         name: admin.name,

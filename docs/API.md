@@ -350,3 +350,17 @@ Departments are the company's **Process** and **Folding** services (Singeing, Dy
 - `GET /v1/jobs/:id`, `PATCH /v1/jobs/:id` (sender, while PENDING: colourId/sentThrough/remarks), `PUT /v1/jobs/:id/status` `{status: PENDING|PROCESSING|COMPLETE|REJECTED}` (receiving dept FULL).
 - `GET /v1/jobs/so-card/:soCardId` the card's whole road.
 - `/v1/departments` (list), `/v1/departments/:code/incoming|sent|rejected|send-form` (GET), `POST /v1/departments/:code/send` `{toDepartmentCode, colourId?, sentThrough?, items:[{jobItemId}]}`: same as /v1/jobs, addressed by department code.
+
+## Step 6: Folding (2026-10-14)
+- `GET /v1/departments/FOLDING/folding?tab=all|draft&search=&dateFrom=&dateTo=` rows per SO card in each job: jobNo, pageNo, soCard, jobDate, customer, quality, colour, soQnty, stock{a,b,cp,total}, diff, diffPercent, inStock, isConfirmed; plus draftCount.
+- `PUT /v1/departments/FOLDING/folding/:jobId/:soCardId` `{pageNo?, a?, b?, cp?}` (draft).
+- `PUT /v1/departments/FOLDING/folding/:jobId/:soCardId/confirm` `{isConfirmed}`.
+- Jobs sent from a FOLDING department get `isRework: true` (RE-WORK badge); every later job of that cloth keeps it until it is back in Folding.
+- Folding rows: `sentForRework`, `sentBackTo` (inStock 0 once sent back). Full guide: `docs/frontend/step6-folding.md`.
+
+## Step 7: Chemical Store and General Items Store (2026-10-14)
+Full frontend guide: `docs/frontend/step7-stores.md`. `:store` is `chemical` or `general`.
+- Vendors (shared): `GET/POST /v1/vendors`, `GET/PATCH/DELETE /v1/vendors/:id`.
+- Per store: `/v1/stores/:store/categories`, `/brands`, `/items` (CRUD), `GET /items/:id/moves`, `GET /stock?groupBy=category|brand`.
+- Inwards: `GET /v1/stores/:store/inwards/form-data`, `GET /inwards?tab=all|gst|other|draft&dateFrom&dateTo&ipNo&dcNo&grnNo&vendor&description`,
+  `POST /inwards`, `GET/PATCH/DELETE /inwards/:id`, `POST /inwards/:id/approve`, `POST /inwards/:id/unapprove` (client admin).

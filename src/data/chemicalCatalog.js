@@ -1,0 +1,94 @@
+// Default chemical / dye catalog given by the client (2026-10-09). Copied into every company's
+// Chemical Store (categories + items). Sub-categories become categories named "GROUP / SUB".
+module.exports = [
+  {
+    name: 'CHEMICALS',
+    items: [
+      'SOFTNTER - A', 'CAUSTIC', 'SOAP', 'SALT', 'SODA', 'ACETIC ACID', 'STARCH', 'HYDRO', 'SOAP (M)', 'OXALIC', 'BLEACH',
+      'DESIZER PURE', 'DESIZER WATER', 'SAYAN FIXER', 'SILICON HS37', 'SILICATE', 'UREA', 'SOFTNER', 'TO-8', 'HYDROGEN', 'PVA',
+      'SODA ASH', 'BINDER', 'ANTOX LIQ', 'ANTI FOAM', 'SAYAN SJH', 'SM-D LIQ', 'W.S.P', 'STAIPILIZER', 'SOFTNER M', 'PVA BP26',
+      'CT LEVELER', 'LICO', 'UF 60% GLUE', 'HDPE POWDER', 'STARCH (M)', 'PC LEVELLER', 'HT CONE', 'SILIGEN HSF NEW LIQ',
+      'SILIGEN MH LIQ C', 'CERALUBE SVN.PK LIQ', 'FIXAPRET F-ECO LIQ', 'R50', 'DE SCALER LIQUID', 'RUBITON RED RRCN',
+      'MAL THERM 605', 'FIXER L/F', 'FAB SOFT', 'MAIZE STARCH', 'DRIMAGEN E-4R LIQ', 'DESIZER', 'PRESTAGON F-PL LIQ',
+      'KIERALON WAD LIQ',
+    ],
+  },
+  {
+    name: 'VAT DYES',
+    items: ['VAT NAVY BLUE SPL', 'VAT YELLOW 3RT', 'VAT BLUE RCL', 'VAT BLACK SPL', 'VAT RED 6BE', 'VAT GREEN FFB', 'VAT NAVY BLUE'],
+    subCategories: [{ name: 'AMBIFIX', items: ['GREEN FFB', 'BLUE RCL', 'RED 6B', 'GREW M', 'BLACK SPL'] }],
+  },
+  {
+    name: 'DISPERSE DYES',
+    items: [
+      'D. RUBINE BLUE B', 'YELLOW BROWN 2RS', 'D. BLUE 2BLN', 'D. RUBBIN B', 'D. ORANGE H3R', 'D. BLUE SE2R', 'D. GOLDEN YELLOW CG',
+      'D. TURQUOISE BLUE SGC', 'D. RED FB', 'D. RED F3BS', 'D. BLACK EXSF', 'D. NAVY EXSNF', 'BLACK EXSF', 'D. BLUE BGF',
+    ],
+    subCategories: [{ name: 'SAYAN', items: ['YELLOW 4G'] }],
+  },
+  {
+    name: 'COTTON COLOUR (REACTIVE DYES)',
+    items: ['ORANGE F2R', 'RUBITON GOLDEN YELLOW R3R', 'RUBITON BLUE RRN', 'RED'],
+    subCategories: [
+      {
+        name: 'SYNOZOL',
+        items: [
+          'SYNOZOL TURQ BLUE G', 'SYNOZOL ULTRA BLACK DR', 'SYNOZOL LEMON YELLOW 4GL', 'BLUE KBR', 'SYNOZOL RED 6BN', 'SYNOZOL RED GD',
+          'SYNOZOL BLUE R', 'SYNOZOL NAVY BLUE KBF', 'SYNOZOL GOLDEN YELLOW 2GR', 'SYNOZOL ORANGE RR', 'VOILET 3B', 'RUBINE DS',
+          'BLACK SHF-RWR', 'VIOLET 3B', 'SYNOZOL BLUE KHL', 'BLACK B', 'BLUE BB', 'RED KHL', 'GOLDEN YELLOW K3RS', 'NAVY KBF',
+          'TURQ BLUE HFG', 'YELLOW 2GR',
+        ],
+      },
+      {
+        name: 'ANAZOL',
+        items: ['ANAZOL YELLOW BROWN DS', 'ANAZOL RED 3BE', 'ANAZOL YELLOW 3RE', 'ANAZOL NAVY BLUE M2G', 'ANAZOL BLACK B', 'RUBIN DS', 'RED'],
+      },
+      {
+        name: 'RUIHAZOL',
+        items: [
+          'YELLOW RGD', 'RUHIAZOLE BLACK B', 'BLACK YB', 'SODA RSH', 'RUIHAZOLE RED 3BSN', 'RUHIAZOLE YELLOW 3RS', 'RUHIAZOLE ORANGE R2RLN',
+          'RUHIAZOLE NAVY DSR', 'RUHIAZOLE ULTRA NAVY DS', 'XX RUHIAZOLE NAVY DSR', 'RUHIAZOLE TURQUISE G', 'ULTRA BLACK G', 'NAVY KBF',
+          'GOLDEN YELLOW 3RE', 'NAVY KBR', 'BLUE R USMAN', 'ORANGE F2R', 'YELLOW K3BS', 'BLACK SPL', 'STABCIZER', 'SUIFER BLACK', 'GREEN',
+          'LEMON YELLOW', 'RED 3B', 'RED GBD', 'RED AFBRD AZO', 'CAUSTIC', 'YELLOW S3R',
+        ],
+      },
+      {
+        name: 'REMAZOL',
+        items: [
+          'REMAZOL TURQ GN', 'REMAZOL ULTRA YELLOW RGB-N', 'REMAZOL RED RGB 02', 'REMAZOL SUPER BLACK SAM', 'REMAZOL YELLOW RGB',
+          'REMAZOL BLACK B', 'REMAZOL YELLOW 3GL', 'REMAZOL BLUE SAM', 'REMAZOL BRILLIANT BLUE BB GRAN', 'RUHIAZOLE BRILLIANT BLUE R',
+          'YELLOW RR', 'GOLDEN YELLOW RGB 01', 'NAVY BLUE RGB',
+        ],
+      },
+    ],
+  },
+  {
+    name: 'PIGMENT DYES',
+    items: [
+      'PIGMENT BLUE', 'PIGMENT ORANGE', 'PIGMENT BLACK', 'PIGMENT VIOLET', 'PIGMENT PINK', 'PIGMENT GREEN', 'PIGMENT G YELLOW',
+      'PIGMENT RED', 'PIGMENT TURQUOISE BLUE', 'PIGMENT L YELLOW',
+    ],
+  },
+  {
+    name: 'SULPHUR DYES',
+    items: ['SULPHER BLACK', 'SULPHURE NAVY BRN', 'SULPHER BLACK BR', 'SULPHER GREEN F', 'SULPHER NAVY BLUE BRN', 'SULPHER NAVY BRN'],
+  },
+  {
+    name: 'OTHERS',
+    items: [
+      'SAIT', 'SEQUSTER', 'SAIFURIC ASID', 'LEACO', 'XL-70', 'XP-50', 'RED', 'GOLDEN', 'CAUSTIC', 'SODIUM SUIPHET', 'CITRIC ACID',
+      'SULPHURIC ACID', 'TEA 70', 'REFINED SALT', 'BACTASOL', 'OTHERS', 'HANDLING CHARGES', 'LEMON', 'L YELLOW 4G',
+      'PLASTIC POLY BAG 24X60', 'PLASTIC POLY BAG 30X60', 'OXYGEN CYLINDER', 'SUNFIX RED S3B', 'CAN 10 KG',
+    ],
+    subCategories: [
+      {
+        name: 'LUFIBROL',
+        items: [
+          'LEUCOPHORE BH LIQ', 'BLACK AFRTH', 'SODIUM FLAKES', 'BLUE RGB', 'YELLOW 3BSN', 'SS', 'TSP', 'BP-26', 'CASTROL', 'LEAD CHE',
+          'GLUE', 'APPRATEN', 'SPD LIQ', 'BACTASOL HC', 'ULTRA NAVY DC', 'HSF NEW LIQ', 'G YELLOW', 'BSF', 'NAVY SPL', 'IMEROL X PK LIQ',
+          'FORMIC ACID', 'AMBIFIX TURQUOISE', 'SODIUM SULPHIDE', 'RED CKBB', 'FLEXI COAT', 'DISPERSE NAVY',
+        ],
+      },
+    ],
+  },
+];

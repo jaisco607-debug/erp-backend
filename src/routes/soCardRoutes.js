@@ -22,8 +22,10 @@ router.put('/numbering', requireUserType('CLIENT_ADMIN'), full, validate(v.numbe
 router.get('/departments', companyPerson, c.departments);
 router.get('/available-lots', view, validate(v.availableLots), c.availableLots);
 router.get('/incoming', companyPerson, validate(v.incoming), c.incoming);
+router.post('/send-many', full, validate(v.sendMany), c.sendMany);
 router.get('/', view, validate(v.list), c.list);
 router.post('/', full, validate(v.create), c.create);
+router.get('/:id/edit-data', view, validate(v.get), c.editData);
 router.get('/:id', view, validate(v.get), c.get);
 router.patch('/:id', full, validate(v.update), c.update);
 router.delete('/:id', full, validate(v.get), c.cancel);
