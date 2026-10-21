@@ -12,7 +12,7 @@ async function companyServices(companyId, transaction) {
   return company ? company.services : [];
 }
 
-const serviceJSON = (s, access) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, access });
+const serviceJSON = (s, access) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, access });
 
 /**
  * A user's own services: what the client admin gave them, but only while the company still has the
@@ -50,4 +50,30 @@ async function profile(user, { transaction } = {}) {
   };
 }
 
-module.exports = { profile, companyServices, userServices };
+/**
+ * The services of many users in a few queries (for lists): Map userId -> [{ id, code, name, kind, menuGroup, access }].
+ *   CLIENT_ADMIN  every active service of the company (FULL)
+ *   USER          what was given, but only while the company still has it and it is switched on
+ *   SUPER_ADMIN   none
+ * Services come in menu order.
+ */
+async function servicesOfUsers(users, transaction) {
+  const out = new Map(users.map((u) => [u.id, []]));
+  const have = new Map();
+  for (const companyId of new Set(users.map((u) => u.companyId).filter(Boolean))) {
+    have.set(companyId, await companyServices(companyId, transaction));
+  }
+  const ids = users.filter((u) => u.userType === 'USER').map((u) => u.id);
+  const grants = ids.length ? await UserService.findAll({ where: { userId: ids }, transaction }) : [];
+  for (const u of users) {
+    const list = have.get(u.companyId) || [];
+    if (u.userType === 'CLIENT_ADMIN') out.set(u.id, list.map((s) => serviceJSON(s, 'FULL')));
+    if (u.userType === 'USER') {
+      const given = new Map(grants.filter((g) => g.userId === u.id).map((g) => [g.serviceId, g.access]));
+      out.set(u.id, list.filter((s) => given.has(s.id)).map((s) => serviceJSON(s, given.get(s.id))));
+    }
+  }
+  return out;
+}
+
+module.exports = { profile, companyServices, userServices, servicesOfUsers };

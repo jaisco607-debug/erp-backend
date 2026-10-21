@@ -27,6 +27,11 @@ class AppError extends Error {
     return new AppError(404, 'NOT_FOUND', `${what} not found`);
   }
 
+  /** 423: somebody else is editing this record right now. */
+  static locked(message, details) {
+    return new AppError(423, 'LOCKED', message, details);
+  }
+
   /** 422: the data is fine but breaks a business rule (e.g. more meters than the lot has). */
   static rule(code, message, details) {
     return new AppError(422, code, message, details);

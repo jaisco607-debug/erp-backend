@@ -6,12 +6,13 @@ const { generate } = require('../utils/companyCode');
 
 /** A random code that no company and not the super admins have, e.g. "K7QM-4XPA". */
 async function freeCode(transaction) {
-  for (;;) {
+  for (let tries = 0; tries < 50; tries += 1) {
     const code = generate();
     const company = await Company.findOne({ where: { code }, attributes: ['id'], transaction });
     const platform = await Platform.findOne({ where: { superAdminCode: code }, attributes: ['id'], transaction });
     if (!company && !platform) return code;
   }
+  throw new Error('Could not find a free company code');
 }
 
 async function superAdminCode(transaction) {

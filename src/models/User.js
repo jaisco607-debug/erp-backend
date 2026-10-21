@@ -13,6 +13,7 @@ class User extends Model {
       id: this.id,
       name: this.name,
       email: this.email,
+      phone: this.phone,
       userType: this.userType,
       companyId: this.companyId,
       isActive: this.isActive,
@@ -38,6 +39,7 @@ function init(sequelize) {
           this.setDataValue('email', String(value).trim().toLowerCase());
         },
       },
+      phone: { type: DataTypes.STRING(30), allowNull: true },
       passwordHash: { type: DataTypes.STRING(100), allowNull: false },
       userType: { type: DataTypes.ENUM(...USER_TYPES), allowNull: false },
       companyId: { type: DataTypes.UUID, allowNull: true },
@@ -49,7 +51,7 @@ function init(sequelize) {
       passwordChangedAt: { type: DataTypes.DATE, allowNull: true },
       createdById: { type: DataTypes.UUID, allowNull: true },
     },
-    { sequelize, modelName: 'User', tableName: 'users' },
+    { sequelize, modelName: 'User', tableName: 'users', paranoid: true },
   );
   return User;
 }

@@ -1,5 +1,9 @@
 const companyUserService = require('../services/companyUserService');
 
+exports.serviceOptions = async (req, res) => {
+  res.json(await companyUserService.serviceOptions(req));
+};
+
 exports.list = async (req, res) => {
   res.json(await companyUserService.list(req, req.validatedQuery));
 };

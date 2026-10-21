@@ -15,13 +15,18 @@ router.get('/health', async (req, res) => {
   }
 });
 
+// Edit locks: a write on a record somebody else is editing answers 423 before it reaches its route.
+router.use(require('../middlewares/editLockGuard'));
+
 // Modules, mounted under /api/v1 as they are built.
 router.use('/v1/auth', require('./authRoutes'));
+router.use('/v1/locks', require('./lockRoutes'));
 router.use('/v1/super-admins', require('./superAdminRoutes'));
 router.use('/v1/audit-logs', require('./auditRoutes'));
 router.use('/v1/companies', require('./companyRoutes'));
 router.use('/v1/services', require('./serviceRoutes'));
 router.use('/v1/users', require('./companyUserRoutes'));
+router.use('/v1/admin/users', require('./adminUserRoutes'));
 const grey = require('./greyRoutes');
 router.use('/v1/customers', grey.customers);
 router.use('/v1/qualities', grey.qualities);
@@ -33,5 +38,6 @@ router.use('/v1/departments', require('./departmentRoutes'));
 const store = require('./storeRoutes');
 router.use('/v1/vendors', store.vendors);
 router.use('/v1/stores', store.stores);
+router.use('/v1/reports', require('./reportRoutes'));
 
 module.exports = router;

@@ -6,14 +6,16 @@
 const { QueryTypes } = require('sequelize');
 const { sequelize } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
+const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const counters = require('./counterService');
 const { companyServices, userServices } = require('./accessService');
 
 const COUNTER = 'packing_list_no';
 const GRADES = ['A', 'B', 'CP'];
 const GRADE_TEXT = { A: 'A', B: 'B', CP: 'Cut Piece' };
-const round = (n) => Math.round(n * 100) / 100;
+const { round } = require('../utils/money');
 const q = (sql, replacements, transaction) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT, transaction });
 
 async function packingDept(req, code, level, transaction) {
@@ -55,7 +57,7 @@ async function cardInfo(req, depId, soCardIds, transaction) {
   for (const r of rows) {
     const f = fold.find((x) => x.soCardId === r.id) || { a: 0, b: 0, cp: 0 };
     out.set(r.id, {
-      soCard: { id: r.id, cardNo: r.cardNo, idNo: r.idNo, cardDate: r.cardDate },
+      soCard: { id: r.id, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), idNo: r.idNo, cardDate: r.cardDate },
       customer: { id: r.customerId, code: r.customerCode, name: r.customerName },
       quality: r.quality, colour: r.colour,
       // fabric return grey: this cloth was not processed (rates are usually 0)
@@ -80,7 +82,8 @@ async function soCards(req, code, query) {
   const ids = (await q(`SELECT DISTINCT ji."soCardId" AS id FROM job_items ji JOIN jobs j ON j.id = ji."jobId"
     WHERE j."companyId" = :companyId AND j."departmentId" = :dep AND j.status <> 'REJECTED'`, { companyId: req.user.companyId, dep: d.id })).map((r) => r.id);
   let list = [...(await cardInfo(req, d.id, ids)).values()];
-  if (query.search && /^\d+$/.test(query.search)) list = list.filter((r) => r.soCard.cardNo === Number(query.search));
+  const cs = query.search ? parseCardSearch(query.search) : null;
+  if (cs) list = list.filter((r) => r.soCard.cardNo === cs.n && (!cs.grey || r.isGreyReturn));
   if (query.tab === 'open') list = list.filter((r) => r.cloth.leftToPack > 0 || r.cloth.fromFoldingMeters > r.cloth.receivedMeters);
   list.sort((a, b) => b.soCard.cardNo - a.soCard.cardNo);
   return { data: list.slice((query.page - 1) * query.limit, query.page * query.limit), total: list.length, page: query.page, limit: query.limit };
@@ -144,7 +147,8 @@ function summary(lines, rates) {
   for (const g of GRADES) {
     const ls = lines.filter((l) => l.grade === g);
     const meters = round(ls.reduce((t, l) => t + l.meters, 0));
-    s[g] = { gradeText: GRADE_TEXT[g], thaans: ls.length, meters, rate: rates[g], amount: round(meters * rates[g]) };
+    // the amount of a grade is the sum of its line amounts (each line rounded to the paisa), so paper and totals always agree
+    s[g] = { gradeText: GRADE_TEXT[g], thaans: ls.length, meters, rate: rates[g], amount: round(ls.reduce((t, l) => t + round(l.meters * rates[g]), 0)) };
   }
   s.total = {
     thaans: lines.length,
@@ -195,6 +199,12 @@ async function checkLines(req, soCardId, lines, listId, transaction) {
     WHERE l."soCardId" = :id`, { id: soCardId }, transaction);
   const packed = new Set((await q(`SELECT x."thaanId", x.grade FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
     WHERE p."soCardId" = :id AND p.id <> :listId AND x."thaanId" IS NOT NULL`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction)).map((r) => `${r.thaanId}:${r.grade}`));
+  // what Folding sent, per lot / thaan / category; a line (all lines of the same thaan and category together) may not exceed it
+  const sent = await q(`SELECT "greyLotId" AS "lotId", "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp
+    FROM folding_lines WHERE "soCardId" = :id GROUP BY "greyLotId", "thaanId"`, { id: soCardId }, transaction);
+  const onOther = await q(`SELECT x."greyLotId" AS "lotId", x."thaanId", x.grade, SUM(x.meters)::float AS meters FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
+    WHERE p."soCardId" = :id AND p.id <> :listId GROUP BY x."greyLotId", x."thaanId", x.grade`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction);
+  const used = new Map();
   const seen = new Set();
   const autoNo = new Map();
   return lines.map((l, i) => {
@@ -212,6 +222,13 @@ async function checkLines(req, soCardId, lines, listId, transaction) {
     } else if (thaans.some((x) => x.greyLotId === l.greyLotId)) {
       throw AppError.rule('THAAN_REQUIRED', 'This lot has thaans: choose the thaan', { line: i + 1 });
     }
+    // AUD-05: no more meters than Folding sent in this category (old cards without Folding rows: no more than the thaan / lot itself)
+    const key2 = `${l.greyLotId}:${l.thaanId || ''}:${l.grade}`;
+    const f = sent.find((x) => x.lotId === l.greyLotId && (x.thaanId || null) === (l.thaanId || null));
+    const allowed = f ? f[l.grade.toLowerCase()] : null;
+    const total = (used.get(key2) || 0) + l.meters + onOther.filter((x) => x.lotId === l.greyLotId && (x.thaanId || null) === (l.thaanId || null) && x.grade === l.grade).reduce((t, x) => t + x.meters, 0);
+    used.set(key2, (used.get(key2) || 0) + l.meters);
+    if (allowed !== null && total > allowed + 0.0051) throw AppError.rule('MORE_THAN_FOLDING_SENT', `Only ${round(Math.max(0, allowed - (total - l.meters)))} m of ${GRADE_TEXT[l.grade]} can still be packed for this thaan (Folding sent ${round(allowed)} m)`, { line: i + 1 });
     if (!thaanNo) thaanNo = (autoNo.get(l.greyLotId) || 0) + 1;
     autoNo.set(l.greyLotId, Math.max(autoNo.get(l.greyLotId) || 0, thaanNo));
     return { lineNo: i + 1, greyLotId: l.greyLotId, thaanId: l.thaanId || null, thaanNo, grade: l.grade, meters: l.meters };
@@ -240,7 +257,7 @@ async function create(req, code, data) {
     const listNo = await counters.take(companyId, COUNTER, async () => ((await q('SELECT MAX("listNo") AS m FROM packing_lists WHERE "companyId" = :companyId', { companyId }, transaction))[0].m || 0) + 1, transaction);
     const [{ id }] = await q(`INSERT INTO packing_lists (id, "companyId", "listNo", "soCardId", "listDate", description, "madeFor", "ctnQty", "netWeight", "grossWeight", remarks, "rateA", "rateB", "rateCP", "createdById", "updatedById")
       VALUES (gen_random_uuid(), :companyId, :listNo, :soCardId, :listDate, :description, :madeFor, :ctnQty, :netWeight, :grossWeight, :remarks, :rateA, :rateB, :rateCP, :userId, :userId) RETURNING id`, {
-      companyId, listNo, soCardId: data.soCardId, listDate: data.listDate || new Date().toISOString().slice(0, 10),
+      companyId, listNo, soCardId: data.soCardId, listDate: data.listDate || today(),
       ...Object.fromEntries(HEAD.map((k) => [k, data[k] ?? null])),
       rateA: data.rateA || 0, rateB: data.rateB || 0, rateCP: data.rateCP || 0, userId: req.user.id,
     }, transaction);
@@ -285,6 +302,7 @@ async function setFinal(req, code, id, final) {
     const d = await packingDept(req, code, 'FULL', transaction);
     const p = await draftOr409(req, id, transaction);
     if (final && p.status === 'FINAL') throw AppError.rule('LIST_FINAL', 'Already final');
+    if (!final && (await q('SELECT 1 FROM gate_passes WHERE "packingListId" = :id', { id }, transaction)).length) throw AppError.rule('HAS_GATE_PASS', 'This packing list has a gate pass: the cloth has left, so it cannot be reopened');
     if (!final && p.status === 'DRAFT') throw AppError.rule('LIST_DRAFT', 'This packing list is not final');
     if (final && !(await q('SELECT 1 FROM packing_list_lines WHERE "packingListId" = :id LIMIT 1', { id }, transaction)).length) throw AppError.rule('NO_LINES', 'Add thaans first');
     await sequelize.query(`UPDATE packing_lists SET status = :s, "finalizedById" = :by, "finalizedAt" = :at, "updatedAt" = now() WHERE id = :id`,
@@ -299,6 +317,7 @@ async function remove(req, code, id) {
     await packingDept(req, code, 'FULL', transaction);
     const p = await draftOr409(req, id, transaction);
     if (p.status !== 'DRAFT') throw AppError.rule('LIST_FINAL', 'A final packing list cannot be deleted; reopen it first');
+    if ((await q('SELECT 1 FROM gate_passes WHERE "packingListId" = :id', { id }, transaction)).length) throw AppError.rule('HAS_GATE_PASS', 'This packing list has a gate pass and cannot be deleted');
     await sequelize.query('DELETE FROM packing_lists WHERE id = :id', { replacements: { id }, transaction });
     await audit.log(req, { action: 'PACKING_LIST_DELETED', entityType: 'PackingList', entityId: id, before: { listNo: p.listNo, soCardId: p.soCardId } }, { transaction });
     return { deleted: true, id };
@@ -318,7 +337,8 @@ async function list(req, code, query) {
   if (query.status) { where.push('p.status = :status'); r.status = query.status; }
   if (query.dateFrom) { where.push('p."listDate" >= :dateFrom'); r.dateFrom = query.dateFrom; }
   if (query.dateTo) { where.push('p."listDate" <= :dateTo'); r.dateTo = query.dateTo; }
-  if (query.search && /^\d+$/.test(query.search)) { where.push('(p."listNo" = :n OR sc."cardNo" = :n)'); r.n = Number(query.search); }
+  const cs = query.search ? parseCardSearch(query.search) : null;
+  if (cs) { where.push(cs.grey ? '(sc."cardNo" = :n AND sc."isGreyReturn")' : '(p."listNo" = :n OR sc."cardNo" = :n)'); r.n = cs.n; }
   const ids = await q(`SELECT p.id FROM packing_lists p JOIN so_cards sc ON sc.id = p."soCardId" WHERE ${where.join(' AND ')} ORDER BY p."listNo" DESC`, r);
   const page = ids.slice((query.page - 1) * query.limit, query.page * query.limit);
   const data = [];
@@ -350,7 +370,7 @@ async function gatePassOf(req, code, listId, transaction) {
     canSave: list.status === 'FINAL',
     id: g ? g.id : null,
     gatePassNo: g ? g.gatePassNo : null,
-    passDate: g ? g.passDate : new Date().toISOString().slice(0, 10),
+    passDate: g ? g.passDate : today(),
     packingList: { id: list.id, listNo: list.listNo, status: list.status, statusText: list.statusText },
     soCard: list.soCard,
     // the client named on the grey inward
@@ -382,7 +402,8 @@ async function saveGatePass(req, code, listId, data) {
     if (!(await q('SELECT 1 FROM packing_list_lines WHERE "packingListId" = :listId LIMIT 1', { listId }, transaction)).length) throw AppError.rule('NO_LINES', 'The packing list has no thaans');
     const [old] = await q('SELECT * FROM gate_passes WHERE "packingListId" = :listId FOR UPDATE', { listId }, transaction);
     const v = Object.fromEntries(GATE_FIELDS.map((k) => [k, data[k] === undefined ? (old ? old[k] : null) : (data[k] === '' ? null : data[k])]));
-    if (!v.passDate) v.passDate = new Date().toISOString().slice(0, 10);
+    if (!v.passDate) v.passDate = today();
+    if (String(v.passDate) < String(p.listDate).slice(0, 10)) throw AppError.rule('PASS_BEFORE_LIST', `The packing list is dated ${String(p.listDate).slice(0, 10)}: the gate pass cannot be dated before that`);
     let id;
     if (old) {
       id = old.id;

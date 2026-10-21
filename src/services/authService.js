@@ -4,11 +4,13 @@ const { Op } = require('sequelize');
 const { sequelize, User, RefreshToken, Company } = require('../models');
 const { normalize: normalizeCode } = require('../utils/companyCode');
 const AppError = require('../utils/AppError');
+const locks = require('./lockService');
 const { hashPassword, checkPassword } = require('../utils/password');
 const { signAccessToken, newRefreshToken, hashToken } = require('../utils/tokens');
 const audit = require('./auditService');
 const { profile } = require('./accessService');
 const { superAdminCode } = require('./loginCodeService');
+const { hasActiveClientAdmin } = require('./companyAccessService');
 
 // From .env (LOGIN_MAX_FAILED, LOGIN_LOCK_MINUTES); default 5 wrong passwords lock the account for 15 minutes.
 const { maxFailed: MAX_FAILED_LOGINS, lockMinutes: LOCK_MINUTES } = require('../config/env').login;
@@ -70,6 +72,11 @@ async function login(req, { companyCode, email, password }) {
       await audit.log(req, { action: 'LOGIN_FAILED', actor: user, entityType: 'User', entityId: user.id, after: { reason: 'COMPANY_INACTIVE' } }, { transaction });
       return { error: LOGIN_FAILED() };
     }
+    // an employee cannot log in while the company has no active client admin (switched off or deleted)
+    if (user.userType === 'USER' && !(await hasActiveClientAdmin(user.companyId, transaction))) {
+      await audit.log(req, { action: 'LOGIN_FAILED', actor: user, entityType: 'User', entityId: user.id, after: { reason: 'NO_ACTIVE_CLIENT_ADMIN' } }, { transaction });
+      return { error: LOGIN_FAILED() };
+    }
     if (user.isLocked() || !user.isActive) {
       const reason = !user.isActive ? 'INACTIVE' : 'LOCKED';
       await audit.log(req, { action: 'LOGIN_FAILED', actor: user, entityType: 'User', entityId: user.id, after: { reason } }, { transaction });
@@ -118,6 +125,7 @@ async function refresh(req, refreshToken) {
       lock: { level: transaction.LOCK.UPDATE, of: User },
       transaction,
     });
+    if (!user) return { error: AppError.unauthorized('Session expired, please log in again') };
     if (session.revokedAt && session.replacedById) {
       // This token was already swapped for a new one, so two people hold copies of it.
       await endAllSessions(user, transaction);
@@ -128,6 +136,9 @@ async function refresh(req, refreshToken) {
       return { error: AppError.unauthorized('Session expired, please log in again') };
     }
 
+    if (user.userType === 'USER' && !(await hasActiveClientAdmin(user.companyId, transaction))) {
+      return { error: AppError.unauthorized('Session expired, please log in again') };
+    }
     const { session: next, tokens } = await issueSession(user, req, transaction);
     session.revokedAt = new Date();
     session.replacedById = next.id;
@@ -145,6 +156,7 @@ async function logout(req, refreshToken) {
     if (!session) return;
     session.revokedAt = new Date();
     await session.save({ transaction });
+    await locks.releaseAllForUsers(session.userId, transaction);
     await audit.log(req, { action: 'LOGOUT', actor: await User.findByPk(session.userId, { transaction }), entityType: 'User', entityId: session.userId }, { transaction });
   });
 }
@@ -153,6 +165,7 @@ async function logout(req, refreshToken) {
 async function endAllSessions(user, transaction) {
   user.tokenVersion += 1;
   await user.save({ transaction });
+  await locks.releaseAllForUsers(user.id, transaction); // logout everywhere / switched off / deleted: their edit locks end
   await RefreshToken.update({ revokedAt: new Date() }, { where: { userId: user.id, revokedAt: null }, transaction });
 }
 

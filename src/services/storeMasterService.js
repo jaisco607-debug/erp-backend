@@ -6,7 +6,7 @@ const { sequelize, Vendor, StoreCategory, StoreBrand, StoreItem, StoreInward, St
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 
-const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+const { round } = require('../utils/money');
 const avgRate = (i) => (i.stockQty > 0 ? round(i.stockValue / i.stockQty, 4) : 0);
 
 const vendorJSON = (v) => ({ id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, label: `${v.name} (${v.code})` });

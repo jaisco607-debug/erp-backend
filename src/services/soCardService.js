@@ -14,17 +14,21 @@
 //   keeps its rest free. A lot without a thaan list still gives meters.
 // - Several NEW cards can be sent to a department together: they go as ONE job (one Job#) that
 //   shows all their SO numbers.
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const { sequelize, SoCard, SoCardLot, SoCardLotThaan, SoCardMove, GreyLot, GreyLotThaan, Customer, Quality, Service, User } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 const counters = require('./counterService');
+const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const { companyServices, userServices } = require('./accessService');
 
 const CARD = 'so_card_no';
 const ID = 'so_card_id_no';
+// a fabric return grey has its own numbers (FR-1, FR-2 ...), the SO card numbers stay continuous
+const CARD_FR = 'fabric_return_card_no';
+const ID_FR = 'fabric_return_id_no';
 const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING'];
-const round = (n) => Math.round(n * 100) / 100;
+const { round } = require('../utils/money');
 const YARD = 0.9144;
 
 const dept = (s) => (s ? { id: s.id, code: s.code, name: s.name } : null);
@@ -68,11 +72,32 @@ function moveJSON(m) {
   };
 }
 
-function json(c) {
+/**
+ * Where the cloth of each card is NOW, from its jobs: the department of the newest job that is not rejected, and whether it still waits to be accepted.
+ * (A card sent through the job flow keeps status SENT and its first department in the database; this is what the screens show.)
+ */
+async function positionsOf(cardIds, transaction) {
+  const out = new Map();
+  if (!cardIds.length) return out;
+  const rows = await sequelize.query(`
+    SELECT DISTINCT ON (ji."soCardId") ji."soCardId" AS id, s.id AS "deptId", s.code, s.name, j.status
+    FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
+    WHERE ji."soCardId" IN (:ids) AND j.status <> 'REJECTED'
+    ORDER BY ji."soCardId", j."createdAt" DESC, j."jobNo" DESC`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
+  for (const r of rows) out.set(r.id, { department: { id: r.deptId, code: r.code, name: r.name }, waiting: ['IN_WAY', 'QUEUE'].includes(r.status) });
+  return out;
+}
+const jsonMany = async (cards) => { const pos = await positionsOf(cards.map((c) => c.id)); return cards.map((c) => json(c, pos.get(c.id))); };
+
+function json(c, position) {
+  const here = position ? position.department : dept(c.currentDepartment);
+  const waiting = c.status === 'SENT' && (position ? position.waiting : true);
   const moves = (c.moves || []).map(moveJSON);
   return {
     id: c.id,
     cardNo: c.cardNo,
+    // what to show: "5" for an SO card, "FR-5" for a fabric return (the two series both start at 1)
+    cardLabel: soLabel(c.cardNo, c.isGreyReturn),
     idNo: c.idNo,
     cardDate: c.cardDate,
     quality: c.quality ? { id: c.quality.id, name: c.quality.name } : null,
@@ -89,11 +114,10 @@ function json(c) {
     isGreyReturn: c.isGreyReturn,
     tagText: c.isGreyReturn ? 'Fabric return grey (not processed)' : null,
     status: c.status,
-    currentDepartment: dept(c.currentDepartment),
+    currentDepartment: here,
     // ready-made line for the card view
-    deliveryText: c.status === 'SENT' ? `Sent to ${c.currentDepartment?.name} (waiting for accept)`
-      : c.status === 'IN_DEPARTMENT' ? `Delivered to ${c.currentDepartment?.name}`
-        : 'Not sent to any department yet',
+    deliveryText: c.status === 'NEW' ? 'Not sent to any department yet'
+      : waiting ? `Sent to ${here?.name} (waiting for accept)` : `Delivered to ${here?.name}`,
     lastMove: moves.length ? moves[moves.length - 1] : null,
     lots: (c.lots || []).map((l) => {
       const g = l.greyLot || {};
@@ -139,7 +163,7 @@ function json(c) {
   };
 }
 
-const load = async (id, transaction) => json(await SoCard.findByPk(id, { include, order, transaction }));
+const load = async (id, transaction) => { const c = await SoCard.findByPk(id, { include, order, transaction }); return json(c, (await positionsOf([c.id], transaction)).get(c.id)); };
 
 async function findOr404(req, id, transaction, lock = false) {
   const card = await SoCard.findOne({ where: { id, companyId: req.user.companyId }, lock: lock ? transaction.LOCK.UPDATE : undefined, transaction });
@@ -245,6 +269,8 @@ async function list(req, q) {
   if (q.status) where.status = q.status;
   if (q.departmentId) where.currentDepartmentId = q.departmentId;
   if (q.isReprocess !== undefined) where.isReprocess = q.isReprocess;
+  // a fabric return (grey, not processed) is not an SO card of the SO Card section: hidden unless asked for
+  where.isGreyReturn = q.isGreyReturn === undefined ? false : q.isGreyReturn;
   if (q.isConfirmed !== undefined) where.isConfirmed = q.isConfirmed;
   if (q.dateFrom || q.dateTo) {
     where.cardDate = {};
@@ -253,6 +279,8 @@ async function list(req, q) {
   }
   if (q.search) {
     const ors = [{ '$customer.name$': { [Op.iLike]: `%${q.search}%` } }];
+    const cs = parseCardSearch(q.search);
+    if (cs && cs.grey) ors.push({ cardNo: cs.n, isGreyReturn: true });
     if (/^\d+$/.test(q.search)) {
       ors.push({ cardNo: Number(q.search) }, { idNo: Number(q.search) });
       // cards that took cloth from this lot no
@@ -270,7 +298,7 @@ async function list(req, q) {
   });
   const ids = rows.map((r) => r.id);
   const full = ids.length ? await SoCard.findAll({ where: { id: ids }, include, order: [['cardNo', 'DESC'], ...order] }) : [];
-  return { data: full.map(json), page: q.page, limit: q.limit, total: count };
+  return { data: await jsonMany(full), page: q.page, limit: q.limit, total: count };
 }
 
 async function get(req, id) {
@@ -338,7 +366,8 @@ async function freeThaans(soCardLotIds, transaction) {
   await SoCardLotThaan.destroy({ where: { soCardLotId: soCardLotIds }, transaction });
 }
 
-async function create(req, { cardDate, lots, remarks, description, qualityId, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions, isGreyReturn }) {
+// desk: who makes the card when it is not the SO card desk ('GREY_STORE' for a fabric return); see jobService.need
+async function create(req, { cardDate, lots, remarks, description, qualityId, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions, isGreyReturn, desk }) {
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
     // lock the lots in a fixed order so two cards saved together cannot deadlock or overdraw
@@ -348,6 +377,9 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
     const missing = ids.filter((id) => !byId.has(id));
     if (missing.length) throw AppError.rule('UNKNOWN_LOT', 'Some lots were not found', { greyLotIds: missing });
 
+    // cloth cannot go on a card before it arrived
+    const late = found.find((l) => cardDate && l.inwardDate && String(cardDate) < String(l.inwardDate).slice(0, 10));
+    if (late) throw AppError.rule('CARD_BEFORE_LOT', `Lot ${late.lotNo} arrived on ${String(late.inwardDate).slice(0, 10)}: the card cannot be dated before that`);
     const customers = new Set(found.map((l) => l.customerId));
     if (customers.size > 1) throw AppError.rule('MIXED_CUSTOMERS', 'All lots on one SO card must belong to the same party');
 
@@ -375,8 +407,10 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
       throw AppError.rule('UNKNOWN_DEPARTMENT', 'Your company does not have this department');
     }
 
-    const cardNo = await counters.take(companyId, CARD, async () => ((await SoCard.max('cardNo', { where: { companyId }, paranoid: false, transaction })) || 0) + 1, transaction);
-    const idNo = await counters.take(companyId, ID, async () => ((await SoCard.max('idNo', { where: { companyId }, paranoid: false, transaction })) || 0) + 1, transaction);
+    // own number series: a fabric return takes FR-n, an SO card takes the next SO# (no gaps in either)
+    const fr = Boolean(isGreyReturn);
+    const cardNo = await counters.take(companyId, fr ? CARD_FR : CARD, async () => ((await SoCard.max('cardNo', { where: { companyId, isGreyReturn: fr }, paranoid: false, transaction })) || 0) + 1, transaction);
+    const idNo = await counters.take(companyId, fr ? ID_FR : ID, async () => ((await SoCard.max('idNo', { where: { companyId, isGreyReturn: fr }, paranoid: false, transaction })) || 0) + 1, transaction);
     const card = await SoCard.create({
       companyId,
       cardNo,
@@ -404,7 +438,7 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
 
     await audit.log(req, { action: 'SO_CARD_CREATED', entityType: 'SoCard', entityId: card.id, after: await load(card.id, transaction) }, { transaction });
     // the same screen can send it straight away
-    if (departmentId) await sendIn(req, card, { departmentId, sentThrough, workInstructions }, transaction);
+    if (departmentId) await sendIn(req, card, { departmentId, sentThrough, workInstructions, desk }, transaction);
     return load(card.id, transaction);
   });
 }
@@ -414,7 +448,11 @@ async function update(req, id, { cardDate, remarks, description, qualityId, lots
     const card = await findOr404(req, id, transaction, true);
     const before = await load(card.id, transaction);
     const editsCard = [cardDate, remarks, description, qualityId, lots, deliveryDate, article, instructions].some((v) => v !== undefined);
-    if (cardDate !== undefined) card.cardDate = cardDate;
+    if (cardDate !== undefined) {
+      const [late] = await sequelize.query('SELECT gl."lotNo", gl."inwardDate" FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId" WHERE l."soCardId" = :id AND gl."inwardDate" > :d LIMIT 1', { replacements: { id: card.id, d: cardDate }, type: QueryTypes.SELECT, transaction });
+      if (late) throw AppError.rule('CARD_BEFORE_LOT', `Lot ${late.lotNo} arrived on ${String(late.inwardDate).slice(0, 10)}: the card cannot be dated before that`);
+      card.cardDate = cardDate;
+    }
     if (editsCard && card.isConfirmed) throw AppError.rule('CARD_CONFIRMED', 'A confirmed card cannot be edited');
     if (remarks !== undefined) card.remarks = remarks === '' ? null : remarks;
     if (description !== undefined) card.description = description === '' ? null : description;
@@ -512,7 +550,7 @@ async function send(req, id, data) {
   });
 }
 
-async function sendIn(req, card, { departmentId, sentThrough, remarks, workInstructions }, transaction) {
+async function sendIn(req, card, { departmentId, sentThrough, remarks, workInstructions, desk }, transaction) {
   const id = card.id;
   {
     if (card.status === 'NEW') {
@@ -521,7 +559,7 @@ async function sendIn(req, card, { departmentId, sentThrough, remarks, workInstr
       const jobService = require('./jobService');
       const rows = (await jobService.available(req, null, transaction)).filter((r) => r.soCard.id === id);
       if (rows.length) {
-        await jobService.create(req, { departmentId, sentThrough, remarks, instructions: workInstructions, items: rows.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction);
+        await jobService.create(req, { departmentId, sentThrough, remarks, instructions: workInstructions, desk, items: rows.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction);
       }
     }
     if (card.status === 'SENT') throw AppError.rule('CARD_SENT', 'This card is already on its way to a department; it must be accepted first');
@@ -582,6 +620,8 @@ async function accept(req, id) {
     const card = await findOr404(req, id, transaction, true);
     if (card.status !== 'SENT') throw AppError.rule('NOTHING_TO_ACCEPT', 'This card is not on its way to a department');
     const move = await SoCardMove.findOne({ where: { soCardId: id, acceptedAt: null }, lock: transaction.LOCK.UPDATE, transaction });
+    // a card sent through the job flow has no move: its department accepts the job (PUT /departments/:code/jobs/:id/status)
+    if (!move) throw AppError.rule('ACCEPT_ON_JOB', 'This card was sent as a job: the department accepts it on its job, not on the SO card');
 
     if (req.user.userType !== 'CLIENT_ADMIN') {
       const grants = await userServices(req.user, transaction);
@@ -622,8 +662,8 @@ async function setConfirmed(req, id, isConfirmed) {
  */
 async function formData(req) {
   const companyId = req.user.companyId;
-  const nextCardNo = await counters.peek(companyId, CARD, async () => ((await SoCard.max('cardNo', { where: { companyId }, paranoid: false })) || 0) + 1);
-  const nextIdNo = await counters.peek(companyId, ID, async () => ((await SoCard.max('idNo', { where: { companyId }, paranoid: false })) || 0) + 1);
+  const nextCardNo = await counters.peek(companyId, CARD, async () => ((await SoCard.max('cardNo', { where: { companyId, isGreyReturn: false }, paranoid: false })) || 0) + 1);
+  const nextIdNo = await counters.peek(companyId, ID, async () => ((await SoCard.max('idNo', { where: { companyId, isGreyReturn: false }, paranoid: false })) || 0) + 1);
   const lots = (await availableLots(req, { limit: 5000 })).data;
   const parties = new Map();
   for (const l of lots) {
@@ -646,7 +686,7 @@ async function setNumbering(req, { nextCardNo, nextIdNo }) {
     const companyId = req.user.companyId;
     for (const [value, name, field] of [[nextCardNo, CARD, 'cardNo'], [nextIdNo, ID, 'idNo']]) {
       if (value === undefined) continue;
-      const used = (await SoCard.max(field, { where: { companyId }, paranoid: false, transaction })) || 0;
+      const used = (await SoCard.max(field, { where: { companyId, isGreyReturn: false }, paranoid: false, transaction })) || 0;
       if (value <= used) throw AppError.rule('NUMBER_USED', `${field === 'cardNo' ? 'SO#' : 'ID#'} ${used} is already used; the next must be above it`);
       await counters.set(companyId, name, value, transaction);
     }
@@ -657,17 +697,26 @@ async function setNumbering(req, { nextCardNo, nextIdNo }) {
   });
 }
 
-/** Cards waiting for a department to accept them (its "incoming" list). */
+/** Cards waiting for a department to accept them (its "incoming" list). Fabric returns come as jobs, not here. */
 async function incoming(req, departmentId) {
   if (req.user.userType !== 'CLIENT_ADMIN') {
     const grants = await userServices(req.user);
     if (!grants.some((g) => g.service.id === departmentId)) throw AppError.forbidden('You do not have this department');
   }
   const cards = await SoCard.findAll({
-    where: { companyId: req.user.companyId, status: 'SENT', currentDepartmentId: departmentId },
+    where: { companyId: req.user.companyId, status: 'SENT', currentDepartmentId: departmentId, isGreyReturn: false,
+      // only cards with a move waiting to be accepted: cards sent through the job flow are accepted on their job
+      id: { [Op.in]: sequelize.literal('(SELECT "soCardId" FROM so_card_moves WHERE "acceptedAt" IS NULL)') } },
     include, order: [['cardNo', 'ASC'], ...order],
   });
-  return { data: cards.map(json) };
+  return { data: await jsonMany(cards) };
 }
 
-module.exports = { departments, availableLots, editData, list, get, create, update, cancel, send, sendMany, accept, incoming, setConfirmed, formData, setNumbering };
+/** The number the next fabric return will get: FR-<nextCardNo>. */
+async function nextFabricReturnNo(req) {
+  const companyId = req.user.companyId;
+  const nextCardNo = await counters.peek(companyId, CARD_FR, async () => ((await SoCard.max('cardNo', { where: { companyId, isGreyReturn: true }, paranoid: false })) || 0) + 1);
+  return { nextCardNo, nextCardLabel: soLabel(nextCardNo, true) };
+}
+
+module.exports = { nextFabricReturnNo, departments, availableLots, editData, list, get, create, update, cancel, send, sendMany, accept, incoming, setConfirmed, formData, setNumbering };

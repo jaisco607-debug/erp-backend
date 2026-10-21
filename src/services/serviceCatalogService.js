@@ -5,7 +5,7 @@ const { Service, Company, CompanyService, User, UserService, sequelize } = requi
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 
-const json = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, tracksColour: s.tracksColour, isActive: s.isActive, sortOrder: s.sortOrder });
+const json = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, isBuiltIn: CORE_MODULES.includes(s.code), tracksColour: s.tracksColour, isActive: s.isActive, sortOrder: s.sortOrder });
 
 async function list({ isActive, kind }) {
   const where = isActive === undefined ? {} : { isActive };
@@ -18,6 +18,7 @@ async function create(req, data) {
     if (await Service.findOne({ where: { code: data.code }, transaction })) {
       throw AppError.rule('SERVICE_CODE_TAKEN', `Service code "${data.code}" already exists`);
     }
+    if (data.menuGroup === undefined && ['PROCESS', 'FOLDING', 'PACKING'].includes(data.kind)) data.menuGroup = 'PROCESS';
     if (data.sortOrder === undefined) data.sortOrder = ((await Service.max('sortOrder', { transaction })) || 0) + 10;
     const service = await Service.create(data, { transaction });
     await audit.log(req, { action: 'SERVICE_CREATED', entityType: 'Service', entityId: service.id, after: json(service) }, { transaction });
@@ -30,7 +31,7 @@ async function update(req, id, changes) {
     const service = await Service.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
     if (!service) throw AppError.notFound('Service');
     const before = json(service);
-    for (const field of ['name', 'tracksColour', 'isActive', 'sortOrder']) {
+    for (const field of ['name', 'tracksColour', 'isActive', 'sortOrder', 'menuGroup']) {
       if (changes[field] !== undefined) service[field] = changes[field];
     }
     await service.save({ transaction });
@@ -110,9 +111,6 @@ async function companyOptions(id) {
 async function addCompanies(req, id, companyIds) {
   return sequelize.transaction(async (transaction) => {
     const service = await findOr404(id, transaction);
-    if (service.kind === 'MODULE') {
-      throw AppError.rule('MODULE_SERVICE', 'Modules are given to every company automatically');
-    }
     const wanted = [...new Set(companyIds)];
     const found = await Company.findAll({ where: { id: wanted }, transaction });
     if (found.length !== wanted.length) {
@@ -137,7 +135,8 @@ async function addCompanies(req, id, companyIds) {
 }
 
 // The built-in modules the system is built around; they can never be deleted.
-const CORE_MODULES = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'GENERAL_STORE', 'PACKING', 'GATE_PASS'];
+const CORE_MODULES = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'GENERAL_STORE', 'STORE_REPORTS', 'PACKING', 'GATE_PASS',
+  'REPORT_OVERVIEW', 'REPORT_GREY', 'REPORT_SO_CARDS', 'REPORT_DEPARTMENTS', 'REPORT_CHEMICAL_COST', 'REPORT_FOLDING', 'REPORT_ACTIVE_FABRIC', 'REPORT_PACKING', 'REPORT_GATE_PASSES'];
 
 // Deletes a service. Every company and user that had it loses it. Built-in modules cannot be deleted.
 async function remove(req, id) {

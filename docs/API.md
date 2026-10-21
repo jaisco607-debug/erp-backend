@@ -364,3 +364,45 @@ Full frontend guide: `docs/frontend/step7-stores.md`. `:store` is `chemical` or 
 - Per store: `/v1/stores/:store/categories`, `/brands`, `/items` (CRUD), `GET /items/:id/moves`, `GET /stock?groupBy=category|brand`.
 - Inwards: `GET /v1/stores/:store/inwards/form-data`, `GET /inwards?tab=all|gst|other|draft&dateFrom&dateTo&ipNo&dcNo&grnNo&vendor&description`,
   `POST /inwards`, `GET/PATCH/DELETE /inwards/:id`, `POST /inwards/:id/approve`, `POST /inwards/:id/unapprove` (client admin).
+
+## Reports (2026-10-20)
+Full frontend guide (screens, PDF / Excel download): `docs/frontend/reports.md`. Every report group is its own service (`REPORT_OVERVIEW`, `REPORT_GREY`, `REPORT_SO_CARDS`, `REPORT_DEPARTMENTS`, `REPORT_CHEMICAL_COST`, `REPORT_FOLDING`, `REPORT_ACTIVE_FABRIC`, `REPORT_PACKING`, `REPORT_GATE_PASSES`); VIEW is enough. `GET /v1/reports` lists only the reports the person may open. All `GET`.
+Every list report answers `{ report, title, filters, columns: [{key, label, type, total?}], rows, totals, page, limit, total }`; `totals` are over all filtered rows; `all=true` sends every row (max 20,000) for downloads. Common query: `page`, `limit` (max 500), `all`, `dateFrom`, `dateTo`, `customerId`.
+- `GET /v1/reports`: report list + filter dropdowns (departments, customers, qualities, statuses).
+- `GET /v1/reports/overview`: headline numbers of every module (`rows` + `summary`).
+- `GET /v1/reports/grey/parties` · `/grey/lots?qualityId&stock=all|in-stock|finished&search` · `/grey/returns`.
+- `GET /v1/reports/so-cards?departmentId&status&search` · `/so-cards/lots?soCardId&search` · `/so-cards/:id` (full story: `header`, `headerFields`, `tables[]`).
+- `GET /v1/reports/departments?departmentId` · `/departments/jobs?departmentId&fromDepartmentId&soCardId&status&operatorName&search` · `/departments/operators?departmentId&operatorName`.
+- `GET /v1/reports/chemical-cost?by=so-card|lot|thaan|chemical|item&departmentId&soCardId&itemId` (dates = sent by the store).
+- `GET /v1/reports/folding?by=row|party|from-department&fromDepartmentId&tab=all|open|closed&search`.
+- `GET /v1/reports/active-fabric?by=party|so-card|department|detail&departmentId` (always "now").
+- `GET /v1/reports/packing-lists?soCardId&status&gatePass=all|yes|no&search` · `/packing-lists/lines?grade=A|B|CP` · `/gate-passes?search`.
+
+## Service access (2026-10-20)
+Full frontend guide: `docs/frontend/service-access.md`.
+- **A new company gets no services.** The super admin gives every one (modules, departments, reports): `PUT /v1/companies/:id/services` `{ serviceIds }`, `PUT /v1/companies/:id/services/:serviceId` `{ enabled }`, `POST|PUT /v1/services/:id/companies` (modules are allowed now; `MODULE_SERVICE` is gone).
+- Every service has `kind` (`MODULE`, `PROCESS`, `FOLDING`, `PACKING`, `REPORT`), `menuGroup` (`PRODUCTION`, `PROCESS`, `STORE`, `REPORTS` or null; the client tab) and, on `/v1/services`, `isBuiltIn` (cannot be deleted). `POST /v1/services` and `PATCH /v1/services/:id` take `menuGroup`; `GET /v1/services?kind=REPORT`.
+- New services: `STORE_REPORTS` (the store cost reports `/v1/stores/chemical/cost/...` need it, not `CHEMICAL_STORE`) and the nine `REPORT_*`. The single `REPORTS` service is removed (holders got all nine).
+- `GET /v1/auth/me` and login: each service now has `menuGroup`. The client menu is built from it: an item shows only with its service, a tab only when one of its items shows.
+
+## Fabric return: Grey Store only (2026-10-20)
+Details: `docs/frontend/fabric-return-grey.md` section 5. A fabric return needs only the `GREY_STORE` service (it used to need `SO_CARD` too).
+- `GET /v1/grey-lots/fabric-returns?page&limit&search&customerId&dateFrom&dateTo` (VIEW): fabric returns with `stage`, `stageText`, `packingLists[]` (each with `gatePass`), `gatePassCount`.
+- `GET /v1/grey-lots/fabric-returns/:id` (VIEW) · `GET /v1/grey-lots/fabric-return/lots?customerId&search&limit` (VIEW, the lot / thaan picker) · `POST /v1/grey-lots/fabric-return` (FULL, now checks the Grey Store, not the SO card desk).
+- `GET /v1/so-cards?isGreyReturn=true|false` filter added.
+
+## Fabric return is separate from SO cards (2026-10-20)
+Details: `docs/frontend/fabric-return-grey.md` section 6. Fabric returns are hidden from the SO Card section by the backend: `GET /v1/so-cards` (normal cards unless `?isGreyReturn=true`), `GET /v1/so-cards/incoming`, `GET /v1/jobs?side=out` without `departmentId`, the SO card reports and the overview. Grey lots: `soCardMeters` excludes them; new `fabricReturnMeters`.
+
+## Fabric return numbers: FR-1, FR-2 (2026-10-20)
+Details: `docs/frontend/fabric-return-grey.md` section 7. A fabric return has its own gap-free series, so the SO card numbers stay continuous. Show `cardLabel` (`"5"` or `"FR-5"`) instead of `cardNo`, and `soLabels` instead of `soNos`. `soCard.cardLabel` is on every soCard object (jobs, Folding, Packing, packing list, gate pass, chemical screens). Report "SO #" columns have the key `cardLabel`. `GET /v1/grey-lots/fabric-return/lots` also returns `nextCardNo` and `nextCardLabel`. Searches accept `FR-3`.
+
+## Employees and client admins (2026-10-20)
+Full frontend guide: `docs/frontend/employees.md`.
+- **Client admin** (own company only): `GET /v1/users/service-options` (the company's services, `accessLevels`), `GET|POST /v1/users` (`name`, `email`, `phone?`, `password`, `services?`), `GET|PATCH /v1/users/:id` (`name`, `email`, `phone`, `isActive`), `POST /v1/users/:id/reset-password`, `PUT /v1/users/:id/services` (replaces the list; report services are always VIEW; 422 `SERVICE_NOT_IN_COMPANY`). `409 EMAIL_TAKEN` (email unique per company). Employee objects have `phone`, `serviceCount`, `services[]` (with `menuGroup`).
+- **Super admin, client admins:** `POST /v1/companies/:id/admins` (new), `PATCH /v1/companies/:id/admins/:userId` (`name`, `email`, `phone`, `isActive`), `DELETE /v1/companies/:id/admins/:userId` (new, soft delete, answers `{ deleted, id, effect }`), reset password as before. Answers carry `effect: { activeAdmins, employees, employeesBlocked }`.
+- **Super admin, read only:** `GET /v1/admin/users?page&limit&search&companyId&userType&isActive` (with `summary`) and `GET /v1/admin/users/:id` (with `services[]`; a client admin also shows `employees[]` with their services). The super admin cannot create or change employees.
+- **Lock-out rule:** an employee works only while the company is on and has an active client admin; switching off / deleting the last one locks all his employees out (login, open sessions, refresh).
+
+## Colours: Dyeing employees (2026-10-20)
+Details: `docs/frontend/colours.md`. `GET /v1/colours` (+ `/:id`) and `POST /v1/colours` are open to **Dyeing** (the only department that gives colours) as well as to the SO Card service: list = VIEW on either, create = FULL on either. `PATCH` / `DELETE` stay with SO Card FULL. Other departments still get 403. The job data (`colour`, `colours`, `items[].colour`) carries the colour to every department, so screens should not look names up in `/v1/colours`.

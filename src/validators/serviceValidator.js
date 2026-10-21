@@ -1,14 +1,17 @@
 const { Joi, uuidParam } = require('./common');
 
+const KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
+const GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS'];
+
 module.exports = {
-  // kind: one or more of MODULE, PROCESS, FOLDING, e.g. ?kind=PROCESS&kind=FOLDING (or ?kind=PROCESS,FOLDING)
+  // kind: one or more of MODULE, PROCESS, FOLDING, PACKING, REPORT, e.g. ?kind=PROCESS&kind=FOLDING (or ?kind=PROCESS,FOLDING)
   list: {
     query: Joi.object({
       isActive: Joi.boolean(),
-      kind: Joi.alternatives(Joi.array().items(Joi.string().uppercase().valid('MODULE', 'PROCESS', 'FOLDING')).single(),
+      kind: Joi.alternatives(Joi.array().items(Joi.string().uppercase().valid(...KINDS)).single(),
         Joi.string().pattern(/^[A-Za-z,]+$/).custom((v, h) => {
           const kinds = v.toUpperCase().split(',').filter(Boolean);
-          return kinds.every((k) => ['MODULE', 'PROCESS', 'FOLDING'].includes(k)) ? kinds : h.error('any.invalid');
+          return kinds.every((k) => KINDS.includes(k)) ? kinds : h.error('any.invalid');
         })),
     }),
   },
@@ -18,7 +21,8 @@ module.exports = {
       code: Joi.string().trim().uppercase().max(40).pattern(/^[A-Z][A-Z0-9_]*$/, 'service code')
         .messages({ 'string.pattern.name': 'code may only have capital letters, digits and _' }).required(),
       name: Joi.string().trim().min(2).max(120).required(),
-      kind: Joi.string().valid('MODULE', 'PROCESS', 'FOLDING').default('PROCESS'),
+      kind: Joi.string().valid(...KINDS).default('PROCESS'),
+      menuGroup: Joi.string().valid(...GROUPS).allow(null),
       tracksColour: Joi.boolean().default(true),
       sortOrder: Joi.number().integer().min(0).max(100000),
     }),
@@ -33,6 +37,7 @@ module.exports = {
       tracksColour: Joi.boolean(),
       isActive: Joi.boolean(),
       sortOrder: Joi.number().integer().min(0).max(100000),
+      menuGroup: Joi.string().valid(...GROUPS).allow(null),
     }).min(1),
   },
 };

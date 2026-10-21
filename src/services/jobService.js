@@ -17,13 +17,15 @@
 const { Op, QueryTypes } = require('sequelize');
 const { sequelize, Job, JobItem, SoCard, SoCardLot, SoCardLotThaan, GreyLotThaan, GreyLot, Customer, Quality, Colour, Service, User } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
+const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const { companyServices, userServices } = require('./accessService');
 
 const JOB = 'job_no';
 const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING', 'PACKING'];
-const round = (n) => Math.round(n * 100) / 100;
+const { round } = require('../utils/money');
 const dept = (s) => (s ? { id: s.id, code: s.code, name: s.name, tracksColour: s.tracksColour } : null);
 
 // ---------- who may do what ----------
@@ -41,14 +43,17 @@ async function accessTo(req, serviceId, transaction) {
   return g ? g.access : null;
 }
 
-async function soCardServiceId(transaction) {
-  const s = await Service.findOne({ where: { code: 'SO_CARD' }, transaction });
+async function soCardServiceId(transaction, code = 'SO_CARD') {
+  const s = await Service.findOne({ where: { code }, transaction });
   return s && s.id;
 }
 
-/** The "from" side: a department id, or null for the SO card desk. */
-async function need(req, departmentId, level, transaction) {
-  const serviceId = departmentId || (await soCardServiceId(transaction));
+/**
+ * The "from" side: a department id, or null for the SO card desk. A fabric return (owner 2026-10-20) is sent by
+ * the Grey Store, not the SO card desk: it passes desk = 'GREY_STORE' and needs FULL access to the Grey Store.
+ */
+async function need(req, departmentId, level, transaction, desk = 'SO_CARD') {
+  const serviceId = departmentId || (await soCardServiceId(transaction, desk));
   const access = await accessTo(req, serviceId, transaction);
   if (!access || (level === 'FULL' && access !== 'FULL')) {
     throw AppError.forbidden(level === 'FULL' ? 'You need FULL access to this department' : 'You do not have this department');
@@ -66,7 +71,7 @@ async function available(req, fromDepartmentId, transaction) {
   const companyId = req.user.companyId;
   if (!fromDepartmentId) {
     const rows = await sequelize.query(`
-      SELECT scl.id AS "soCardLotId", sc.id AS "soCardId", sc."cardNo", sc."idNo", sc."cardDate",
+      SELECT scl.id AS "soCardLotId", sc.id AS "soCardId", sc."cardNo", sc."idNo", sc."isGreyReturn", sc."cardDate",
              cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName",
              q.name AS "quality", gl."lotNo", gl."isReprocess",
              scl.meters - COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId"
@@ -80,7 +85,7 @@ async function available(req, fromDepartmentId, transaction) {
       ORDER BY sc."cardNo" DESC, gl."lotNo"`, { replacements: { companyId }, type: QueryTypes.SELECT, transaction });
     return rows.filter((r) => Number(r.meters) > 0).map((r) => ({
       soCardLotId: r.soCardLotId,
-      soCard: { id: r.soCardId, cardNo: r.cardNo, idNo: r.idNo, cardDate: r.cardDate },
+      soCard: { id: r.soCardId, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), idNo: r.idNo, isGreyReturn: Boolean(r.isGreyReturn), cardDate: r.cardDate },
       customer: { id: r.customerId, code: r.customerCode, name: r.customerName },
       quality: r.quality,
       lotNo: r.lotNo,
@@ -109,7 +114,7 @@ async function available(req, fromDepartmentId, transaction) {
     jobItemId: r.jobItemId,
     job: { id: r.jobId, jobNo: r.jobNo, jobDate: r.jobDate, colour: r.colour },
     colour: r.colour,
-    soCard: { id: r.soCardId, cardNo: r.cardNo, idNo: r.idNo, isGreyReturn: r.isGreyReturn },
+    soCard: { id: r.soCardId, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), idNo: r.idNo, isGreyReturn: r.isGreyReturn },
     customer: { id: r.customerId, code: r.customerCode, name: r.customerName },
     quality: r.quality,
     lotNo: r.lotNo,
@@ -178,7 +183,7 @@ function itemJSON(i) {
   const lot = i.soCardLot?.greyLot;
   return {
     id: i.id,
-    soCard: { id: i.soCard.id, cardNo: i.soCard.cardNo, idNo: i.soCard.idNo, isGreyReturn: Boolean(i.soCard.isGreyReturn) },
+    soCard: { id: i.soCard.id, cardNo: i.soCard.cardNo, cardLabel: soLabel(i.soCard.cardNo, i.soCard.isGreyReturn), idNo: i.soCard.idNo, isGreyReturn: Boolean(i.soCard.isGreyReturn) },
     customer: { id: i.soCard.customer.id, code: i.soCard.customer.code, name: i.soCard.customer.name },
     quality: i.soCard.quality?.name || lot?.quality?.name || null,
     lotNo: lot?.lotNo,
@@ -194,7 +199,7 @@ function itemJSON(i) {
 
 const REJECTABLE = ['IN_WAY', 'QUEUE', 'PENDING'];
 // departments that give the cloth its colour (owner: Dyeing)
-const COLOUR_DEPARTMENTS = ['DYEING'];
+const COLOUR_DEPARTMENTS = require('../utils/colourDepartments');
 function sentTextOf(j) {
   if (j.status === 'REJECTED') return `Rejected by ${j.department.name}`;
   if (j.status === 'IN_WAY') return `In-Way to ${j.department.name}`;
@@ -208,6 +213,9 @@ function jobColour(j, items) {
   if (!names.length && j.colour) return { id: j.colour.id, name: j.colour.name };
   return null;
 }
+
+/** The distinct SO cards of a job's items, ordered by number. */
+const soCardsOf = (items) => [...new Map(items.map((i) => [i.soCard.id, i.soCard])).values()].sort((x, y) => Number(x.isGreyReturn) - Number(y.isGreyReturn) || x.cardNo - y.cardNo);
 
 function json(j) {
   const items = (j.items || []).map(itemJSON);
@@ -268,7 +276,10 @@ function json(j) {
     isGreyReturn: items.some((i) => i.soCard.isGreyReturn),
     totalMeters: j.totalMeters,
     thaanCount: items.reduce((t, i) => t + i.thaans.length, 0),
-    soNos: uniq(items.map((i) => i.soCard.cardNo)),
+    // the SO cards of the job, smallest number first (a job holds only one kind: SO cards or a fabric return)
+    soNos: soCardsOf(items).map((c) => c.cardNo),
+    // what to show: "5" for an SO card, "FR-5" for a fabric return (the numbers of the two series can be the same)
+    soLabels: soCardsOf(items).map((c) => c.cardLabel),
     customers: uniq(items.map((i) => `${i.customer.name} (${i.customer.code})`)),
     qualities: uniq(items.map((i) => i.quality).filter(Boolean)),
     // chemical columns are filled in the list (chemicalCount, chemicalAmount, costPerMeter ...)
@@ -320,9 +331,9 @@ async function previousCosts(itemIds) {
   const up = await sequelize.query(`
     WITH RECURSIVE up AS (
       SELECT ji.id AS start, ji."sourceJobItemId" AS anc FROM job_items ji WHERE ji.id = ANY($1::uuid[]) AND ji."sourceJobItemId" IS NOT NULL
-      UNION ALL
+      UNION -- UNION (not ALL): a repeated row ends the walk, so a damaged chain can never loop forever
       SELECT up.start, p."sourceJobItemId" FROM up JOIN job_items p ON p.id = up.anc WHERE p."sourceJobItemId" IS NOT NULL)
-    SELECT up.start, a.id, a."jobId", a."soCardId", a.meters::float AS meters FROM up JOIN job_items a ON a.id = up.anc`,
+    SELECT up.start, a.id, a."jobId", a."soCardId", a.meters::float AS meters, s.meters::float AS "startMeters" FROM up JOIN job_items a ON a.id = up.anc JOIN job_items s ON s.id = up.start`,
   { bind: [itemIds], type: QueryTypes.SELECT });
   if (!up.length) return out;
   const jobIds = [...new Set(up.map((a) => a.jobId))];
@@ -333,7 +344,9 @@ async function previousCosts(itemIds) {
     const total = meters(a.jobId);
     const cardM = meters(a.jobId, a.soCardId);
     const cardCost = chemicalCols(chem.get(a.jobId), cardM, { id: a.soCardId, share: total ? cardM / total : 0 }).chemicalAmount;
-    out.set(a.start, out.get(a.start) + (cardM ? cardCost * (a.meters / cardM) : 0));
+    // an earlier item that was split (Folding sends in parts) passes on its cost in proportion: each part only carries its own share
+    const part = a.meters > 0 ? Math.min(1, a.startMeters / a.meters) : 1;
+    out.set(a.start, out.get(a.start) + (cardM ? cardCost * (a.meters / cardM) * part : 0));
   }
   return out;
 }
@@ -345,7 +358,7 @@ async function firstJobs(itemIds) {
   const rows = await sequelize.query(`
     WITH RECURSIVE up AS (
       SELECT ji.id AS start, ji.id AS cur, ji."sourceJobItemId" AS src, ji."jobId" FROM job_items ji WHERE ji.id = ANY($1::uuid[])
-      UNION ALL
+      UNION -- UNION (not ALL): a repeated row ends the walk, so a damaged chain can never loop forever
       SELECT up.start, p.id, p."sourceJobItemId", p."jobId" FROM up JOIN job_items p ON p.id = up.src)
     SELECT up.start, j."jobNo" FROM up JOIN jobs j ON j.id = up."jobId" WHERE up.src IS NULL`,
   { bind: [itemIds], type: QueryTypes.SELECT });
@@ -363,7 +376,7 @@ async function trailsOf(jobs) {
   const rows = await sequelize.query(`
     WITH RECURSIVE up AS (
       SELECT ji."jobId" AS start, ji."sourceJobItemId" AS anc, 1 AS depth FROM job_items ji WHERE ji."jobId" = ANY($1::uuid[]) AND ji."sourceJobItemId" IS NOT NULL
-      UNION ALL
+      UNION -- UNION (not ALL): a repeated row ends the walk, so a damaged chain can never loop forever
       SELECT up.start, p."sourceJobItemId", up.depth + 1 FROM up JOIN job_items p ON p.id = up.anc WHERE p."sourceJobItemId" IS NOT NULL)
     SELECT up.start, j.id, j."jobNo", s.name AS department, j."operatorName", j."processDate", j."createdAt" AS "sentAt", MIN(up.depth) AS depth
     FROM up JOIN job_items a ON a.id = up.anc JOIN jobs j ON j.id = a."jobId" JOIN services s ON s.id = j."departmentId"
@@ -432,11 +445,11 @@ function chemicalCols(c, meters, card) {
     reqs.add(l.requestId);
     if (l.qty * f > 0) items.add(l.itemId);
   }
-  amount = Math.round(amount * 100) / 100;
+  amount = round(amount);
   return {
     chemicalCount: items.size,
     chemicalAmount: amount,
-    costPerMeter: meters ? Math.round((amount / meters) * 10000) / 10000 : 0,
+    costPerMeter: meters ? round(amount / meters, 4) : 0,
     chemicalRequests: reqs.size,
     // requests still waiting at the store (Pending / Accepted), not in the cost yet
     pendingChemicalRequests: c.pending,
@@ -476,12 +489,16 @@ async function list(req, q) {
       AND NOT EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j3.id AND (a."sourceJobItemId" IS NULL OR NOT EXISTS (
         SELECT 1 FROM job_items o JOIN jobs oj ON oj.id = o."jobId" WHERE o."sourceJobItemId" = a."sourceJobItemId" AND o.id <> a.id AND oj.status <> 'REJECTED'))))`);
   const and = [];
+  // the SO card desk's sent list: a fabric return is sent by the Grey Store, not by the SO card desk
+  if (q.side === 'out' && !dep) and.push({ id: { [Op.notIn]: sequelize.literal('(SELECT ji."jobId" FROM job_items ji JOIN so_cards sc ON sc.id = ji."soCardId" WHERE sc."isGreyReturn")') } });
   if (q.side === 'in' && (q.show || 'active') === 'active') and.push({ id: { [Op.notIn]: allSent(dep) } });
   if (q.side === 'in' && q.show === 'sent') and.push({ id: { [Op.in]: allSent(dep) } });
   if (and.length) where[Op.and] = and;
-  if (q.search && /^\d+$/.test(q.search)) {
-    const n = Number(q.search);
-    where[Op.or] = [{ jobNo: n }, { id: { [Op.in]: sequelize.literal(`(SELECT ji."jobId" FROM job_items ji JOIN so_cards sc ON sc.id = ji."soCardId" WHERE sc."companyId" = '${req.user.companyId}' AND sc."cardNo" = ${n})`) } }];
+  // "5" finds Job# 5 and SO# 5 (and FR-5); "FR-5" finds only the fabric return
+  const cardSearch = q.search ? parseCardSearch(q.search) : null;
+  if (cardSearch) {
+    const n = cardSearch.n;
+    where[Op.or] = [...(cardSearch.grey ? [] : [{ jobNo: n }]), { id: { [Op.in]: sequelize.literal(`(SELECT ji."jobId" FROM job_items ji JOIN so_cards sc ON sc.id = ji."soCardId" WHERE sc."companyId" = '${req.user.companyId}' AND sc."cardNo" = ${n}${cardSearch.grey ? ' AND sc."isGreyReturn"' : ''})`) } }];
   }
   const { rows, count } = await Job.findAndCountAll({ where, order: [['jobNo', 'DESC']], limit: q.limit, offset: (q.page - 1) * q.limit });
   const full = rows.length ? await Job.findAll({ where: { id: rows.map((r) => r.id) }, include, order: [['jobNo', 'DESC']] }) : [];
@@ -494,7 +511,7 @@ async function list(req, q) {
   const withTotals = (row, meters) => ({
     ...row,
     totalChemicalAmount: round(row.previousChemicalAmount + row.chemicalAmount),
-    totalCostPerMeter: meters ? Math.round(((row.previousChemicalAmount + row.chemicalAmount) / meters) * 10000) / 10000 : 0,
+    totalCostPerMeter: meters ? round((row.previousChemicalAmount + row.chemicalAmount) / meters, 4) : 0,
   });
   const jobs = full.map((j) => {
     const x = json(j);
@@ -533,7 +550,7 @@ async function list(req, q) {
         status: j.status, statusText: j.statusText, sentText: j.sentText, canReject: j.canReject, canUndoReject: j.canUndoReject, isRejected: j.isRejected, rejectReason: j.rejectReason, rejectedAt: j.rejectedAt, rejectedBy: j.rejectedBy,
         department: j.department, fromDepartment: j.fromDepartment,
         toDepartment: j.toDepartment, toDepartmentName: j.toDepartmentName, fromDepartmentName: j.fromDepartmentName,
-        sentThrough: j.sentThrough, sentAt: j.sentAt, instructions: j.instructions, operatorName: j.operatorName, processDate: j.processDate, canEditOperator: j.canEditOperator, soNos: j.soNos,
+        sentThrough: j.sentThrough, sentAt: j.sentAt, instructions: j.instructions, operatorName: j.operatorName, processDate: j.processDate, canEditOperator: j.canEditOperator, soNos: j.soNos, soLabels: j.soLabels,
         fromOperatorName: j.fromOperatorName, fromProcessDate: j.fromProcessDate, trail: j.trail,
         canReceive: j.canReceive, canAccept: j.canAccept, receivedBy: j.receivedBy, receivedAt: j.receivedAt, acceptedBy: j.acceptedBy, acceptedAt: j.acceptedAt,
       }, r.meters));
@@ -561,8 +578,15 @@ async function soCardHistory(req, soCardId) {
   if (!card) throw AppError.notFound('SO card');
   const ids = (await JobItem.findAll({ where: { soCardId }, attributes: ['jobId'] })).map((i) => i.jobId);
   const jobs = ids.length ? await Job.findAll({ where: { id: ids }, include, order: [['createdAt', 'ASC']] }) : [];
+  // an employee sees the road of a card only when their own department (or the SO card desk / Grey Store) had the card
+  if (req.user.userType !== 'CLIENT_ADMIN') {
+    const mine = new Set((await userServices(req.user)).map((g) => g.service.id));
+    const desks = await Service.findAll({ where: { code: ['SO_CARD', 'GREY_STORE'] }, attributes: ['id'] });
+    const ok = desks.some((d) => mine.has(d.id)) || jobs.some((j) => mine.has(j.departmentId) || (j.fromDepartmentId && mine.has(j.fromDepartmentId)));
+    if (!ok) throw AppError.forbidden('Your department never had this SO card');
+  }
   return {
-    soCard: { id: card.id, cardNo: card.cardNo, idNo: card.idNo },
+    soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn), idNo: card.idNo },
     jobs: jobs.map(json).map((j) => ({ ...j, items: j.items.filter((i) => i.soCard.id === soCardId) })),
   };
 }
@@ -574,12 +598,12 @@ async function soCardHistory(req, soCardId) {
  * items: [{ soCardLotId, meters? }] from the SO card desk (meters default to all that is left)
  *        [{ jobItemId }]            from a department (the whole row goes)
  */
-async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, sentThrough, remarks, instructions, items, partial }, outerTransaction) {
+async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, sentThrough, remarks, instructions, items, partial, desk }, outerTransaction) {
   const run = (fn) => (outerTransaction ? fn(outerTransaction) : sequelize.transaction(fn));
   return run(async (transaction) => {
     const companyId = req.user.companyId;
     fromDepartmentId = fromDepartmentId || null;
-    await need(req, fromDepartmentId, 'FULL', transaction);
+    await need(req, fromDepartmentId, 'FULL', transaction, desk);
     const to = (await departments(req, transaction)).find((d) => d.id === departmentId);
     if (!to) throw AppError.rule('UNKNOWN_DEPARTMENT', 'Your company does not have this department');
     if (fromDepartmentId === departmentId) throw AppError.rule('SAME_DEPARTMENT', 'Cloth cannot be sent to the same department');
@@ -604,7 +628,7 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
         const r = left.get(i.soCardLotId);
         if (!r) throw AppError.rule('NOTHING_LEFT', 'This SO card row has nothing left to send', { soCardLotId: i.soCardLotId });
         const meters = i.meters === undefined ? r.meters : i.meters;
-        if (meters > r.meters) throw AppError.rule('NOT_ENOUGH_METERS', `SO# ${r.soCard.cardNo} lot ${r.lotNo} has only ${r.meters} m left to send`, { soCardLotId: i.soCardLotId, meters: r.meters });
+        if (meters > r.meters) throw AppError.rule('NOT_ENOUGH_METERS', `SO# ${r.soCard.cardLabel} lot ${r.lotNo} has only ${r.meters} m left to send`, { soCardLotId: i.soCardLotId, meters: r.meters });
         lines.push({ soCardId: r.soCard.id, soCardLotId: i.soCardLotId, meters, isReprocess: r.isReprocess });
       }
     } else if (partial) {
@@ -624,7 +648,7 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
         const r = left.get(i.jobItemId);
         if (!r) throw AppError.rule('NOTHING_LEFT', 'This row is not complete in your department or was already sent', { jobItemId: i.jobItemId });
         // fabric return grey was not processed: it only goes on to Packing (owner 2026-10-19)
-        if (r.soCard.isGreyReturn && to.kind !== 'PACKING') throw AppError.rule('GREY_RETURN_ONLY_PACKING', `SO# ${r.soCard.cardNo} is a fabric return (not processed); it can only go to Packing`, { soCardId: r.soCard.id });
+        if (r.soCard.isGreyReturn && to.kind !== 'PACKING') throw AppError.rule('GREY_RETURN_ONLY_PACKING', `${r.soCard.cardLabel} is a fabric return (not processed); it can only go to Packing`, { soCardId: r.soCard.id });
         const src = await JobItem.findByPk(i.jobItemId, { transaction });
         // owner 2026-10-19: the sending job must have its operator and process date
         const sj = await Job.findByPk(src.jobId, { attributes: ['jobNo', 'operatorName', 'processDate'], transaction });
@@ -633,11 +657,16 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
       }
     }
 
+    // a typed job date cannot be before the SO card it is cut from
+    if (jobDate) {
+      const [early] = await sequelize.query('SELECT "cardNo", "cardDate" FROM so_cards WHERE id IN (:ids) AND "cardDate" > :d LIMIT 1', { replacements: { ids: [...new Set(lines.map((l) => l.soCardId))], d: jobDate }, type: QueryTypes.SELECT, transaction });
+      if (early) throw AppError.rule('JOB_BEFORE_CARD', `SO card ${early.cardNo} is dated ${String(early.cardDate).slice(0, 10)}: the job cannot be dated before that`);
+    }
     const jobNo = await counters.take(companyId, JOB, async () => ((await Job.max('jobNo', { where: { companyId }, transaction })) || 0) + 1, transaction);
     const job = await Job.create({
       companyId,
       jobNo,
-      jobDate: jobDate || new Date().toISOString().slice(0, 10),
+      jobDate: jobDate || today(),
       departmentId,
       fromDepartmentId,
       colourId: colourId || null,
@@ -692,6 +721,8 @@ async function setStatus(req, id, status, reason) {
     if (status === 'REJECTED' && !job.fromDepartmentId) throw AppError.rule('REJECT_NOT_ALLOWED', 'Cloth that came from an SO card cannot be rejected');
     if (status === 'REJECTED' && job.rejectAnswer === 'DISPUTED') throw AppError.rule('REJECT_DISPUTED', 'The sender did not accept your earlier rejection; this cloth cannot be rejected again');
     if (status === 'REJECTED' && !REJECTABLE.includes(job.status)) throw AppError.rule('CANNOT_REJECT', 'Cloth already in processing cannot be rejected');
+    // processed cloth (chemicals were asked for on this job) cannot be sent back: its chemical cost would drop out of the cloth's trail
+    if (status === 'REJECTED' && (await sequelize.query('SELECT 1 FROM chemical_requests WHERE "jobId" = :id LIMIT 1', { replacements: { id }, type: QueryTypes.SELECT, transaction })).length) throw AppError.rule('CANNOT_REJECT', 'Chemicals were already requested for this job, so it cannot be rejected');
     if (status === 'IN_WAY') throw AppError.rule('BAD_STATUS', 'In-Way is set only when cloth is sent');
     if ((await Service.findByPk(job.departmentId, { attributes: ['kind'], transaction })).kind === 'PACKING' && !['QUEUE', 'PENDING'].includes(status)) throw AppError.rule('PACKING_ACCEPT_ONLY', 'Packing only receives and accepts cloth');
     if (status === 'QUEUE' && job.status !== 'IN_WAY' && job.status !== 'REJECTED') throw AppError.rule('BAD_STATUS', 'This cloth is already received');
@@ -801,7 +832,7 @@ async function setColour(req, id, { colourId, soCardId }) {
     await sequelize.query(`
       WITH RECURSIVE down AS (
         SELECT id FROM job_items WHERE id = ANY($1::uuid[])
-        UNION ALL SELECT c.id FROM job_items c JOIN down ON c."sourceJobItemId" = down.id)
+        UNION SELECT c.id FROM job_items c JOIN down ON c."sourceJobItemId" = down.id)
       UPDATE job_items SET "colourId" = $2, "colourSetById" = $3, "colourSetAt" = now() WHERE id IN (SELECT id FROM down)`,
     { bind: [items.map((i) => i.id), colourId || null, req.user.id], transaction });
     if (!soCardId) {

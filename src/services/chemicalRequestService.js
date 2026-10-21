@@ -14,7 +14,9 @@ const {
   Job, JobItem, SoCard, Customer, Service, User,
 } = require('../models');
 const AppError = require('../utils/AppError');
+const { today, dayStart, dayEnd } = require('../utils/dates');
 const audit = require('./auditService');
+const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const counters = require('./counterService');
 const { companyServices, userServices } = require('./accessService');
 const m = require('./storeMasterService');
@@ -90,8 +92,9 @@ function json(r) {
     department: dept(r.department),
     job: r.job ? { id: r.job.id, jobNo: r.job.jobNo, status: r.job.status } : null,
     soNos: [...cards.values()].map((c) => c.cardNo).sort((a, b) => a - b),
+    soLabels: [...cards.values()].sort((a, b) => a.cardNo - b.cardNo).map((c) => soLabel(c.cardNo, c.isGreyReturn)),
     customers: [...new Set([...cards.values()].map((c) => (c.customer ? c.customer.name : null)).filter(Boolean))],
-    soCard: r.soCard ? { id: r.soCard.id, cardNo: r.soCard.cardNo } : null,
+    soCard: r.soCard ? { id: r.soCard.id, cardNo: r.soCard.cardNo, cardLabel: soLabel(r.soCard.cardNo, r.soCard.isGreyReturn) } : null,
     notes: r.notes,
     rejectReason: r.rejectReason,
     sentThrough: r.sentThrough,
@@ -205,7 +208,7 @@ const tabWhere = (tabs, tab) => (tab && tab !== 'all' ? { status: tabs[tab] } : 
 async function listWhere(req, q, base, tabs) {
   const where = { companyId: req.user.companyId, ...base, ...tabWhere(tabs, q.tab) };
   if (q.reqNo) where.reqNo = q.reqNo;
-  if (q.dateFrom || q.dateTo) where.requestedAt = { ...(q.dateFrom && { [Op.gte]: `${q.dateFrom}T00:00:00Z` }), ...(q.dateTo && { [Op.lte]: `${q.dateTo}T23:59:59Z` }) };
+  if (q.dateFrom || q.dateTo) where.requestedAt = { ...(q.dateFrom && { [Op.gte]: dayStart(q.dateFrom) }), ...(q.dateTo && { [Op.lte]: dayEnd(q.dateTo) }) };
   const and = [];
   if (q.jobNo) and.push({ jobId: { [Op.in]: sequelize.literal(`(SELECT id FROM jobs WHERE "companyId" = ${sequelize.escape(req.user.companyId)} AND "jobNo" = ${Number(q.jobNo)})`) } });
   if (q.soNo) {
@@ -253,7 +256,7 @@ async function formData(req, code) {
     jobs: jobs.map((j) => {
       const cards = new Map();
       for (const i of j.items) {
-        const c = cards.get(i.soCard.id) || { id: i.soCard.id, cardNo: i.soCard.cardNo, customer: i.soCard.customer ? i.soCard.customer.name : null, meters: 0 };
+        const c = cards.get(i.soCard.id) || { id: i.soCard.id, cardNo: i.soCard.cardNo, cardLabel: soLabel(i.soCard.cardNo, i.soCard.isGreyReturn), customer: i.soCard.customer ? i.soCard.customer.name : null, meters: 0 };
         c.meters = m.round(c.meters + i.meters, 2);
         cards.set(c.id, c);
       }
@@ -403,6 +406,7 @@ async function send(req, id, { lines = [], sentThrough }) {
     const change = new Map(lines.map((l) => [l.lineId, l]));
     for (const lid of change.keys()) if (!rows.some((l) => l.id === lid)) throw AppError.rule('UNKNOWN_LINE', 'A line is not in this request');
     const short = [];
+    const over = [];
     let total = 0;
     const parts = new Map();
     for (const l of rows) {
@@ -411,6 +415,8 @@ async function send(req, id, { lines = [], sentThrough }) {
       // the store picks batches (qty = their sum), or gives the qty from the oldest batches first
       const picks = c && c.batches && c.batches.length ? c.batches.map((b) => ({ batchId: b.batchId, qty: lineQty(b, item.unit) })) : null;
       const qty = picks ? m.round(picks.reduce((t, p) => t + p.qty, 0), 3) : (c && (c.qty !== undefined || c.qtyMain !== undefined || c.qtySub !== undefined) ? lineQty(c, item.unit) : l.qty);
+      // the store may send less, never more than the department asked for (the job pays for what is sent)
+      if (qty > l.qty + 0.0005) over.push({ lineId: l.id, item: item.name, asked: m.splitQty(l.qty, item.unit).text, sending: m.splitQty(qty, item.unit).text });
       if (qty > item.stockQty + 1e-9) { short.push({ item: item.name, stock: m.splitQty(item.stockQty, item.unit).text, asked: m.splitQty(qty, item.unit).text }); continue; }
       let value = 0;
       if (qty > 0) {
@@ -424,10 +430,11 @@ async function send(req, id, { lines = [], sentThrough }) {
       Object.assign(l, { sentQty: qty, rate, value });
       total = m.round(total + value, 2);
       if (qty > 0) {
-        await StoreMove.create({ companyId, store: 'CHEMICAL', itemId: item.id, moveDate: new Date().toISOString().slice(0, 10), kind: 'ISSUE', qty: -qty, value: -value, departmentId: r.departmentId, requestId: id, createdById: req.user.id }, { transaction });
+        await StoreMove.create({ companyId, store: 'CHEMICAL', itemId: item.id, moveDate: today(), kind: 'ISSUE', qty: -qty, value: -value, departmentId: r.departmentId, requestId: id, createdById: req.user.id }, { transaction });
       }
     }
     if (short.length) throw AppError.rule('NOT_ENOUGH_STOCK', `Not enough ${short[0].item}: ${short[0].stock} in stock, ${short[0].asked} asked`, { lines: short });
+    if (over.length) throw AppError.rule('MORE_THAN_REQUESTED', `${over[0].item}: ${over[0].sending} is more than the ${over[0].asked} asked for`, { lines: over });
     if (!rows.some((l) => l.sentQty > 0)) throw AppError.rule('NOTHING_TO_SEND', 'Send at least one chemical');
     for (const l of rows) await l.save({ transaction });
     for (const [lineId, got] of parts) await batches.recordIssue(transaction, { companyId, requestId: id, requestLineId: lineId, itemId: rows.find((l) => l.id === lineId).itemId }, got);
@@ -589,7 +596,7 @@ async function soCardCost(req, soCardId, departmentId) {
   const mine = await JobItem.findAll({ where: { soCardId: card.id }, attributes: ['jobId'], include: departmentId ? [{ model: Job, as: 'job', attributes: [], where: { departmentId } }] : [] });
   const jobIds = [...new Set(mine.map((i) => i.jobId))];
   if (departmentId && !jobIds.length) throw AppError.notFound('SO card');
-  if (!jobIds.length) return { soCard: { id: card.id, cardNo: card.cardNo }, totalValue: 0, chemicals: [], byJob: [] };
+  if (!jobIds.length) return { soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn) }, totalValue: 0, chemicals: [], byJob: [] };
   const all = await JobItem.findAll({ where: { jobId: jobIds } });
   const share = {};
   for (const jid of jobIds) {
@@ -614,7 +621,7 @@ async function soCardCost(req, soCardId, departmentId) {
   }
   const chemicals = chemicalTotals(lines);
   return {
-    soCard: { id: card.id, cardNo: card.cardNo },
+    soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn) },
     totalValue: m.round(chemicals.reduce((t, c) => t + c.value, 0), 2),
     chemicals,
     byJob: Object.values(byJob),
@@ -628,7 +635,7 @@ async function soCardCost(req, soCardId, departmentId) {
 async function costReport(req, q) {
   const where = { companyId: req.user.companyId, status: ['IN_WAY', 'DELIVERED'] };
   if (q.departmentId) where.departmentId = q.departmentId;
-  if (q.dateFrom || q.dateTo) where.sentAt = { ...(q.dateFrom && { [Op.gte]: `${q.dateFrom}T00:00:00Z` }), ...(q.dateTo && { [Op.lte]: `${q.dateTo}T23:59:59Z` }) };
+  if (q.dateFrom || q.dateTo) where.sentAt = { ...(q.dateFrom && { [Op.gte]: dayStart(q.dateFrom) }), ...(q.dateTo && { [Op.lte]: dayEnd(q.dateTo) }) };
   const reqs = await ChemicalRequest.findAll({
     where,
     include: [
@@ -670,7 +677,7 @@ async function costReport(req, q) {
         if (q.customerId && card.customerId !== q.customerId) continue;
         const f = r.soCardId ? 1 : (total ? meters / total : 0);
         add(card.id, () => ({
-          soCard: { id: card.id, cardNo: card.cardNo, cardDate: card.cardDate },
+          soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn), cardDate: card.cardDate },
           customer: card.customer ? { id: card.customer.id, name: card.customer.name } : null,
         }), net(r) * f, r);
       }

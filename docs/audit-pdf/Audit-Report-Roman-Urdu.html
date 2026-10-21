@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ERP Backend Audit Report (Roman Urdu)</title>
+<style>
+@page{size:A4;margin:16mm}
+body{font-family:Segoe UI,Arial,sans-serif;color:#1c2430;line-height:1.45;font-size:10.5pt}
+h1{font-size:22pt;margin:0;color:#12355b}h2{font-size:14pt;color:#12355b;border-bottom:2px solid #dbe4ee;padding-bottom:3px;margin-top:20px}h3{font-size:11.5pt;margin:12px 0 4px}
+.sub{color:#5a6675;margin-bottom:10px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #cfd8e3;padding:4px 6px;text-align:left;vertical-align:top;font-size:9.5pt}th{background:#e8eef6}
+.box{background:#eef5fc;border-left:5px solid #2f7dc4;padding:8px 12px;margin:10px 0}.tag{display:inline-block;padding:0 7px;border-radius:8px;font-size:8.5pt;color:#fff}.h{background:#c0392b}.m{background:#e29a1b}.l{background:#6b7b8c}.f{background:#2e9b57}
+code{background:#f1f4f8;padding:0 3px;font-size:9pt}
+</style></head><body>
+<h1>Textile ERP Backend: Audit Report</h1>
+<div class="sub">Tareekh: 21 Oct 2026 &nbsp;|&nbsp; Scope: poora backend code, database design, aur live (Supabase) database (sirf parha) &nbsp;|&nbsp; Zubaan: Roman Urdu</div>
+
+<h2>1. Natija ek nazar mein</h2>
+<div class="box">Core costing theek hai. Lagbhag 1,900 random operations ke baad bhi stock aur paisa ek paisa idhar-udhar nahi hua. Audit mein 17 masle mile (AUD-01 se AUD-17) aur 6 database/config notes. <b>AUD-04 ke siwa sab theek kar diye gaye</b> aur har ek ka test ab pass hota hai.</div>
+<table>
+<tr><th>Sawal</th><th>Jawab</th></tr>
+<tr><td>Costing kharab to nahi?</td><td>Core (khareed, average rate, batch issue, return, adjustment, rework) theek. Teen calculation masle mile (AUD-01, 02, 13), teeno fix.</td></tr>
+<tr><td>Kapre ka hisaab?</td><td>Har meter grey store se gate pass tak gina jata hai. Kapra na banta hai na gum hota hai.</td></tr>
+<tr><td>Loopholes?</td><td>Processed job reject, packing mein zyada meters, gate pass ke baad delete. Sab band kiye.</td></tr>
+<tr><td>Security?</td><td>Company isolation: 3,300+ hamle, sab refuse. Tokens, roles, VIEW-only theek.</td></tr>
+<tr><td>Crash (500)?</td><td>3 qism (ghalat tareekh, purana accept, bade numbers). Fix.</td></tr>
+<tr><td>Live database?</td><td>37 accounting rules mein se 37 theek.</td></tr>
+<tr><td>Speed?</td><td>1,000 lots/cards/jobs par har screen 0.5 s se kam, N+1 nahi.</td></tr>
+</table>
+
+<h2>2. Tareeqa</h2>
+<ul>
+<li><b>37 invariants</b> (SQL rules): jaise "item ka stock = batches ka jor", "lot outward = SO cards + wapas", "packing list = Folding ka bheja hua". Har test ke baad aur live DB par chalaye.</li>
+<li><b>Shadow model:</b> random operations ko alag FIFO model se muqabla (12 seeds x 160 qadam).</li>
+<li><b>Scenarios:</b> costing 12, kapra 21, mushkil flows 3, concurrency 12, reports ka mel 5, security 8 (1,803 GET/DELETE calls + 60+ valid hamle), kharab input (8,986 calls), super admin (1,485 calls), audit log (54 calls), time zone, extremes, Urdu/emoji, speed.</li>
+<li><b>Total:</b> 36 suites, 182 tests: 181 pass, 1 skip (speed), 0 fail. Aik <code>test.failing</code> baqi (AUD-04).</li>
+</ul>
+
+<h2>3. Masle aur unki halat</h2>
+<h3>HIGH</h3>
+<table>
+<tr><th>ID</th><th>Masla</th><th>Asar</th><th>Fix</th></tr>
+<tr><td>AUD-05</td><td>Packing list line ki meters par koi hadd nahi (100 m thaan par 5000 m).</td><td>Invoice par mojood na kapra aur ghalat amount.</td><td><span class="tag f">Fixed</span> line &lt;= Folding ka bheja (thaan + grade, saari lists mila kar)</td></tr>
+<tr><td>AUD-06</td><td>Gate pass ke baad list reopen + delete; gate pass bhi cascade se mit jata.</td><td>Dispatch ka record ghayab.</td><td><span class="tag f">Fixed</span> <code>HAS_GATE_PASS</code></td></tr>
+<tr><td>AUD-03</td><td>COMPLETE -> PENDING -> REJECTED; chemical lag chuke the.</td><td>Cloth ke cost-raaste mein Rs 0, store mein Rs 1000.</td><td><span class="tag f">Fixed</span> chemical request wala job reject nahi</td></tr>
+<tr><td>AUD-01</td><td>Folding kapra 2 hisson mein bheje to Packing screens par cost doguna (Rs 2000 vs 1000).</td><td>Sirf Packing ke cost columns ghalat.</td><td><span class="tag f">Fixed</span> <code>previousCosts</code> meters ke hisse se</td></tr>
+<tr><td>AUD-12</td><td>SO card status/department/deliveryText pehle department par atka.</td><td>Ghalat location; report ka "Last sent to".</td><td><span class="tag f">Fixed</span> position jobs se</td></tr>
+</table>
+<h3>MEDIUM</h3>
+<table>
+<tr><th>ID</th><th>Masla</th><th>Fix</th></tr>
+<tr><td>AUD-04</td><td>Folding grading par koi hadd nahi (200 m aya, 5000 m grade).</td><td><span class="tag m">Open</span> business faisla (gain/loss tolerance) baqi</td></tr>
+<tr><td>AUD-07</td><td>Ghalat tareekh (2026-02-30) par 500, body aur ~25 filters.</td><td><span class="tag f">Fixed</span> asli date check, 400</td></tr>
+<tr><td>AUD-08</td><td>Thaan wali lot plain total se edit ho jati thi.</td><td><span class="tag f">Fixed</span> <code>LOT_HAS_THAANS</code></td></tr>
+<tr><td>AUD-09</td><td>Employee kisi bhi SO card ka raasta dekh sakta tha.</td><td><span class="tag f">Fixed</span> department check, 403</td></tr>
+<tr><td>AUD-11</td><td>Purana <code>/so-cards/:id/accept</code> 500.</td><td><span class="tag f">Fixed</span> 422 <code>ACCEPT_ON_JOB</code></td></tr>
+<tr><td>AUD-13</td><td>Packing total aur lines ka jor 2 paisa alag (48.35 vs 48.37).</td><td><span class="tag f">Fixed</span> total = lines ka jor</td></tr>
+<tr><td>AUD-14</td><td>Default tareekh/day filters UTC, Pakistan nahi (11 jagah).</td><td><span class="tag f">Fixed</span> Asia/Karachi</td></tr>
+<tr><td>AUD-15</td><td>Store request se zyada chemical bhej sakta tha.</td><td><span class="tag f">Fixed</span> <code>MORE_THAN_REQUESTED</code></td></tr>
+</table>
+<h3>LOW aur database/config</h3>
+<table>
+<tr><th>ID</th><th>Masla</th><th>Fix</th></tr>
+<tr><td>AUD-02</td><td>Half-paisa rounding neeche (har ~1,470 lines mein 1 paisa kam).</td><td><span class="tag f">Fixed</span> <code>src/utils/money.js</code></td></tr>
+<tr><td>AUD-16</td><td>qty x rate bohot bada: 500.</td><td><span class="tag f">Fixed</span> 400 <code>NUMBER_TOO_BIG</code></td></tr>
+<tr><td>AUD-17</td><td>Tareekh ki sanity nahi (card lot se pehle).</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>AUD-18</td><td>81 foreign keys par index nahi.</td><td><span class="tag f">Fixed</span> migration <code>20261021000001</code></td></tr>
+<tr><td>AUD-19</td><td>39 numeric columns par CHECK nahi.</td><td><span class="tag f">Fixed</span> 25 columns, <code>CHECK &gt;= 0 NOT VALID</code></td></tr>
+<tr><td>AUD-20</td><td>Folding list/send-form poora data uthate hain.</td><td><span class="tag l">Not changed</span> 1,000 jobs tak theek</td></tr>
+<tr><td>AUD-21</td><td>Dev <code>.env</code>: chhote JWT secrets, 1 minute lock, <code>trust proxy</code>.</td><td><span class="tag l">Not changed</span> deployment setting</td></tr>
+<tr><td>AUD-22</td><td>Purana data (11 jobs bina received stamp, ~25 bina operator, 2 purani packing lists).</td><td><span class="tag l">Not changed</span> nuqsan nahi</td></tr>
+<tr><td>AUD-23</td><td>Recursive queries mein cycle guard nahi; <code>for(;;)</code> code generator.</td><td><span class="tag f">Fixed</span> <code>UNION</code>, 50 koshish</td></tr>
+</table>
+
+<h2>4. Jo cheezein theek nikli</h2>
+<ul>
+<li>Stock/value hamesha batches ke jor ke barabar; negative kabhi nahi; ledger match.</li>
+<li>Average rate aur batch costing: 20 kg @40 + 100 kg @45, 30 kg issue = Rs 1250 (800+450).</li>
+<li>Return usi rate par; rework loop mein cost sirf ek baar; cost bantwara 5 jagahon par ek jaisa.</li>
+<li>Concurrency: 8 SO cards ek lot se ek waqt mein, bilkul 3 kamyab; numbering mein duplicate nahi.</li>
+<li>Passwords bcrypt 12 rounds; <code>npm audit</code> 0 vulnerabilities; git mein secrets nahi; SQL injection safe.</li>
+<li>Audit log immutable; 40 migrations ulti/seedhi chalti hain.</li>
+</ul>
+
+<h2>5. Baqi kaam aur faisle</h2>
+<ol>
+<li><b>AUD-04:</b> Folding mein kitna gain/loss theek hai (jaise 5%)? Us se zyada par rok ya approval?</li>
+<li>Migration <code>20261021000001</code> live DB par abhi nahi chali: <code>npm run db:migrate</code>, backup ke saath.</li>
+<li>Production <code>.env</code>: JWT secrets 32+ characters, login lock 15 minute, nginx ke peeche.</li>
+<li>Frontend ko 5 jagah react karna hai (guide: <code>docs/frontend/audit-fixes.md</code>).</li>
+</ol>
+
+<h2>6. Dobara chalane ka tareeqa</h2>
+<table><tr><td><code>node scripts/audit-db.js</code></td><td>Live DB ke 37 rules (read-only)</td></tr>
+<tr><td><code>npx jest --runInBand</code></td><td>Saare tests (UTF8 <code>erp_test</code> database chahiye)</td></tr>
+<tr><td><code>AUDIT_PERF=1 npx jest tests/audit/performance.test.js</code></td><td>Speed test, lagbhag 4 minute</td></tr></table>
+
+<h2>7. Hadden</h2>
+<p>Tests local Postgres (UTF8) par chale, Supabase pooler par nahi; live DB par sirf SELECT. Speed 1,000 jobs tak naapi. Frontend, browser, nginx, backup aur production <code>.env</code> dekhe nahi gaye. Business rules aap ke faislon par hain.</p>
+</body></html>

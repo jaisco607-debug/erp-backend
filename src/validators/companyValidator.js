@@ -35,8 +35,13 @@ module.exports = {
   remove: { params: uuidParam },
   updateAdmin: {
     params: Joi.object({ id: Joi.string().guid().required(), userId: Joi.string().guid().required() }),
-    body: Joi.object({ name: Joi.string().trim().min(2).max(120), email, isActive: Joi.boolean() }).min(1),
+    body: Joi.object({ name: Joi.string().trim().min(2).max(120), email, phone: optionalText(30), isActive: Joi.boolean() }).min(1),
   },
+  createAdmin: {
+    params: uuidParam,
+    body: Joi.object({ name: Joi.string().trim().min(2).max(120).required(), email: email.required(), phone: optionalText(30), password: newPassword.required() }),
+  },
+  deleteAdmin: { params: Joi.object({ id: Joi.string().guid().required(), userId: Joi.string().guid().required() }) },
   resetAdminPassword: {
     params: Joi.object({ id: Joi.string().guid().required(), userId: Joi.string().guid().required() }),
     body: Joi.object({ newPassword: newPassword.required() }),

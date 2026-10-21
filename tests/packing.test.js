@@ -74,8 +74,8 @@ test('packing: only from folding, only accept; packing list per SO card thaan-wi
   expect(gp0).toMatchObject({ saved: false, gatePassNo: null, customer: { name: 'AZ' }, totalThaans: 3, copies: ['Packing', 'Company guard', 'Driver'] });
   expect(gp0.lots).toEqual([{ lotNo: lot.lotNo, thaanNos: [1, 2, 3], thaanCount: 3 }]);
   expect(gp0.operatorName).toBeTruthy();
-  const gp = (await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1234', destination: 'Lahore', passDate: '2026-10-20' })).body;
-  expect(gp).toMatchObject({ saved: true, gatePassNo: 1, driverName: 'Akram', vehicleNo: 'LEA-1234', destination: 'Lahore', passDate: '2026-10-20' });
+  const gp = (await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1234', destination: 'Lahore', passDate: '2030-01-01' })).body;
+  expect(gp).toMatchObject({ saved: true, gatePassNo: 1, driverName: 'Akram', vehicleNo: 'LEA-1234', destination: 'Lahore', passDate: '2030-01-01' });
   const gp2 = (await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { vehicleNo: 'LEB-9' })).body;
   expect(gp2).toMatchObject({ gatePassNo: 1, vehicleNo: 'LEB-9', driverName: 'Akram' });
   expect((await api('get', '/departments/PACKING/gate-passes?search=lahore')).body.total).toBe(1);

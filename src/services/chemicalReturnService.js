@@ -8,6 +8,7 @@ const {
   sequelize, ChemicalRequest, ChemicalRequestLine, ChemicalReturn, ChemicalReturnLine, StoreItem, StoreMove, Job, Service, User,
 } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
 const m = require('./storeMasterService');
@@ -153,7 +154,7 @@ async function receive(req, id) {
     const items = new Map((await StoreItem.findAll({ where: { id: lines.map((l) => l.itemId) }, order: [['id', 'ASC']], lock: transaction.LOCK.UPDATE, transaction })).map((i) => [i.id, i]));
     const reqLines = new Map((await ChemicalRequestLine.findAll({ where: { id: lines.map((l) => l.requestLineId) }, lock: transaction.LOCK.UPDATE, transaction })).map((l) => [l.id, l]));
     const r = await ChemicalRequest.findByPk(x.requestId, { lock: transaction.LOCK.UPDATE, transaction });
-    const today = new Date().toISOString().slice(0, 10);
+    const day = today();
     let total = 0;
     for (const l of lines) {
       const item = items.get(l.itemId);
@@ -173,7 +174,7 @@ async function receive(req, id) {
       rl.returnedQty = m.round(rl.returnedQty + l.qty, 3);
       rl.returnedValue = m.round(rl.returnedValue + l.value, 2);
       await rl.save({ transaction });
-      await StoreMove.create({ companyId, store: 'CHEMICAL', itemId: item.id, moveDate: today, kind: 'RETURN', qty: l.qty, value: l.value, departmentId: x.departmentId, requestId: x.requestId, returnId: x.id, createdById: req.user.id }, { transaction });
+      await StoreMove.create({ companyId, store: 'CHEMICAL', itemId: item.id, moveDate: day, kind: 'RETURN', qty: l.qty, value: l.value, departmentId: x.departmentId, requestId: x.requestId, returnId: x.id, createdById: req.user.id }, { transaction });
     }
     x.totalValue = total;
     r.returnedValue = m.round(r.returnedValue + x.totalValue, 2);

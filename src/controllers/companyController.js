@@ -33,6 +33,14 @@ exports.remove = async (req, res) => {
   res.status(204).end();
 };
 
+exports.createAdmin = async (req, res) => {
+  res.status(201).json(await companyService.createAdmin(req, req.params.id, req.body));
+};
+
+exports.deleteAdmin = async (req, res) => {
+  res.json(await companyService.deleteAdmin(req, req.params.id, req.params.userId));
+};
+
 exports.updateAdmin = async (req, res) => {
   res.json(await companyService.updateAdmin(req, req.params.id, req.params.userId, req.body));
 };

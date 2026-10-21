@@ -1,6 +1,6 @@
 // Companies are registered by the super admin. Registering one also creates its first client admin,
-// both in one go: either both are saved or nothing is. A new company has no services yet;
-// the super admin gives them afterwards, from the company (setServices) or from a service (serviceCatalogService.setCompanies).
+// both in one go: either both are saved or nothing is. A new company has NO services at all (not even
+// the built-in modules); the super admin gives every one of them afterwards, from the company (setServices) or from a service (serviceCatalogService.setCompanies).
 const { Op } = require('sequelize');
 const chemicalCatalog = require('./chemicalCatalogService');
 const { sequelize, Company, Service, CompanyService, User, RefreshToken, UserService } = require('../models');
@@ -9,6 +9,8 @@ const { hashPassword } = require('../utils/password');
 const audit = require('./auditService');
 const { endAllSessions } = require('./authService');
 const { freeCode } = require('./loginCodeService');
+const { adminEffect } = require('./companyAccessService');
+const { assertEmailFree } = require('./userEmail');
 
 /** Every id must be an existing, active service. */
 async function loadServices(serviceIds, transaction) {
@@ -21,7 +23,7 @@ async function loadServices(serviceIds, transaction) {
   return services;
 }
 
-const serviceJSON = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind });
+const serviceJSON = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup });
 
 async function findOr404(id, transaction, lock = false) {
   const company = await Company.findByPk(id, { transaction, lock: lock ? transaction.LOCK.UPDATE : undefined });
@@ -52,12 +54,12 @@ async function list({ page, limit, search, isActive }) {
   if (search) where[Op.or] = [{ name: { [Op.iLike]: `%${search}%` } }, { code: { [Op.iLike]: `%${search}%` } }];
   const { rows, count } = await Company.findAndCountAll({
     where,
-    // serviceCount: only the services the super admin gave (modules are given to everyone, so not counted)
+    // serviceCount: every service the super admin gave to the company
     attributes: {
       include: [
         [sequelize.literal(`(SELECT count(*)::int FROM company_services cs JOIN services s ON s.id = cs."serviceId"
-          WHERE cs."companyId" = "Company"."id" AND s.kind NOT IN ('MODULE', 'PACKING'))`), 'serviceCount'],
-        [sequelize.literal('(SELECT count(*)::int FROM users u WHERE u."companyId" = "Company"."id")'), 'userCount'],
+          WHERE cs."companyId" = "Company"."id")`), 'serviceCount'],
+        [sequelize.literal('(SELECT count(*)::int FROM users u WHERE u."companyId" = "Company"."id" AND u."deletedAt" IS NULL)'), 'userCount'],
       ],
     },
     order: [['name', 'ASC']],
@@ -78,9 +80,7 @@ async function create(req, { name, contactPerson, phone, address, admin }) {
       { name, code: await freeCode(transaction), contactPerson, phone, address, createdById: req.user.id },
       { transaction },
     );
-    // Every active MODULE service (Grey Store, SO card, Gate Pass ...) is given at once; the rest the super admin switches on.
-    const modules = await Service.findAll({ where: { kind: ['MODULE', 'PACKING'], isActive: true }, order: [['sortOrder', 'ASC']], transaction });
-    await CompanyService.bulkCreate(modules.map((s) => ({ companyId: company.id, serviceId: s.id, givenById: req.user.id })), { transaction });
+    // No service is given here: the super admin picks every module / department / report for this company.
     // the client's default chemical list goes into the new company's Chemical Store
     await chemicalCatalog.seed(sequelize, company.id, transaction);
     const clientAdmin = await User.create(
@@ -104,10 +104,6 @@ async function create(req, { name, contactPerson, phone, address, admin }) {
       after: clientAdmin.toSafeJSON(),
     }, { transaction });
 
-    await audit.log(req, {
-      action: 'COMPANY_SERVICES_CHANGED', entityType: 'Company', entityId: company.id, companyId: company.id,
-      before: { services: [] }, after: { services: modules.map((s) => s.code).sort() },
-    }, { transaction });
 
     return details(company.id, transaction);
   });
@@ -196,6 +192,7 @@ async function remove(req, id) {
     const userIds = (await User.findAll({ attributes: ['id'], where: { companyId: id }, transaction })).map((u) => u.id);
     await User.update({ isActive: false }, { where: { id: userIds }, transaction });
     await User.increment('tokenVersion', { where: { id: userIds }, transaction });
+    await require('./lockService').releaseAllForUsers(userIds, transaction);
     await RefreshToken.update({ revokedAt: new Date() }, { where: { revokedAt: null, userId: userIds }, transaction });
     const before = company.toSafeJSON();
     await company.destroy({ transaction });
@@ -217,11 +214,43 @@ async function updateAdmin(req, companyId, userId, changes) {
   return sequelize.transaction(async (transaction) => {
     const user = await findAdmin(companyId, userId, transaction);
     const before = user.toSafeJSON();
-    for (const f of ['name', 'email', 'isActive']) if (changes[f] !== undefined) user[f] = changes[f];
+    if (changes.email !== undefined && changes.email.toLowerCase() !== user.email) await assertEmailFree(companyId, changes.email, user.id, transaction);
+    for (const f of ['name', 'email', 'phone', 'isActive']) if (changes[f] !== undefined) user[f] = changes[f] === '' ? null : changes[f];
     await user.save({ transaction });
     if (before.isActive && changes.isActive === false) await endAllSessions(user, transaction);
     await audit.log(req, { action: 'CLIENT_ADMIN_UPDATED', entityType: 'User', entityId: user.id, companyId, before, after: user.toSafeJSON() }, { transaction });
-    return user.toSafeJSON();
+    // switching off the last active client admin locks out all the employees of the company (and switching on brings them back)
+    return { ...user.toSafeJSON(), effect: await adminEffect(companyId, transaction) };
+  });
+}
+
+/** The super admin makes another client admin for a company (the first one is made with the company). */
+async function createAdmin(req, companyId, { name, email, phone, password }) {
+  return sequelize.transaction(async (transaction) => {
+    await findOr404(companyId, transaction);
+    await assertEmailFree(companyId, email, null, transaction);
+    const admin = await User.create(
+      { name, email, phone: phone || null, passwordHash: await hashPassword(password), userType: 'CLIENT_ADMIN', companyId, createdById: req.user.id },
+      { transaction },
+    );
+    await audit.log(req, { action: 'CLIENT_ADMIN_CREATED', entityType: 'User', entityId: admin.id, companyId, after: admin.toSafeJSON() }, { transaction });
+    return { ...admin.toSafeJSON(), effect: await adminEffect(companyId, transaction) };
+  });
+}
+
+/**
+ * Deletes a client admin (soft delete: the row stays for the audit log, the person can never log in again
+ * and the email can be used again). When it was the company's last active client admin, the employees are locked out too.
+ */
+async function deleteAdmin(req, companyId, userId) {
+  return sequelize.transaction(async (transaction) => {
+    const user = await findAdmin(companyId, userId, transaction);
+    const before = user.toSafeJSON();
+    user.isActive = false;
+    await endAllSessions(user, transaction);
+    await user.destroy({ transaction });
+    await audit.log(req, { action: 'CLIENT_ADMIN_DELETED', entityType: 'User', entityId: userId, companyId, before, after: null }, { transaction });
+    return { deleted: true, id: userId, effect: await adminEffect(companyId, transaction) };
   });
 }
 
@@ -237,4 +266,4 @@ async function resetAdminPassword(req, companyId, userId, newPassword) {
   });
 }
 
-module.exports = { list, details, create, update, newCode, setServices, toggleService, remove, updateAdmin, resetAdminPassword };
+module.exports = { list, details, create, update, newCode, setServices, toggleService, remove, createAdmin, deleteAdmin, updateAdmin, resetAdminPassword };

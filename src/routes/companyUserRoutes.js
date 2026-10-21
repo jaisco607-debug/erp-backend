@@ -9,6 +9,7 @@ const c = require('../controllers/companyUserController');
 const router = express.Router();
 router.use(authenticate, requireUserType('CLIENT_ADMIN'));
 
+router.get('/service-options', c.serviceOptions);
 router.get('/', validate(v.list), c.list);
 router.post('/', validate(v.create), c.create);
 router.get('/:id', validate(v.get), c.get);

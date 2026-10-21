@@ -6,6 +6,7 @@ const validate = require('../middlewares/validate');
 const authenticate = require('../middlewares/authenticate');
 const requireUserType = require('../middlewares/requireUserType');
 const { Joi } = require('../validators/common');
+const { ymdDate } = require('../utils/dates');
 const v = require('../validators/jobValidator');
 const jobService = require('../services/jobService');
 const foldingService = require('../services/foldingService');
@@ -60,7 +61,7 @@ router.get('/:code/send-form', validate({ query: Joi.object({ jobId: Joi.string(
 const sendBody = Joi.object({
   toDepartmentCode: Joi.string().trim().max(50).required(),
   colourId: Joi.string().guid().allow(null),
-  jobDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/),
+  jobDate: ymdDate(),
   sentThrough: Joi.string().trim().max(120).allow('', null),
   remarks: Joi.string().trim().max(500).allow('', null),
   instructions: Joi.string().trim().max(1000).allow('', null),
@@ -110,7 +111,7 @@ router.put('/:code/jobs/:jobId/colour', validate({
 });
 router.put('/:code/jobs/:jobId/operator', validate({
   params: jobKey,
-  body: Joi.object({ operatorName: Joi.string().trim().max(80).allow('', null), processDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).allow(null) }).min(1),
+  body: Joi.object({ operatorName: Joi.string().trim().max(80).allow('', null), processDate: ymdDate().allow(null) }).min(1),
 }), async (req, res) => {
   await ownJob(req);
   res.json(await jobService.setOperator(req, req.params.jobId, req.body));
@@ -136,7 +137,7 @@ router.post('/:code/jobs/:jobId/reject-answer', validate({
 
 // ---- Folding department (kind FOLDING) ----
 const foldingKey = { code: Joi.string().max(50).required(), jobId: Joi.string().guid().required(), soCardId: Joi.string().guid().required() };
-const ymd = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+const ymd = ymdDate();
 router.get('/:code/folding', validate({
   query: Joi.object({ ...paging, tab: Joi.string().valid('all', 'open', 'draft').default('all'), search: Joi.string().trim().max(20), dateFrom: ymd, dateTo: ymd }),
 }), async (req, res) => res.json(await foldingService.list(req, req.params.code, req.validatedQuery)));
@@ -178,7 +179,7 @@ router.put('/:code/folding/:jobId/:soCardId/confirm', validate({
 // ---- Chemical requests to the Chemical Store (Step 8) ----
 const chem = require('../services/chemicalRequestService');
 const reqKey = Joi.object({ code: Joi.string().max(50).required(), id: Joi.string().guid().required() });
-const date = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+const date = ymdDate();
 const chemLine = Joi.object({
   itemId: Joi.string().guid().required(),
   qty: Joi.number().precision(3).positive().max(999999),
@@ -247,7 +248,7 @@ router.get('/:code/jobs/:jobId/chemical-cost', validate({ params: jobKey }), asy
 });
 
 // ---- Packing department (kind PACKING): packing lists per SO card ----
-const day = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+const day = ymdDate();
 const money = Joi.number().precision(2).min(0).max(9999999);
 const packingHead = {
   listDate: day, description: Joi.string().trim().max(300).allow('', null), madeFor: Joi.string().trim().max(120).allow('', null),

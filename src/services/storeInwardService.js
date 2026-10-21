@@ -8,6 +8,7 @@
 const { Op } = require('sequelize');
 const { sequelize, Vendor, StoreItem, StoreInward, StoreInwardLine, StoreMove, StoreCategory, StoreBrand, UNITS, Service } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
 const m = require('./storeMasterService');
@@ -95,7 +96,7 @@ async function formData(req, store) {
     store,
     nextIdNo: nextId,
     nextIdText: idText(nextId),
-    today: new Date().toISOString().slice(0, 10),
+    today: today(),
     billTypes: store === 'CHEMICAL' ? ['GST', 'OTHER'] : ['OTHER'],
     gstRates: [0, 17, 18],
     subUnits: m.SUB_UNITS,

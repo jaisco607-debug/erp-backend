@@ -8,6 +8,9 @@ async function start() {
   await connectDatabase();
   const server = app.listen(env.port, () => logger.info(`Textile ERP API listening on port ${env.port}`));
 
+  // Edit locks that ran out long ago are removed every 10 minutes (an expired lock is already free; this only tidies the table).
+  setInterval(() => require('./services/lockService').cleanup().catch((err) => logger.warn({ err }, 'Lock cleanup failed')), 10 * 60 * 1000).unref();
+
   // On shutdown, stop taking new requests, let running ones finish, then close the database.
   const stop = (signal) => {
     logger.info(`${signal} received, shutting down`);

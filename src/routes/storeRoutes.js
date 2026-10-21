@@ -2,6 +2,7 @@
 //   /api/v1/vendors                        suppliers, one list for both stores
 //   /api/v1/stores/chemical/...            Chemical Store   (service CHEMICAL_STORE)
 //   /api/v1/stores/general/...             General Items Store (service GENERAL_STORE)
+//   /api/v1/stores/chemical/cost/...       Store Reports (service STORE_REPORTS)
 // VIEW access: lists, details, stock. FULL access: add, edit, delete drafts, approve.
 // Taking an approval back: client admin only.
 const express = require('express');
@@ -14,6 +15,7 @@ const v = require('../validators/storeValidator');
 const c = require('../controllers/storeController');
 const deptChem = require('../services/departmentChemicalService');
 const { Joi } = require('../validators/common');
+const { ymdDate } = require('../utils/dates');
 
 const SERVICE = { chemical: 'CHEMICAL_STORE', general: 'GENERAL_STORE' };
 const admin = requireUserType('CLIENT_ADMIN');
@@ -89,7 +91,7 @@ stores.post('/:store/inwards/:id/unapprove', admin, full, validate(v.inward.get)
 // Chemical requests from departments (Step 8): Queue -> Process -> In-Way -> Delivered
 const chem = require('../services/chemicalRequestService');
 const reqParam = Joi.object({ store: Joi.string(), id: Joi.string().guid().required() });
-const ymd = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+const ymd = ymdDate();
 const { paging } = require('../validators/common');
 stores.get('/:store/requests', chemicalOnly, view, validate({ query: Joi.object({
   ...paging, tab: Joi.string().valid('all', 'queue', 'process', 'in_way', 'delivered', 'closed').default('all'), departmentId: Joi.string().guid(),
@@ -158,11 +160,12 @@ stores.post('/:store/adjustments', full, validate({ body: Joi.object({
   })).min(1).max(200).required(),
 }) }), async (req, res) => res.status(201).json(await adj.create(req, req.store, req.body)));
 
-// chemical cost per Job and per SO card
+// chemical cost per Job and per SO card: the Store Reports service (the super admin gives it separately)
+const storeReports = requireService('STORE_REPORTS', 'VIEW');
 const costQuery = Joi.object({ ...paging, dateFrom: ymd, dateTo: ymd, customerId: Joi.string().guid(), departmentId: Joi.string().guid() });
-stores.get('/:store/cost/jobs', chemicalOnly, view, validate({ query: costQuery }), async (req, res) => res.json(await chem.costReport(req, { ...req.validatedQuery, by: 'job' })));
-stores.get('/:store/cost/so-cards', chemicalOnly, view, validate({ query: costQuery }), async (req, res) => res.json(await chem.costReport(req, { ...req.validatedQuery, by: 'so-card' })));
-stores.get('/:store/cost/jobs/:id', chemicalOnly, view, validate({ params: reqParam }), async (req, res) => res.json(await chem.jobCost(req, req.params.id)));
-stores.get('/:store/cost/so-cards/:id', chemicalOnly, view, validate({ params: reqParam }), async (req, res) => res.json(await chem.soCardCost(req, req.params.id)));
+stores.get('/:store/cost/jobs', chemicalOnly, storeReports, validate({ query: costQuery }), async (req, res) => res.json(await chem.costReport(req, { ...req.validatedQuery, by: 'job' })));
+stores.get('/:store/cost/so-cards', chemicalOnly, storeReports, validate({ query: costQuery }), async (req, res) => res.json(await chem.costReport(req, { ...req.validatedQuery, by: 'so-card' })));
+stores.get('/:store/cost/jobs/:id', chemicalOnly, storeReports, validate({ params: reqParam }), async (req, res) => res.json(await chem.jobCost(req, req.params.id)));
+stores.get('/:store/cost/so-cards/:id', chemicalOnly, storeReports, validate({ params: reqParam }), async (req, res) => res.json(await chem.soCardCost(req, req.params.id)));
 
 module.exports = { vendors, stores };

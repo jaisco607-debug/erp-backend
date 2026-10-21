@@ -35,12 +35,12 @@ test('the services list is ready from the start', async () => {
 
 const CODE = /^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/;
 
-test('registering a company makes a random code and its first client admin, with only the MODULE services', async () => {
+test('registering a company makes a random code and its first client admin, with NO services', async () => {
   const { auth } = await asSuperAdmin();
   const res = await register(auth, {}, []);
   expect(res.status).toBe(201);
   expect(res.body.code).toMatch(CODE);
-  expect(res.body.services.map((x) => x.code).sort()).toEqual(['CHEMICAL_STORE', 'GATE_PASS', 'GENERAL_STORE', 'GREY_STORE', 'PACKING', 'SO_CARD']);
+  expect(res.body.services.map((x) => x.code).sort()).toEqual([]);
   const withServices = await request(app).post('/api/v1/companies').set(auth)
     .send({ name: 'X Mills', serviceIds: [], admin: { name: 'Xx', email: 'x@test.com', password: 'Xxxxx-Pass-123' } });
   expect(withServices.status).toBe(400);
@@ -287,8 +287,9 @@ test('service screen: checkbox list marks companies that already have the servic
   expect(add.body.companies.map((c) => c.name)).toEqual(['Alpha Mills', 'Beta Mills']);
 
   const mod = await request(app).post(`/api/v1/services/${grey}/companies`).set(auth).send({ companyIds: [b.id] });
-  expect(mod.status).toBe(422);
-  expect(mod.body.error.code).toBe('MODULE_SERVICE');
+  // modules are given like any other service now (nothing is given automatically)
+  expect(mod.status).toBe(200);
+  expect(mod.body.added).toEqual([b.id]);
 });
 
 test('super admin can delete a service; companies lose it, built-in modules cannot be deleted', async () => {

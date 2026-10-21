@@ -13,6 +13,9 @@ Node.js + Express (JavaScript) + PostgreSQL (Sequelize). Built step by step; eve
 | 5 | Departments (send, accept, process, reject) | aage |
 | 6 | Chemical store + requests | aage |
 | 7 | Folding, finished stock, packing list, gate pass | aage |
+| 8 | Reports: grey, SO card, departments, chemical cost, folding, active fabric, packing, gate pass (PDF / Excel frontend se) | [08-reports.md](docs/samjhao/08-reports.md) |
+| 9 | Super admin har service khud deta hai (kuch default nahi); har report aur store reports ki alag service; menu items / tabs service ke hisaab se | [09-service-access.md](docs/samjhao/09-service-access.md) |
+| 10 | Client admin ke employees (email + password + services), super admin sirf dekhta he; client admin disable / delete par employees ka access band | [10-employees.md](docs/samjhao/10-employees.md) |
 
 ## APIs
 

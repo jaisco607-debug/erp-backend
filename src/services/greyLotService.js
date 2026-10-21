@@ -9,6 +9,7 @@
 const { Op } = require('sequelize');
 const { sequelize, GreyLot, GreyLotThaan, GreyReturn, Customer, Quality } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
 
@@ -18,7 +19,7 @@ const TYPE_DIGITS = 4; // Type# shows as 0612
 
 const RETURN = 'grey_return_no';
 const YARD = 0.9144; // 1 yard = 0.9144 meter
-const r2 = (n) => Math.round(n * 100) / 100;
+const { round: r2 } = require('../utils/money');
 const toMeters = (qty, unit) => r2(unit === 'YARD' ? qty * YARD : qty);
 const toYards = (meters) => r2(meters / YARD);
 
@@ -97,7 +98,25 @@ async function findOr404(req, id, transaction, lock = false) {
 }
 
 const fullInclude = [...include, { model: GreyLotThaan, as: 'thaans' }, { model: GreyReturn, as: 'returns' }];
-const load = async (id, transaction) => json(await GreyLot.findByPk(id, { include: fullInclude, transaction }));
+/**
+ * Fabric returns (grey cloth going back to the party through Folding and Packing) are not on SO cards:
+ * soCardMeters leaves them out and they are shown as fabricReturnMeters.
+ */
+async function attachFabricReturn(items, transaction) {
+  if (!items.length) return items;
+  const rows = await sequelize.query(
+    `SELECT l."greyLotId" AS id, SUM(l.meters)::float AS meters FROM so_card_lots l JOIN so_cards s ON s.id = l."soCardId" AND s."deletedAt" IS NULL
+      WHERE s."isGreyReturn" AND l."greyLotId" IN (:ids) GROUP BY l."greyLotId"`,
+    { replacements: { ids: items.map((i) => i.id) }, type: sequelize.QueryTypes.SELECT, transaction },
+  );
+  const by = new Map(rows.map((r) => [r.id, r.meters]));
+  return items.map((i) => {
+    const fr = r2(by.get(i.id) || 0);
+    return { ...i, soCardMeters: r2(i.soCardMeters - fr), fabricReturnMeters: fr };
+  });
+}
+
+const load = async (id, transaction) => (await attachFabricReturn([json(await GreyLot.findByPk(id, { include: fullInclude, transaction }))], transaction))[0];
 
 /**
  * Quantity of a lot from the form:
@@ -190,7 +209,7 @@ async function list(req, q) {
   const { rows, count } = await GreyLot.findAndCountAll({
     where, include, order: [['lotNo', 'DESC']], limit: q.limit, offset: (q.page - 1) * q.limit, subQuery: false, distinct: true,
   });
-  return { data: rows.map(json), page: q.page, limit: q.limit, total: count };
+  return { data: await attachFabricReturn(rows.map(json)), page: q.page, limit: q.limit, total: count };
 }
 
 async function get(req, id) {
@@ -242,6 +261,10 @@ async function update(req, id, changes) {
     if (changes.lotNo !== undefined && changes.lotNo !== lot.lotNo) {
       await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`grey-lot-no:${req.user.companyId}`], transaction });
       await takeTypedLotNo(req, changes.lotNo, transaction, lot.id);
+    }
+    // a lot made of thaans keeps its total equal to its thaans: change the thaans, not a plain total
+    if (q && !q.thaans && (await GreyLotThaan.count({ where: { lotId: lot.id }, transaction })) > 0 && (changes.inwardMeters !== undefined || changes.inwardYards !== undefined || changes.pieces !== undefined)) {
+      throw AppError.rule('LOT_HAS_THAANS', 'This lot is made of thaans: send the thaans list again instead of a total');
     }
     const before = await load(lot.id, transaction);
     if (changes.lotNo !== undefined) lot.lotNo = changes.lotNo;
@@ -386,7 +409,7 @@ async function giveBack(req, id, { thaanNos, meters, pieces, returnDate, vehicle
     if (meters > balance) throw AppError.rule('NOT_ENOUGH_METERS', `Only ${balance} m of this lot are still in the store`, { balanceMeters: balance });
     const returnNo = await counters.take(companyId, RETURN, async () => ((await GreyReturn.max('returnNo', { where: { companyId }, transaction })) || 0) + 1, transaction);
     const ret = await GreyReturn.create({
-      companyId, lotId: id, returnNo, returnDate: returnDate || new Date().toISOString().slice(0, 10), pieces, meters, yards: toYards(meters),
+      companyId, lotId: id, returnNo, returnDate: returnDate || today(), pieces, meters, yards: toYards(meters),
       vehicleNo: vehicleNo || null, remarks: remarks || null, createdById: req.user.id,
     }, { transaction });
     for (const t of rows) Object.assign(t, { status: 'RETURNED', returnId: ret.id });

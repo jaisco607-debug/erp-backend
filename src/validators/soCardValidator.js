@@ -1,7 +1,8 @@
 const { Joi, uuidParam, paging } = require('./common');
+const { ymdDate } = require('../utils/dates');
 const { STATUSES } = require('../models/SoCard');
 
-const date = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
+const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 // a lot with a thaan list: thaanNos; a lot without one: meters (+ pieces)
 const lotLines = Joi.array().items(Joi.object({
   greyLotId: Joi.string().guid().required(),
@@ -26,6 +27,7 @@ module.exports = {
       departmentId: Joi.string().guid(),
       status: Joi.string().uppercase().valid(...STATUSES),
       isReprocess: Joi.boolean(),
+      isGreyReturn: Joi.boolean(),
       isConfirmed: Joi.boolean(),
       dateFrom: date,
       dateTo: date,

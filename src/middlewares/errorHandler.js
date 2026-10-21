@@ -3,6 +3,7 @@
 // so database or code details never leak out.
 const { ValidationError, UniqueConstraintError, ForeignKeyConstraintError, DatabaseError } = require('sequelize');
 const AppError = require('../utils/AppError');
+const config = require('../config/env');
 
 /**
  * Says where a broken JSON body goes wrong (position, line, column and which character),
@@ -53,10 +54,21 @@ module.exports = function errorHandler(err, req, res, next) {
   if (err instanceof ValidationError) {
     return res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Validation failed', details: err.errors.map((e) => e.message) } });
   }
+  // a number or date that does not fit its column (a typo with too many zeros, an impossible date): the user's input is wrong, not the server
+  if (err instanceof DatabaseError && err.parent?.code === '22003') {
+    return res.status(400).json({ error: { code: 'NUMBER_TOO_BIG', message: 'A quantity, rate or amount is too big. Check the number of zeros.' } });
+  }
+  if (err instanceof DatabaseError && ['22007', '22008'].includes(err.parent?.code)) {
+    return res.status(400).json({ error: { code: 'BAD_DATE', message: 'This is not a valid date' } });
+  }
   if (err instanceof DatabaseError && err.parent?.code === '23514') {
     return res.status(422).json({ error: { code: 'CONSTRAINT', message: 'The change would break a stock or balance rule' } });
   }
 
   req.log.error({ err }, 'Unhandled error');
-  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong', requestId: req.id } });
+  // Only while developing: say what broke (the error's own message, e.g. a missing column), so it can be fixed fast.
+  // Never in production or tests.
+  const where = String(err.stack || '').split('\n').slice(1, 3).map((l) => l.trim());
+  const debug = config.nodeEnv === 'development' ? { reason: err.message, at: where } : undefined;
+  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong', requestId: req.id, debug } });
 };

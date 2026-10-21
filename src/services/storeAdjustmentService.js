@@ -8,6 +8,7 @@ const { Op } = require('sequelize');
 const { sequelize, StoreAdjustment, StoreAdjustmentLine, StoreItem, StoreMove, User } = require('../models');
 const batches = require('./batchService');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
 const m = require('./storeMasterService');
@@ -92,7 +93,7 @@ async function create(req, store, data) {
     }
     const adjNo = await counters.take(companyId, `store_adjustment_no_${store}`, async () => ((await StoreAdjustment.max('adjNo', { where: { companyId, store }, transaction })) || 0) + 1, transaction);
     const a = await StoreAdjustment.create({
-      companyId, store, adjNo, adjDate: data.adjDate || new Date().toISOString().slice(0, 10), reason: data.reason, notes: data.notes || null,
+      companyId, store, adjNo, adjDate: data.adjDate || today(), reason: data.reason, notes: data.notes || null,
       totalValue: m.round(out.reduce((t, l) => t + l.value, 0), 2), createdById: req.user.id,
     }, { transaction });
     await StoreAdjustmentLine.bulkCreate(out.map((l) => ({ ...l, adjustmentId: a.id })), { transaction });

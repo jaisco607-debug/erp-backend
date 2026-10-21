@@ -1,7 +1,8 @@
 const { Joi, uuidParam, paging } = require('./common');
+const { ymdDate } = require('../utils/dates');
 const { STATUSES } = require('../models/Job');
 
-const date = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
+const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 const text = (max) => Joi.string().trim().max(max).allow('', null);
 
 module.exports = {
@@ -43,5 +44,5 @@ module.exports = {
   status: { params: uuidParam, body: Joi.object({ status: Joi.string().uppercase().valid(...STATUSES).required(), reason: Joi.string().trim().max(300).allow('', null) }) },
   update: { params: uuidParam, body: Joi.object({ colourId: Joi.string().guid().allow(null), sentThrough: text(120), remarks: text(500), instructions: text(1000) }).min(1) },
   history: { params: uuidParam },
-  operator: { params: uuidParam, body: Joi.object({ operatorName: Joi.string().trim().max(80).allow('', null), processDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).allow(null) }).min(1) },
+  operator: { params: uuidParam, body: Joi.object({ operatorName: Joi.string().trim().max(80).allow('', null), processDate: ymdDate().allow(null) }).min(1) },
 };

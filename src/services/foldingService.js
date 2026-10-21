@@ -14,9 +14,10 @@ const { sequelize, FoldingEntry, Job } = require('../models');
 const jobCost = require('./jobService');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
+const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const { companyServices, userServices } = require('./accessService');
 
-const round = (n) => Math.round(n * 100) / 100;
+const { round } = require('../utils/money');
 const num = (v) => round(Number(v || 0));
 const q = (sql, replacements, transaction) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT, transaction });
 const NO_THAAN = '00000000-0000-0000-0000-000000000000';
@@ -142,7 +143,7 @@ async function rows(req, depId, extra, replacements, transaction) {
     return {
       jobId: r.jobId, jobNo: r.jobNo, jobDate: r.jobDate, jobStatus: r.status,
       pageNo: r.pageNo || '0',
-      soCard: { id: r.soCardId, cardNo: r.cardNo, idNo: r.idNo },
+      soCard: { id: r.soCardId, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), idNo: r.idNo },
       customer: { id: r.customerId, code: r.customerCode, name: r.customerName },
       quality: r.quality, colour: r.colour,
       isReprocess: r.isReprocess, isRework: r.isRework,
@@ -152,7 +153,7 @@ async function rows(req, depId, extra, replacements, transaction) {
       leftInFolding,
       isClosed: closed, closeNote: r.closeNote || null, closedAt: r.closedAt || null,
       closedBy: r.closedById ? { id: r.closedById, name: r.closedByName } : null,
-      cost: { previousChemicalAmount: before, foldingChemicalAmount: here, totalCost, costPerMeter: Math.round(perMeter * 10000) / 10000 },
+      cost: { previousChemicalAmount: before, foldingChemicalAmount: here, totalCost, costPerMeter: round(perMeter, 4) },
       categoryCost: { a: round(perMeter * totals.a), b: round(perMeter * totals.b), cp: round(perMeter * totals.cp) },
       sentForRework: Boolean(r.sentBackTo), sentBackTo: r.sentBackTo || null,
       isConfirmed: Boolean(r.isConfirmed),
@@ -174,7 +175,8 @@ async function list(req, code, query) {
   const openCount = all.filter((r) => r.leftInFolding > 0).length;
   if (query.tab === 'draft') all = all.filter((r) => !r.isConfirmed);
   if (query.tab === 'open') all = all.filter((r) => r.leftInFolding > 0);
-  if (query.search && /^\d+$/.test(query.search)) all = all.filter((r) => r.jobNo === Number(query.search) || r.soCard.cardNo === Number(query.search));
+  const cs = query.search ? parseCardSearch(query.search) : null;
+  if (cs) all = all.filter((r) => (!cs.grey && r.jobNo === cs.n) || (r.soCard.cardNo === cs.n && (!cs.grey || r.isGreyReturn)));
   if (query.dateFrom) all = all.filter((r) => r.jobDate >= query.dateFrom);
   if (query.dateTo) all = all.filter((r) => r.jobDate <= query.dateTo);
   all.sort((x, y) => y.jobNo - x.jobNo || y.soCard.cardNo - x.soCard.cardNo);
@@ -338,4 +340,4 @@ async function setConfirmed(req, code, jobId, soCardId, isConfirmed) {
   });
 }
 
-module.exports = { list, get, save, saveGrades, sendToPacking, setClosed, setConfirmed };
+module.exports = { rows, list, get, save, saveGrades, sendToPacking, setClosed, setConfirmed };

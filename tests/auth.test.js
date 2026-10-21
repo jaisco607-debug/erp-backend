@@ -7,6 +7,8 @@ afterAll(() => sequelize.close());
 describe('one login window', () => {
   test.each(['SUPER_ADMIN', 'CLIENT_ADMIN', 'USER'])('%s logs in at the same URL and gets its type back', async (userType) => {
     const user = await makeUser({ userType });
+    // an employee works under a client admin of the company (without an active one nobody of the company can log in)
+    if (userType === 'USER') await makeUser({ userType: 'CLIENT_ADMIN', companyId: user.companyId });
     const companyCode = await companyCodeOf(user);
     const res = await request(app).post('/api/v1/auth/login').send({ companyCode: companyCode.toLowerCase(), email: user.email.toUpperCase(), password: PASSWORD });
     expect(res.status).toBe(200);

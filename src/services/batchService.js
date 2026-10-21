@@ -5,6 +5,7 @@
 const { QueryTypes } = require('sequelize');
 const { sequelize } = require('../models');
 const AppError = require('../utils/AppError');
+const { today } = require('../utils/dates');
 const m = require('./storeMasterService');
 
 const q = (sql, replacements, transaction) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT, transaction });
@@ -16,7 +17,7 @@ async function add(transaction, { companyId, store, itemId, source, qty, rate, v
     INSERT INTO store_batches ("companyId", store, "itemId", source, "inwardId", "inwardLineId", "vendorId", "returnId", "adjustmentId", "inDate", rate, "qtyIn", "qtyLeft", "valueLeft")
     VALUES (:companyId, :store, :itemId, :source, :inwardId, :inwardLineId, :vendorId, :returnId, :adjustmentId, :inDate, :rate, :qty, :qty, :value) RETURNING id`,
   { companyId, store, itemId, source, inwardId: inwardId || null, inwardLineId: inwardLineId || null, vendorId: vendorId || null, returnId: returnId || null,
-    adjustmentId: adjustmentId || null, inDate: inDate || new Date().toISOString().slice(0, 10), rate: m.round(rate || 0, 4), qty, value: m.round(value, 2) }, transaction);
+    adjustmentId: adjustmentId || null, inDate: inDate || today(), rate: m.round(rate || 0, 4), qty, value: m.round(value, 2) }, transaction);
   return b.id;
 }
 
@@ -168,7 +169,7 @@ async function usage(where, replacements, transaction) {
     WHERE ${where} ORDER BY r."sentAt" DESC`, replacements, transaction);
   const jobIds = [...new Set(rows.map((r) => r.jobId).filter(Boolean))];
   const cloth = jobIds.length ? await q(`
-    SELECT ji."jobId", ji."soCardId", sc."cardNo", gl."lotNo", ji.meters::float AS meters,
+    SELECT ji."jobId", ji."soCardId", sc."cardNo", sc."isGreyReturn", gl."lotNo", ji.meters::float AS meters,
            (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = scl.id) AS thaans
     FROM job_items ji JOIN so_cards sc ON sc.id = ji."soCardId" JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
     WHERE ji."jobId" IN (:jobIds)`, { jobIds }, transaction) : [];
@@ -179,6 +180,7 @@ async function usage(where, replacements, transaction) {
       date: r.sentAt, department: { code: r.departmentCode, name: r.department },
       request: { id: r.requestId, reqNo: r.reqNo }, jobNo: r.jobNo,
       soNos: [...new Set(mine.map((c) => c.cardNo))].sort((a, b) => a - b),
+      soLabels: [...new Map(mine.map((c) => [`${c.isGreyReturn}${c.cardNo}`, c])).values()].sort((a, b) => a.cardNo - b.cardNo).map((c) => (c.isGreyReturn ? `FR-${c.cardNo}` : String(c.cardNo))),
       lotNos: [...new Set(mine.map((c) => c.lotNo))].sort((a, b) => a - b),
       thaans: mine.reduce((t, c) => t + c.thaans, 0),
       meters: m.round(mine.reduce((t, c) => t + c.meters, 0), 2),

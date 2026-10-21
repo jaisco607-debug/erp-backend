@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ERP Safety Check: Simple Report</title>
+<style>
+@page{size:A4;margin:18mm}
+body{font-family:Segoe UI,Arial,sans-serif;color:#1c2430;line-height:1.55;font-size:11.5pt}
+h1{font-size:24pt;margin:0 0 4px;color:#12355b}h2{font-size:15pt;color:#12355b;border-bottom:2px solid #dbe4ee;padding-bottom:4px;margin-top:22px}
+.sub{color:#5a6675;margin-bottom:14px}.box{background:#eef5fc;border-left:5px solid #2f7dc4;padding:10px 14px;margin:12px 0}
+.ok{background:#eaf7ee;border-left-color:#2e9b57}.warn{background:#fff6e5;border-left-color:#e29a1b}
+table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #cfd8e3;padding:6px 8px;text-align:left;vertical-align:top;font-size:10.5pt}th{background:#e8eef6}
+.tag{display:inline-block;padding:1px 8px;border-radius:9px;font-size:9pt;color:#fff}.h{background:#c0392b}.m{background:#e29a1b}.l{background:#6b7b8c}.f{background:#2e9b57}
+</style></head><body>
+<h1>Software Safety Check</h1>
+<div class="sub">Textile ERP back-end system &nbsp;|&nbsp; Date: 21 October 2026 &nbsp;|&nbsp; A plain-language summary for owners and managers</div>
+
+<div class="box ok"><b>The short answer:</b> the money and stock calculations at the heart of the system are sound. We tried to break them with thousands of automatic tests and they stayed correct to the last paisa. We did find a number of smaller weak spots. All but one have now been fixed and re-tested.</div>
+
+<h2>1. Why we did this</h2>
+<p>Before the system is handed over, we checked the whole thing the way an inspector would: is the costing right, can cloth go missing, can one company see another company's data, can the system be tricked or crashed, and is the database healthy?</p>
+
+<h2>2. What we checked, in everyday words</h2>
+<table>
+<tr><th>Area</th><th>What we did</th><th>Result</th></tr>
+<tr><td>Chemical costing</td><td>Bought, issued, returned and adjusted chemicals in about 1,900 random steps, and compared every step against a second, independent calculation.</td><td>Correct. Stock and money matched every time.</td></tr>
+<tr><td>Cloth (meters)</td><td>Followed every meter from grey store, to SO card, departments, folding, packing and gate pass.</td><td>Every meter is accounted for. None appears or disappears.</td></tr>
+<tr><td>Two people at once</td><td>Simulated many users pressing buttons at the same moment.</td><td>No double counting, no overselling of cloth or chemicals.</td></tr>
+<tr><td>Privacy between companies</td><td>Over 3,300 attempts by one company to read or change another company's data.</td><td>All refused. Data stays separate.</td></tr>
+<tr><td>Logins and permissions</td><td>Fake logins, expired tokens, employees with "view only" access.</td><td>All handled correctly.</td></tr>
+<tr><td>Wrong or strange input</td><td>About 10,000 bad entries: impossible dates, huge numbers, odd symbols, Urdu text.</td><td>Three kinds of crash found and fixed.</td></tr>
+<tr><td>Speed</td><td>A factory with 1,000 lots, cards and jobs.</td><td>Every screen under half a second.</td></tr>
+<tr><td>Your real database</td><td>37 accounting rules checked on the live data (read only, nothing changed).</td><td>All 37 rules hold.</td></tr>
+</table>
+
+<h2>3. Problems we found, and what happened to them</h2>
+<table>
+<tr><th>Problem in plain words</th><th>Why it mattered</th><th>Status</th></tr>
+<tr><td>Packing list could show more cloth than Folding actually sent (for example 5,000 m for a 100 m roll).</td><td>The invoice could show cloth that does not exist.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>A packing list could be reopened and deleted after the gate pass was made, and the gate pass disappeared with it.</td><td>The record of cloth leaving the factory could be erased.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>A finished job could be sent back and rejected after chemicals were already used.</td><td>The chemical cost could vanish from the cloth's history.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>When Folding sent cloth in two parts, Packing screens showed the chemical cost twice.</td><td>Wrong cost shown on those screens (the main cost reports were right).</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>An SO card kept saying "Sent to Dyeing" after the cloth had moved to Folding.</td><td>Staff would be told the wrong location.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Packing list total could differ by 1-2 paisa from the sum of its lines.</td><td>Confusing totals on paper.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Half-paisa rounding was sometimes done downwards.</td><td>About 1 line in 1,500 was 1 paisa low compared with a supplier's bill.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Dates after midnight (Pakistan time) were stamped with the previous day.</td><td>Entries made between midnight and 5 am got yesterday's date.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Chemical store could send more than the department asked for, and the job paid for it.</td><td>Extra cost with no control.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Impossible dates (30 February) or huge numbers made the system show an error screen.</td><td>Looks like the system is broken.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>A grey lot made of rolls could be edited so its total no longer matched its rolls.</td><td>Stock numbers out of step.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>An employee could view the full history of an SO card that never went to their department.</td><td>Minor information leak inside one company.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Documents could be dated before the cloth even arrived.</td><td>Illogical records.</td><td><span class="tag f">Fixed</span></td></tr>
+<tr><td>Database tuning: missing speed-up indexes and missing "cannot be negative" safety rules.</td><td>Would slow down with years of data; extra protection.</td><td><span class="tag f">Fixed</span><br>(still to be applied to the live database)</td></tr>
+<tr><td><b>Folding can record any amount of graded cloth, with no limit.</b></td><td>A department could record more or less than it received.</td><td><span class="tag m">Open: owner decision</span></td></tr>
+</table>
+
+<h2>4. What still needs a decision or an action</h2>
+<div class="box warn">
+<b>Decision for the owner:</b> should Folding be limited to roughly what it received (for example, allow up to 5% gain or loss)? Today there is no limit. We left it as it is until you decide.<br><br>
+<b>Action:</b> one database update (indexes and safety rules) has been tested but not yet applied to your live database. It is quick and safe, and should be done with a backup in place.<br><br>
+<b>Server settings:</b> before going live, make sure the secret keys are long and random, and the system runs behind a normal web server. This is a setup task, not a software fault.
+</div>
+
+<h2>5. What this check did not cover</h2>
+<ul>
+<li>The screens and website (front end) were not part of this check.</li>
+<li>Tests ran on a copy of the database engine on one computer; only read-only checks were run on your live database.</li>
+<li>Speed was tested up to about 1,000 jobs. Much larger volumes should be re-checked later.</li>
+<li>Business rules, such as how much loss is acceptable, are your decisions, not the software's.</li>
+</ul>
+
+<h2>6. Conclusion</h2>
+<p>The core of the system, which counts money and cloth, is reliable. The weak spots found were mostly places where the system allowed something a careful person would not do. Those have been closed and are now protected by automatic tests, so they cannot quietly return. Once the one open decision is made and the database update is applied, the system is in good shape to hand over.</p>
+<p class="sub">Test result: 182 automatic tests, 181 passed, 1 skipped on purpose (speed test), 0 failed.</p>
+</body></html>

@@ -1,8 +1,9 @@
 const { Joi, uuidParam, paging } = require('./common');
+const { ymdDate } = require('../utils/dates');
 const { UNITS } = require('../models');
 
 const text = (max) => Joi.string().trim().max(max).allow('', null);
-const date = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).messages({ 'string.pattern.base': 'date must look like 2026-10-14' });
+const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-14' });
 const id = Joi.string().guid();
 const qty = Joi.number().precision(3).positive().max(999999999); // kg with grams: 2.5 = 2 kg 500 g
 const money = Joi.number().precision(4).min(0).max(999999999);

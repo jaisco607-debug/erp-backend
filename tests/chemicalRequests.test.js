@@ -7,7 +7,7 @@ beforeEach(clean);
 test('department asks chemicals for a job; store accepts, sends (stock out at avg rate); department receives; cost per job and SO card', async () => {
   const company = await makeCompany();
   const s = {};
-  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'DYEING']) {
+  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'STORE_REPORTS', 'DYEING']) {
     s[code] = await Service.findOne({ where: { code } });
     await CompanyService.create({ companyId: company.id, serviceId: s[code].id });
   }
@@ -134,7 +134,7 @@ test('department asks chemicals for a job; store accepts, sends (stock out at av
 test('chemical not in stock: department can still ask; store offers an alternate or a date', async () => {
   const company = await makeCompany();
   const s = {};
-  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'DYEING']) {
+  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'STORE_REPORTS', 'DYEING']) {
     s[code] = await Service.findOne({ where: { code } });
     await CompanyService.create({ companyId: company.id, serviceId: s[code].id });
   }

@@ -1,9 +1,10 @@
 const { Joi, uuidParam, paging } = require('./common');
+const { ymdDate } = require('../utils/dates');
 
 // optional text; '' or null clears it (the services turn '' into null)
 const text = (max) => Joi.string().trim().max(max).allow('', null);
 const meters = Joi.number().precision(2).positive().max(99999999);
-const date = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
+const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 
 const master = {
   list: { query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean() }) },
