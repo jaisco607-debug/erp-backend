@@ -12,6 +12,7 @@ router.use(authenticate, requireUserType('SUPER_ADMIN'));
 router.get('/', validate(v.list), c.list);
 router.post('/', validate(v.create), c.create);
 router.get('/:id', validate(v.get), c.get);
+router.post('/:id/open', validate(v.get), c.open);
 router.patch('/:id', validate(v.update), c.update);
 router.delete('/:id', validate(v.remove), c.remove);
 router.post('/:id/admins', validate(v.createAdmin), c.createAdmin);
