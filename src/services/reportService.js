@@ -516,13 +516,16 @@ async function chemicalUsage(req, f) {
     return { date: l.sentAt, department: l.department, reqNo: l.reqNo, jobNo: l.jobNo, soNo: c.cardNo, party: c.party, lots: lotsText(j.lots), thaans: nz(j.thaans), meters: round(j.meters),
       chemical: l.chemical, unit: l.unit, qty: round(l.qty), rate: l.qty ? round(l.amount / l.qty) : 0, amount: round(l.amount), tag: c.isGreyReturn ? TAG : '' };
   }).filter((r) => r.qty !== 0 || r.amount !== 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  if (!f.groupBy || f.groupBy === 'none') {
+  // 'detail' (the Detail tab) is the same plain list as 'none'
+  if (!f.groupBy || f.groupBy === 'none' || f.groupBy === 'detail') {
     const columns = [col('date', 'Sent', 'datetime'), col('department', 'Department'), col('reqNo', 'Req#', 'number'), col('jobNo', 'Job#', 'number'), col('soNo', 'SO#', 'number'), col('party', 'Party'),
       col('lots', 'Lot#s', 'list'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number'), col('chemical', 'Chemical'), col('qty', 'Qty', 'number'), col('unit', 'Unit'),
       col('rate', 'Rate', 'money'), col('amount', 'Amount', 'money'), col('tag', 'Tag', 'tag')];
     return respond('Chemical usage and cost', f, [section('usage', 'Usage', columns, detail, ['qty', 'amount'])], f);
   }
-  const keyOf = { chemical: (r) => `${r.chemical}|${r.unit}`, department: (r) => r.department, job: (r) => `${r.department}|${r.jobNo}`, so_card: (r) => `${r.soNo}` }[f.groupBy];
+  const keyOf = { chemical: (r) => `${r.chemical}|${r.unit}`, department: (r) => r.department, job: (r) => `${r.department}|${r.jobNo}`, so_card: (r) => `${r.soNo}`, party: (r) => `${r.party}` }[f.groupBy];
+  // any other grouping (e.g. party_department, which belongs to another report) is a clear 400, not a crash
+  if (!keyOf) throw AppError.validation([{ field: 'query.by', message: `Chemical cost cannot be grouped by "${f.groupBy}"` }]);
   const g = new Map();
   for (const r of detail) {
     const k = keyOf(r);
@@ -532,7 +535,7 @@ async function chemicalUsage(req, f) {
   const rows = [...g.values()].map((x) => ({ ...x, rate: x.qty ? round(x.amount / x.qty) : 0 })).sort((a, b) => b.amount - a.amount);
   const columns = { chemical: [col('chemical', 'Chemical'), col('unit', 'Unit'), col('qty', 'Qty', 'number'), col('rate', 'Avg rate', 'money'), col('amount', 'Amount', 'money')],
     department: [col('department', 'Department'), col('amount', 'Amount', 'money')], job: [col('department', 'Department'), col('jobNo', 'Job#', 'number'), col('amount', 'Amount', 'money')],
-    so_card: [col('soNo', 'SO#', 'number'), col('party', 'Party'), col('amount', 'Amount', 'money')] }[f.groupBy];
+    so_card: [col('soNo', 'SO#', 'number'), col('party', 'Party'), col('amount', 'Amount', 'money')], party: [col('party', 'Party'), col('amount', 'Amount', 'money')] }[f.groupBy];
   return respond(`Chemical cost by ${f.groupBy.replace('_', ' ')}`, f, [section('usage', 'Cost', columns, rows, ['qty', 'amount'].filter((k) => columns.some((c) => c.key === k)))], f);
 }
 
