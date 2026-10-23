@@ -24,6 +24,14 @@ async function authenticate(req, res, next) {
   if (user.userType === 'USER' && !(await hasActiveClientAdmin(user.companyId))) {
     return next(AppError.unauthorized('Session expired, please log in again'));
   }
+  // a super admin who opened this company: the token must still belong to an active super admin
+  if (payload.imp) {
+    const boss = await User.findByPk(payload.imp);
+    if (!boss || !boss.isActive || boss.userType !== 'SUPER_ADMIN' || boss.tokenVersion !== payload.impVer) {
+      return next(AppError.unauthorized('Session expired, please log in again'));
+    }
+    req.impersonator = boss;
+  }
   req.user = user;
   next();
 }
