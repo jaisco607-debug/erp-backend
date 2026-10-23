@@ -9,13 +9,16 @@ const env = require('../config/env');
 const ISSUER = 'textile-erp';
 const AUDIENCE = 'textile-erp-api';
 
-function signAccessToken(user) {
-  return jwt.sign({ typ: 'access', ver: user.tokenVersion }, env.jwt.accessSecret, {
+// impersonator: a super admin who opened a company (the token is the client admin's, with the super admin's id inside)
+function signAccessToken(user, { impersonator, ttl } = {}) {
+  const claims = { typ: 'access', ver: user.tokenVersion };
+  if (impersonator) { claims.imp = impersonator.id; claims.impVer = impersonator.tokenVersion; }
+  return jwt.sign(claims, env.jwt.accessSecret, {
     algorithm: 'HS256',
     subject: user.id,
     issuer: ISSUER,
     audience: AUDIENCE,
-    expiresIn: env.jwt.accessTtl,
+    expiresIn: ttl || env.jwt.accessTtl,
   });
 }
 
