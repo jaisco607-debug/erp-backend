@@ -25,13 +25,23 @@ const DEPT_KINDS = ['PROCESS', 'FOLDING', 'PACKING'];
 /** Departments of the company this person may see (client admin: all of them). */
 async function myDepartments(req, kinds = DEPT_KINDS) {
   const all = (await companyServices(req.user.companyId)).filter((s) => kinds.includes(s.kind));
-  if (req.user.userType === 'CLIENT_ADMIN') return all;
+  if (req.user.userType === 'CLIENT_ADMIN' || (await hasReportService(req))) return all;
   const mine = new Set((await userServices(req.user)).map((g) => g.service.id));
   return all.filter((s) => mine.has(s.id));
 }
 
+/** True when the person has the report's own REPORT_* service (the route sets req.reportCode). Such a person sees all departments. */
+async function hasReportService(req) {
+  if (!req.reportCode || !req.user || !req.user.companyId) return false;
+  const have = (await companyServices(req.user.companyId)).some((s) => s.code === req.reportCode);
+  if (!have) return false;
+  if (req.user.userType === 'CLIENT_ADMIN') return true;
+  return (await userServices(req.user)).some((g) => g.service.code === req.reportCode);
+}
+
 async function needAnyService(req, codes) {
   if (!req.user || !req.user.companyId) throw AppError.forbidden();
+  if (await hasReportService(req)) return;
   const have = await companyServices(req.user.companyId);
   const ok = req.user.userType === 'CLIENT_ADMIN'
     ? have.some((s) => codes.includes(s.code))
@@ -134,6 +144,8 @@ async function jobCards(companyId, f = {}) {
   if (f.soCardId) { where.push('sc.id = :soCardId'); rep.soCardId = f.soCardId; }
   if (f.soNo) { where.push('sc."cardNo" = :soNo'); rep.soNo = f.soNo; }
   if (f.jobNo) { where.push('j."jobNo" = :jobNo'); rep.jobNo = f.jobNo; }
+  if (f.fromDepartmentId) { where.push('j."fromDepartmentId" = :fromDep'); rep.fromDep = f.fromDepartmentId; }
+  if (f.qualityId) { where.push('COALESCE(sc."qualityId", gl."qualityId") = :qualityId'); rep.qualityId = f.qualityId; }
   if (f.status) { where.push('j.status = :status'); rep.status = f.status; }
   if (f.operator) { where.push('j."operatorName" ILIKE :operator'); rep.operator = `%${f.operator}%`; }
   return q(`
@@ -225,6 +237,7 @@ async function greyLots(req, f) {
   const where = ['gl."companyId" = :companyId', 'gl."deletedAt" IS NULL', 'gl."isApproved"'];
   const rep = { companyId };
   if (f.customerId) { where.push('gl."customerId" = :customerId'); rep.customerId = f.customerId; }
+  if (f.qualityId) { where.push('gl."qualityId" = :qualityId'); rep.qualityId = f.qualityId; }
   if (f.dateFrom) { where.push('gl."inwardDate" >= :dateFrom'); rep.dateFrom = f.dateFrom; }
   if (f.dateTo) { where.push('gl."inwardDate" <= :dateTo'); rep.dateTo = f.dateTo; }
   if (f.search) { where.push('(gl."lotNo"::text = :search OR gl."dcNo" ILIKE :like OR gl."typeNo"::text = :search)'); rep.search = f.search; rep.like = `%${f.search}%`; }
@@ -243,7 +256,8 @@ async function greyLots(req, f) {
     soCards: l.soCards, onSoCardMeters: round(l.onSoCard), fabricReturnMeters: round(l.fabricReturn), givenBackMeters: round(l.givenBack), inStoreMeters: round(l.inward - l.outward),
     notSentMeters: by(l.id, 'SO_CARD'), inProcessMeters: by(l.id, 'PROCESS'), atPackingMeters: by(l.id, 'PACKING'), isReprocess: l.isReprocess ? 'Re-process' : '',
   }));
-  if (f.status === 'in_store') rows = rows.filter((r) => r.inStoreMeters > 0);
+  if (f.status === 'in_store' || /^in_?store$/i.test(f.stock || '')) rows = rows.filter((r) => r.inStoreMeters > 0);
+  if (/^(empty|finished|nil)$/i.test(f.stock || '')) rows = rows.filter((r) => r.inStoreMeters <= 0);
   const columns = [col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'), col('inwardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('thaans', 'Thaans', 'number'),
     col('inwardMeters', 'Came (m)', 'number'), col('soCards', 'SO cards', 'number'), col('onSoCardMeters', 'On SO cards (m)', 'number'), col('fabricReturnMeters', 'Fabric return (m)', 'number'),
     col('givenBackMeters', 'Given back (m)', 'number'), col('inStoreMeters', 'In grey store (m)', 'number'), col('notSentMeters', 'SO card, not sent (m)', 'number'),
@@ -255,6 +269,44 @@ async function greyLots(req, f) {
 
 const CARD_STATUS = { NEW: 'Not sent', SENT: 'Sent (waiting accept)', IN_DEPARTMENT: 'In department' };
 
+/**
+ * Where an SO card really is, from its jobs and the cloth (the stored card status is not used):
+ *   NOT_SENT       no job yet
+ *   PARTLY_SENT    some cloth still waits on the SO card, some already went to departments
+ *   IN_DEPARTMENT  cloth is inside a process department / Folding
+ *   AT_PACKING     cloth is at Packing and not all of it has a gate pass
+ *   FINISHED       nothing left in the mill (everything at Packing has gone out with a gate pass)
+ * Fabric return cards are not included. Returns Map soCardId -> { key, text }.
+ */
+const CARD_POSITIONS = [['NOT_SENT', 'Not sent'], ['PARTLY_SENT', 'Partly sent'], ['IN_DEPARTMENT', 'In departments'], ['AT_PACKING', 'At Packing'], ['FINISHED', 'Finished (dispatched)']];
+async function cardPositions(companyId) {
+  const text = new Map(CARD_POSITIONS);
+  const cards = await q('SELECT id FROM so_cards WHERE "companyId" = :companyId AND "deletedAt" IS NULL AND NOT "isGreyReturn"', { companyId });
+  const withJobs = new Set((await q(`SELECT DISTINCT ji."soCardId" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE j."companyId" = :companyId AND j.status <> 'REJECTED'`, { companyId })).map((r) => r.soCardId));
+  const out = new Map((await q(`SELECT p."soCardId", SUM(l.meters)::float AS meters FROM packing_lists p JOIN packing_list_lines l ON l."packingListId" = p.id
+    JOIN gate_passes g ON g."packingListId" = p.id WHERE p."companyId" = :companyId GROUP BY p."soCardId"`, { companyId })).map((r) => [r.soCardId, r.meters]));
+  const sum = new Map();
+  for (const n of await clothNow(companyId)) {
+    if (!n.soCardId) continue;
+    const e = sum.get(n.soCardId) || { card: 0, dept: 0, pack: 0 };
+    if (n.stageKind === 'SO_CARD') e.card += n.meters; else if (n.stageKind === 'PACKING') e.pack += n.meters; else if (n.stageKind === 'DEPARTMENT') e.dept += n.meters;
+    sum.set(n.soCardId, e);
+  }
+  const res = new Map();
+  for (const c of cards) {
+    const e = sum.get(c.id) || { card: 0, dept: 0, pack: 0 };
+    let key;
+    if (!withJobs.has(c.id)) key = 'NOT_SENT';
+    else if (e.card > 0.004) key = 'PARTLY_SENT';
+    else if (e.dept > 0.004) key = 'IN_DEPARTMENT';
+    else if (e.pack - (out.get(c.id) || 0) > 0.004) key = 'AT_PACKING';
+    else key = 'FINISHED';
+    res.set(c.id, { key, text: text.get(key) });
+  }
+  return res;
+}
+const positionKey = (v) => ({ NEW: 'NOT_SENT', SENT: 'PARTLY_SENT' }[v] || v);
+
 /** All SO cards with lots, thaans, meters, where it went and its chemical cost. */
 async function soCards(req, f) {
   await needAnyService(req, ['SO_CARD']);
@@ -262,9 +314,10 @@ async function soCards(req, f) {
   const where = ['sc."companyId" = :companyId', 'sc."deletedAt" IS NULL'];
   const rep = { companyId };
   if (f.customerId) { where.push('sc."customerId" = :customerId'); rep.customerId = f.customerId; }
+  if (f.qualityId) { where.push('sc."qualityId" = :qualityId'); rep.qualityId = f.qualityId; }
+  if (f.search) { where.push('(sc."cardNo"::text = :search OR sc."idNo"::text = :search OR cu.name ILIKE :like OR sc.article ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
   if (f.dateFrom) { where.push('sc."cardDate" >= :dateFrom'); rep.dateFrom = f.dateFrom; }
   if (f.dateTo) { where.push('sc."cardDate" <= :dateTo'); rep.dateTo = f.dateTo; }
-  if (f.status) { where.push('sc.status = :status'); rep.status = f.status; }
   if (f.isGreyReturn !== undefined) { where.push('sc."isGreyReturn" = :gr'); rep.gr = f.isGreyReturn; }
   if (f.soNo) { where.push('sc."cardNo" = :soNo'); rep.soNo = f.soNo; }
   if (f.departmentId) { where.push('EXISTS (SELECT 1 FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardId" = sc.id AND j."departmentId" = :dep)'); rep.dep = f.departmentId; }
@@ -278,11 +331,13 @@ async function soCards(req, f) {
     WHERE ${where.join(' AND ')} ORDER BY sc."cardNo" DESC`, rep);
   const now = await clothNow(companyId);
   const cost = costMap(await chemLines(companyId), (l) => l.soCardId);
-  const rows = cards.map((c) => {
+  const pos = await cardPositions(companyId);
+  const place = (c) => pos.get(c.id) || { key: 'RETURN', text: 'Fabric return' };
+  const rows = cards.filter((c) => !f.status || place(c).key === positionKey(f.status)).map((c) => {
     const mine = now.filter((n) => n.soCardId === c.id);
     return {
-      soNo: c.cardNo, idNo: c.idNo, cardDate: c.cardDate, party: c.party, quality: c.quality, article: c.article, deliveryDate: c.deliveryDate,
-      lotCount: c.lotCount, lots: lotsText(c.lots), thaans: c.thaans, meters: round(c.meters), statusText: CARD_STATUS[c.status], currentDepartment: c.currentDepartment, wentTo: c.wentTo,
+      soCardId: c.id, soNo: c.cardNo, idNo: c.idNo, cardDate: c.cardDate, party: c.party, quality: c.quality, article: c.article, deliveryDate: c.deliveryDate,
+      lotCount: c.lotCount, lots: lotsText(c.lots), thaans: c.thaans, meters: round(c.meters), status: place(c).key, statusText: place(c).text, currentDepartment: c.currentDepartment, wentTo: c.wentTo,
       inProcessMeters: round(mine.filter((n) => n.stageKind === 'DEPARTMENT').reduce((t, n) => t + n.meters, 0)),
       atPackingMeters: round(mine.filter((n) => n.stageKind === 'PACKING').reduce((t, n) => t + n.meters, 0)),
       chemicalCost: nz(cost.get(c.id)), costPerMeter: c.meters ? round(nz(cost.get(c.id)) / c.meters) : 0, tag: c.isGreyReturn ? TAG : '',
@@ -350,7 +405,7 @@ async function soCardDetail(req, id) {
     col('gatePassNo', 'Gate pass#', 'number'), col('passDate', 'Gate pass date', 'date'), col('driverName', 'Driver'), col('vehicleNo', 'Vehicle'), col('destination', 'Going to')],
   lists.map((r) => ({ listNo: r.listNo, listDate: r.listDate, statusText: r.status === 'FINAL' ? 'Final' : 'Draft', meters: round(r.meters), gatePassNo: r.gatePassNo, passDate: r.passDate, driverName: r.driverName, vehicleNo: r.vehicleNo, destination: r.destination })), ['meters']);
   const head = { soNo: c.cardNo, idNo: c.idNo, cardDate: c.cardDate, party: c.party, partyCode: c.partyCode, quality: c.quality, article: c.article, description: c.description, deliveryDate: c.deliveryDate,
-    statusText: CARD_STATUS[c.status], currentDepartment: c.currentDepartment, totalMeters: round(c.totalMeters), instructions: c.instructions, tag: c.isGreyReturn ? TAG : null,
+    statusText: (await cardPositions(req.user.companyId)).get(id)?.text || 'Fabric return', currentDepartment: c.currentDepartment, totalMeters: round(c.totalMeters), instructions: c.instructions, tag: c.isGreyReturn ? TAG : null,
     chemicalCost: round(mineChem.reduce((t, l) => t + l.amount, 0)) };
   const out = respond(`SO card ${c.cardNo}`, { soCardId: id }, [lots, path, chemicals, where, packing], { export: true });
   out.header = head;
@@ -578,6 +633,11 @@ async function packingLists(req, f) {
   if (f.customerId) { where.push('sc."customerId" = :customerId'); rep.customerId = f.customerId; }
   if (f.soNo) { where.push('sc."cardNo" = :soNo'); rep.soNo = f.soNo; }
   if (f.status) { where.push('p.status = :status'); rep.status = f.status; }
+  if (f.qualityId) { where.push('sc."qualityId" = :qualityId'); rep.qualityId = f.qualityId; }
+  if (f.gatePass === 'yes') where.push('g.id IS NOT NULL');
+  if (f.gatePass === 'no') where.push('g.id IS NULL');
+  if (f.grade && f.view === 'lines') { where.push('l.grade = :grade'); rep.grade = f.grade; }
+  if (f.search) { where.push('(p."listNo"::text = :search OR sc."cardNo"::text = :search OR cu.name ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
   const head = `FROM packing_lists p JOIN so_cards sc ON sc.id = p."soCardId" JOIN customers cu ON cu.id = sc."customerId" LEFT JOIN gate_passes g ON g."packingListId" = p.id`;
   if (f.view === 'lines') {
     const rows = await q(`SELECT p."listNo", p."listDate", sc."cardNo" AS "soNo", cu.name AS party, gl."lotNo", l."thaanNo", l.grade, l.meters::float AS meters,
@@ -620,4 +680,4 @@ async function gatePasses(req, f) {
   return respond('Gate passes', f, [section('passes', 'Gate passes', columns, rows.map(({ customerId, ...r }) => r), ['thaans'])], f);
 }
 
-module.exports = { greyParties, greyLots, soCards, soCardMovement, soCardDetail, departmentSummary, departmentJobs, operators, chemicalUsage, chemicalStock, chemicalPurchases, folding, clothInProcess, packingLists, gatePasses };
+module.exports = { _x: { q, round, col, section, respond, clothNow, chemLines, needAnyService, myDepartments, hasReportService, STATUS_TEXT, CARD_STATUS, CARD_POSITIONS, cardPositions, positionKey, jobCards, costMap, lotsText }, greyParties, greyLots, soCards, soCardMovement, soCardDetail, departmentSummary, departmentJobs, operators, chemicalUsage, chemicalStock, chemicalPurchases, folding, clothInProcess, packingLists, gatePasses };
