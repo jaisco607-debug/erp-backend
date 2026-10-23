@@ -22,7 +22,8 @@ const { QueryTypes } = require('sequelize');
 const { sequelize } = require('../models');
 const AppError = require('../utils/AppError');
 
-const round = (n, d = 2) => Math.round((Number(n) || 0) * 10 ** d) / 10 ** d;
+const { round } = require('../utils/money');
+const { today } = require('../utils/dates');
 const q = (sql, replacements = {}) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
 const col = (key, label, type = 'text') => ({ key, label, type });
 const KIND_TEXT = { INWARD: 'Purchase', INWARD_UNDO: 'Purchase undone', INWARD_EDIT: 'Purchase corrected', VENDOR_RETURN: 'Returned to vendor', VENDOR_RETURN_UNDO: 'Vendor return cancelled', ISSUE: 'Issued to department', RETURN: 'Returned by department', ADJUST: 'Stock adjustment' };
@@ -371,7 +372,7 @@ async function vendorReturns(req, store, f) {
 
 /** How old the stock in the store is, batch by batch (by purchase date), per item. */
 async function stockAgeing(req, store, f) {
-  const asOf = f.date || new Date().toISOString().slice(0, 10);
+  const asOf = f.date || today();
   const rep = { companyId: req.user.companyId, store, asOf };
   let more = '';
   if (f.categoryId) { more += ' AND it."categoryId" = :categoryId'; rep.categoryId = f.categoryId; }

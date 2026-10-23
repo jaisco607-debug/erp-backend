@@ -1,0 +1,10 @@
+node_modules
+.git
+.env
+*.log
+coverage
+tests
+docs
+postman
+deploy
+*.tar.gz

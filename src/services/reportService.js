@@ -13,7 +13,7 @@ const { companyServices, userServices } = require('./accessService');
 const foldingService = require('./foldingService');
 const packingService = require('./packingService');
 
-const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const { round } = require('../utils/money');
 const q = (sql, replacements = {}, transaction) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT, transaction });
 const STATUS_TEXT = { IN_WAY: 'In-Way', QUEUE: 'Queue', PENDING: 'Pending', PROCESSING: 'Processing', COMPLETE: 'Complete', REJECTED: 'Rejected' };
 const TAG = 'Fabric return grey';
@@ -112,8 +112,8 @@ async function clothNow(companyId) {
 async function chemLines(companyId, f = {}) {
   const where = ['r."companyId" = :companyId', `r.status IN ('IN_WAY','DELIVERED')`];
   const rep = { companyId };
-  if (f.dateFrom) { where.push('r."sentAt"::date >= :dateFrom'); rep.dateFrom = f.dateFrom; }
-  if (f.dateTo) { where.push('r."sentAt"::date <= :dateTo'); rep.dateTo = f.dateTo; }
+  if (f.dateFrom) { where.push("(r.\"sentAt\" AT TIME ZONE 'Asia/Karachi')::date >= :dateFrom"); rep.dateFrom = f.dateFrom; }
+  if (f.dateTo) { where.push("(r.\"sentAt\" AT TIME ZONE 'Asia/Karachi')::date <= :dateTo"); rep.dateTo = f.dateTo; }
   return q(`
     WITH jm AS (SELECT "jobId", SUM(meters) AS tot FROM job_items GROUP BY "jobId"),
          cm AS (SELECT "jobId", "soCardId", SUM(meters) AS m FROM job_items GROUP BY "jobId", "soCardId")
@@ -322,7 +322,8 @@ async function soCards(req, f) {
   if (f.soNo) { where.push('sc."cardNo" = :soNo'); rep.soNo = f.soNo; }
   if (f.departmentId) { where.push('EXISTS (SELECT 1 FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardId" = sc.id AND j."departmentId" = :dep)'); rep.dep = f.departmentId; }
   const cards = await q(`
-    SELECT sc.id, sc."cardNo", sc."idNo", sc."cardDate", sc.status, sc."isGreyReturn", sc."deliveryDate", sc.article, cu.name AS party, qu.name AS quality, cd.name AS "currentDepartment",
+    SELECT sc.id, sc."cardNo", sc."idNo", sc."cardDate", sc.status, sc."isGreyReturn", sc."deliveryDate", sc.article, cu.name AS party, qu.name AS quality,
+           COALESCE((SELECT s2.name FROM job_items ji2 JOIN jobs j2 ON j2.id = ji2."jobId" AND j2.status <> 'REJECTED' JOIN services s2 ON s2.id = j2."departmentId" WHERE ji2."soCardId" = sc.id ORDER BY j2."createdAt" DESC, j2."jobNo" DESC LIMIT 1), cd.name) AS "currentDepartment",
            sc."totalMeters"::float AS meters, (SELECT count(*)::int FROM so_card_lots l WHERE l."soCardId" = sc.id) AS "lotCount",
            (SELECT array_agg(DISTINCT g."lotNo" ORDER BY g."lotNo") FROM so_card_lots l JOIN grey_lots g ON g.id = l."greyLotId" WHERE l."soCardId" = sc.id) AS lots,
            (SELECT count(*)::int FROM so_card_lot_thaans p JOIN so_card_lots l ON l.id = p."soCardLotId" WHERE l."soCardId" = sc.id) AS thaans,
