@@ -20,6 +20,10 @@ exports.setServices = async (req, res) => {
   res.json(await companyService.setServices(req, req.params.id, req.body.serviceIds));
 };
 
+exports.open = async (req, res) => {
+  res.json(await companyService.openCompany(req, req.params.id));
+};
+
 exports.newCode = async (req, res) => {
   res.json(await companyService.newCode(req, req.params.id));
 };
