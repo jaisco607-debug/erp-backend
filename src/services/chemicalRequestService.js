@@ -74,6 +74,7 @@ function json(r) {
     qtySplit: m.splitQty(l.qty, l.item.unit),
     sentQty: l.sentQty,
     returnedQty: l.returnedQty,
+    returnedValue: l.returnedValue, // money value of what was sent back (the store cost report needs it)
     returnedSplit: l.returnedQty ? m.splitQty(l.returnedQty, l.item.unit) : null,
     // what can still be sent back to the store
     returnableQty: r.status === 'DELIVERED' && l.sentQty ? m.round(l.sentQty - l.returnedQty, 3) : 0,
