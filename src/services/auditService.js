@@ -25,7 +25,10 @@ async function log(req, entry, options = {}) {
     {
       actorId: actor?.id ?? null,
       actorType: actor?.userType ?? (actor ? null : 'SYSTEM'),
-      actorEmail: actor?.email ?? entry.actorEmail ?? null,
+      // a super admin who opened a company: every action is recorded with the super admin's name
+      actorEmail: req?.impersonator && actor && actor === req.user
+        ? `${actor.email} (via super admin ${req.impersonator.email})`
+        : actor?.email ?? entry.actorEmail ?? null,
       companyId: entry.companyId !== undefined ? entry.companyId : actor?.companyId ?? null,
       action: entry.action,
       entityType: entry.entityType ?? null,
