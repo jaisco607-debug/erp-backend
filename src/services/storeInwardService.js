@@ -30,8 +30,27 @@ function lineUnits(e) {
   return units.size === 1 ? m.splitQty(e.totalQty, [...units][0]).text : null;
 }
 
-function json(e, withLines = true) {
-  const billed = m.round(e.amount + e.salesTax, 2);
+/** What went back to the vendor (posted returns only; cancelled ones are not counted), per entry and per line. */
+async function returnedOf(ids, transaction) {
+  const map = new Map();
+  if (!ids.length) return map;
+  const rows = await sequelize.query(`SELECT l."inwardId", l."inwardLineId", SUM(l.qty)::float AS qty, SUM(l.value)::float AS value
+    FROM store_vendor_return_lines l JOIN store_vendor_returns x ON x.id = l."returnId" AND x.status = 'POSTED'
+    WHERE l."inwardId" IN (:ids) GROUP BY l."inwardId", l."inwardLineId"`, { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction });
+  for (const r of rows) {
+    const x = map.get(r.inwardId) || { value: 0, lines: new Map() };
+    x.value = m.round(x.value + r.value, 2);
+    x.lines.set(r.inwardLineId, { qty: r.qty, value: r.value });
+    map.set(r.inwardId, x);
+  }
+  return map;
+}
+
+function json(e, withLines = true, ret = { value: 0, lines: new Map() }) {
+  const billedGross = m.round(e.amount + e.salesTax, 2);
+  // GST on the returned goods follows the entry's GST %; the bill balance falls by the returned value and its tax
+  const returnedTax = e.gstPercent ? m.round((ret.value * e.gstPercent) / 100, 2) : 0;
+  const balance = m.round(billedGross - ret.value - returnedTax, 2);
   const out = {
     id: e.id,
     store: e.store,
@@ -49,10 +68,14 @@ function json(e, withLines = true) {
     amount: e.amount,
     gstPercent: e.gstPercent,
     salesTax: e.salesTax,
+    returnedValue: ret.value,
+    returnedTax,
+    netAmount: m.round(e.amount - ret.value, 2),
+    hasReturns: ret.value > 0,
     totalQtyText: lineUnits(e),
-    billed,
+    billed: billedGross,
     paid: 0, // filled by the accounts module later
-    balance: billed,
+    balance, // bill less returned goods (and their GST)
     isApproved: e.isApproved,
     statusText: e.isApproved ? 'APPROVED' : 'UN-APPROVED',
     approvedAt: e.approvedAt,
@@ -68,6 +91,10 @@ function json(e, withLines = true) {
       unit: l.item.unit,
       rate: l.rate,
       amount: l.amount,
+      returnedQty: (ret.lines.get(l.id) || {}).qty || 0,
+      netQty: m.round(l.qty - ((ret.lines.get(l.id) || {}).qty || 0), 3),
+      returnedValue: (ret.lines.get(l.id) || {}).value || 0,
+      packType: l.packType, packCount: l.packCount, qtyPerPack: l.qtyPerPack,
     }));
   }
   return out;
@@ -78,7 +105,7 @@ async function findOr404(req, store, id, transaction) {
   if (!e) throw AppError.notFound('Inward entry');
   return e;
 }
-const load = async (id, transaction) => json(await StoreInward.findByPk(id, { include, transaction }));
+const load = async (id, transaction) => json(await StoreInward.findByPk(id, { include, transaction }), true, (await returnedOf([id], transaction)).get(id));
 
 /** Next numbers and every dropdown the entry screen needs, in one call. */
 async function formData(req, store) {
@@ -149,6 +176,7 @@ async function itemByName(req, store, line, transaction) {
 
 /** A line gives qty (3.5) or the two boxes qtyMain + qtySub (3 KG + 500 G). */
 function lineQty(l, unit) {
+  if (l.packCount) return m.round(l.packCount * l.qtyPerPack, 3); // 3 drums x 200 kg
   if (l.qty !== undefined) return l.qty;
   const sub = l.qtySub || 0;
   if (sub && !m.SUB_UNITS[unit]) throw AppError.rule('NO_SUB_UNIT', `${unit} has no small unit; enter the quantity in ${unit}`);
@@ -181,7 +209,10 @@ async function prepare(req, store, data, transaction) {
   const unitOf = Object.fromEntries(items.map((i) => [i.id, i.unit]));
   return data.lines.map((l, i) => {
     const qty = lineQty(l, unitOf[l.itemId]);
-    return { itemId: l.itemId, qty, rate: l.rate ?? null, amount: l.rate == null ? 0 : m.round(qty * l.rate, 2), sortOrder: i };
+    return {
+      itemId: l.itemId, qty, rate: l.rate ?? null, amount: l.rate == null ? 0 : m.round(qty * l.rate, 2), sortOrder: i,
+      packType: l.packCount ? l.packType || null : null, packCount: l.packCount || null, qtyPerPack: l.packCount ? l.qtyPerPack : null,
+    };
   });
 }
 
@@ -279,6 +310,101 @@ async function approveIn(req, store, id, transaction) {
   return after;
 }
 
+
+/**
+ * Fix an APPROVED entry (owner 2026-10-22): wrong quantity, rate, item, vendor, date, bill details.
+ * The whole entry is sent again; lines that already exist carry their lineId. The stock follows the change:
+ *  - header (vendor, date, DC#, GRN#, notes, GST) can always change;
+ *  - a line nothing was issued from can change in everything or be removed;
+ *  - a line that was already (partly) issued keeps its item and rate; its quantity can change but not below what was issued.
+ * Every change is a store movement ("Purchase corrected", dated on the purchase date) and is audited with the reason.
+ */
+async function correct(req, store, id, data) {
+  return sequelize.transaction(async (transaction) => {
+    const companyId = req.user.companyId;
+    const e = await findOr404(req, store, id, transaction);
+    if (!e.isApproved) throw AppError.rule('NOT_APPROVED', 'This entry is not approved yet; edit it normally');
+    const before = await load(id, transaction);
+    const reason = data.reason;
+    const fresh = await prepare(req, store, { ...data, lines: data.lines.map((l) => ({ ...l })) }, transaction);
+    fresh.forEach((l, i) => { l.lineId = data.lines[i].lineId || null; });
+    if (fresh.some((l) => l.rate === null)) throw AppError.rule('RATE_MISSING', 'Enter the rate of every item');
+    if (!(data.vendorId ?? e.vendorId)) throw AppError.rule('VENDOR_MISSING', 'Select the vendor');
+    const oldLines = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
+    const oldById = new Map(oldLines.map((l) => [l.id, l]));
+    for (const l of fresh) if (l.lineId && !oldById.has(l.lineId)) throw AppError.rule('UNKNOWN_LINE', 'A line of this entry was not found');
+    if (new Set(fresh.map((l) => l.lineId).filter(Boolean)).size !== fresh.filter((l) => l.lineId).length) throw AppError.rule('DUPLICATE_LINE', 'A line was sent twice');
+    const batchRows = await sequelize.query('SELECT id, "inwardLineId", "qtyIn"::float AS "qtyIn", "qtyLeft"::float AS "qtyLeft", rate::float AS rate FROM store_batches WHERE "inwardId" = :id FOR UPDATE',
+      { replacements: { id }, type: sequelize.QueryTypes.SELECT, transaction });
+    const batchOf = new Map(batchRows.map((b) => [b.inwardLineId, b]));
+    const itemIds = [...oldLines.map((l) => l.itemId), ...fresh.map((l) => l.itemId)];
+    const items = Object.fromEntries((await lockItems(itemIds, transaction)).map((i) => [i.id, i]));
+    const date = data.inwardDate || e.inwardDate;
+    const vendorId = data.vendorId === undefined ? e.vendorId : data.vendorId;
+    const move = (itemId, qty, value) => StoreMove.create({ companyId, store, itemId, moveDate: date, kind: 'INWARD_EDIT', qty, value, inwardId: id, createdById: req.user.id }, { transaction });
+    const change = (itemId, dq, dv) => {
+      const i = items[itemId];
+      i.stockQty = m.round(i.stockQty + dq, 3);
+      i.stockValue = i.stockQty === 0 ? 0 : m.round(i.stockValue + dv, 2);
+      if (i.stockQty < 0 || i.stockValue < 0) throw AppError.rule('STOCK_USED', `${i.name}: this stock has already been issued`);
+    };
+    const isUsed = (l) => { const b = batchOf.get(l.id); return !b || b.qtyLeft < b.qtyIn - 1e-9; };
+    const keptIds = new Set(fresh.map((l) => l.lineId).filter(Boolean));
+    // removed lines
+    for (const l of oldLines.filter((x) => !keptIds.has(x.id))) {
+      if (isUsed(l)) throw AppError.rule('LINE_USED', `${items[l.itemId].name}: this stock has already been issued, the line cannot be removed`);
+      change(l.itemId, -l.qty, -l.amount); await move(l.itemId, -l.qty, -l.amount);
+      await sequelize.query('DELETE FROM store_batches WHERE "inwardLineId" = :lid', { replacements: { lid: l.id }, transaction });
+      await l.destroy({ transaction });
+    }
+    const added = [];
+    for (const n of fresh) {
+      const o = n.lineId && oldById.get(n.lineId);
+      if (!o) { added.push(n); continue; }
+      const b = batchOf.get(o.id);
+      const same = o.itemId === n.itemId && Math.abs((o.rate ?? 0) - n.rate) < 1e-9;
+      if (!same && !isUsed(o)) {
+        // another item or rate and nothing issued: take the old line out and put the new one in
+        change(o.itemId, -o.qty, -o.amount); await move(o.itemId, -o.qty, -o.amount);
+        await sequelize.query('DELETE FROM store_batches WHERE "inwardLineId" = :lid', { replacements: { lid: o.id }, transaction });
+        await o.destroy({ transaction });
+        added.push(n);
+        continue;
+      }
+      // same item and rate (or part already issued): only the quantity changes
+      if (!same) throw AppError.rule('LINE_USED', `${items[o.itemId].name}: part of this stock was already issued, so its item and rate cannot change`);
+      const issued = m.round(b.qtyIn - b.qtyLeft, 3);
+      if (n.qty < issued - 1e-9) throw AppError.rule('QTY_BELOW_ISSUED', `${items[o.itemId].name}: ${issued} was already issued or returned to the vendor, the quantity cannot be less`);
+      const dq = m.round(n.qty - o.qty, 3);
+      if (dq !== 0) {
+        const dv = m.round(dq * b.rate, 2);
+        change(o.itemId, dq, dv); await move(o.itemId, dq, dv);
+        await sequelize.query('UPDATE store_batches SET "qtyIn" = "qtyIn" + :dq, "qtyLeft" = "qtyLeft" + :dq, "valueLeft" = "valueLeft" + :dv WHERE id = :bid', { replacements: { dq, dv, bid: b.id }, transaction });
+        o.qty = n.qty; o.amount = m.round(n.qty * b.rate, 2);
+      }
+      o.sortOrder = n.sortOrder; Object.assign(o, { packType: n.packType, packCount: n.packCount, qtyPerPack: n.qtyPerPack }); await o.save({ transaction });
+    }
+    for (const n of added) {
+      change(n.itemId, n.qty, n.amount); await move(n.itemId, n.qty, n.amount);
+      const row = await StoreInwardLine.create({ inwardId: id, itemId: n.itemId, qty: n.qty, rate: n.rate, amount: n.amount, sortOrder: n.sortOrder, packType: n.packType, packCount: n.packCount, qtyPerPack: n.qtyPerPack }, { transaction });
+      await batches.add(transaction, { companyId, store, itemId: n.itemId, source: 'INWARD', qty: n.qty, rate: n.qty ? n.amount / n.qty : n.rate, value: n.amount, inDate: date, inwardId: id, inwardLineId: row.id, vendorId });
+    }
+    for (const i of Object.values(items)) await i.save({ transaction });
+    // header; vendor and date follow into the batches and the old movements of this entry
+    for (const f of headerFields) if (data[f] !== undefined) e[f] = blank(data[f]);
+    if (store === 'GENERAL') e.billType = 'OTHER';
+    const all = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
+    Object.assign(e, totals(all.map((l) => ({ qty: l.qty, amount: l.amount }))));
+    applyGst(e);
+    await e.save({ transaction });
+    await sequelize.query('UPDATE store_batches SET "vendorId" = :vendorId, "inDate" = :date WHERE "inwardId" = :id', { replacements: { vendorId, date, id }, transaction });
+    await sequelize.query(`UPDATE store_moves SET "moveDate" = :date WHERE "inwardId" = :id AND kind IN ('INWARD', 'INWARD_UNDO', 'INWARD_EDIT')`, { replacements: { date, id }, transaction });
+    const after = await load(id, transaction);
+    await audit.log(req, { action: 'STORE_INWARD_CORRECTED', entityType: 'StoreInward', entityId: id, before, after: { ...after, correctionReason: reason } }, { transaction });
+    return after;
+  });
+}
+
 const approve = (req, store, id) => sequelize.transaction((t) => approveIn(req, store, id, t));
 
 async function unapprove(req, store, id) {
@@ -332,7 +458,8 @@ async function list(req, store, q) {
     where, include: [{ model: Vendor, as: 'vendor' }], order: [['inwardDate', 'DESC'], ['idNo', 'DESC']], limit: q.limit, offset: (q.page - 1) * q.limit,
   });
   const draftCount = await StoreInward.count({ where: { companyId: req.user.companyId, store, isApproved: false } });
-  const data = rows.map((e) => json(e, false));
+  const rets = await returnedOf(rows.map((e) => e.id));
+  const data = rows.map((e) => json(e, false, rets.get(e.id)));
   return { data, page: q.page, limit: q.limit, total: count, draftCount };
 }
 
@@ -410,7 +537,7 @@ async function itemStock(req, store, itemId) {
   };
 }
 
-const KIND_TEXT = { INWARD: 'Purchase', INWARD_UNDO: 'Purchase undone', ISSUE: 'Issued to department', RETURN: 'Returned by department', ADJUST: 'Stock adjustment' };
+const KIND_TEXT = { INWARD_EDIT: 'Purchase corrected', INWARD: 'Purchase', INWARD_UNDO: 'Purchase undone', ISSUE: 'Issued to department', RETURN: 'Returned by department', ADJUST: 'Stock adjustment' };
 
 /** One item's stock history (ledger): inwards now, issues to departments later. */
 async function itemMoves(req, store, itemId, q) {
@@ -487,4 +614,4 @@ function usageTotals(data) {
 }
 
 module.exports = {
-  itemBatches, lastInwards, itemUsage, batchUsage, itemStock, formData, list, get, create, update, remove, approve, unapprove, stock, itemMoves };
+  itemBatches, lastInwards, itemUsage, batchUsage, itemStock, formData, list, get, create, update, correct, remove, approve, unapprove, stock, itemMoves };

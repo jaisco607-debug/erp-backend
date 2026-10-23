@@ -4,12 +4,10 @@ const catalog = require('../src/services/chemicalCatalogService');
 
 beforeEach(clean);
 
-const row = (rep, where) => rep.rows.find((r) => Object.entries(where).every(([k, v]) => r[k] === v));
-
-test('reports: grey to gate pass, departments, chemical cost, folding, active fabric, packing, access', async () => {
+test('reports: every report answers with the right numbers', async () => {
   const company = await makeCompany();
   const s = {};
-  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'DYEING', 'FOLDING', 'PACKING', 'REPORT_OVERVIEW', 'REPORT_GREY', 'REPORT_SO_CARDS', 'REPORT_DEPARTMENTS', 'REPORT_CHEMICAL_COST', 'REPORT_FOLDING', 'REPORT_ACTIVE_FABRIC', 'REPORT_PACKING', 'REPORT_GATE_PASSES']) {
+  for (const code of ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'DYEING', 'FOLDING', 'PACKING']) {
     s[code] = await Service.findOne({ where: { code } });
     await CompanyService.create({ companyId: company.id, serviceId: s[code].id });
   }
@@ -18,178 +16,98 @@ test('reports: grey to gate pass, departments, chemical cost, folding, active fa
   const auth = { Authorization: `Bearer ${(await loginAs(admin)).accessToken}` };
   const api = (m, url, body) => request(app)[m](`/api/v1${url}`).set(auth).send(body);
 
-  // grey: AZ lot 1 (3 thaans, 300 m) + lot 2 (500 m, 100 m given back); BB lot 3 (2 thaans, 100 m)
-  const az = (await api('post', '/customers', { name: 'AZ' })).body;
-  const bb = (await api('post', '/customers', { name: 'BB' })).body;
+  const cu = (await api('post', '/customers', { code: 130, name: 'AZ' })).body;
   const q = (await api('post', '/qualities', { name: 'PC TWILL' })).body;
-  const lot1 = (await api('post', '/grey-lots', { inwardDate: '2026-10-15', customerId: az.id, qualityId: q.id, thaans: [100, 120, 80] })).body;
-  const lot2 = (await api('post', '/grey-lots', { inwardDate: '2026-10-15', customerId: az.id, qualityId: q.id, inwardMeters: 500, pieces: 5 })).body;
-  const lot3 = (await api('post', '/grey-lots', { inwardDate: '2026-10-16', customerId: bb.id, qualityId: q.id, thaans: [50, 50] })).body;
-  for (const l of [lot1, lot2, lot3]) await api('post', `/grey-lots/${l.id}/approve`);
-  await api('post', `/grey-lots/${lot2.id}/give-back`, { meters: 100, pieces: 1 });
+  const lot = (await api('post', '/grey-lots', { inwardDate: '2026-10-10', customerId: cu.id, qualityId: q.id, thaans: [100, 100, 100, 100] })).body;
+  await api('post', `/grey-lots/${lot.id}/approve`);
+  const lot2 = (await api('post', '/grey-lots', { inwardDate: '2026-10-10', customerId: cu.id, qualityId: q.id, inwardMeters: 500, pieces: 1 })).body;
+  await api('post', `/grey-lots/${lot2.id}/approve`);
+  // SO card: thaans 1-2 of lot 1; thaan 3 goes back as fabric return; thaan 4 and lot 2 stay in grey
+  const so = (await api('post', '/so-cards', { cardDate: '2026-10-11', lots: [{ greyLotId: lot.id, thaanNos: [1, 2] }] })).body;
+  const ret = (await api('post', '/grey-lots/fabric-return', { lots: [{ greyLotId: lot.id, thaanNos: [3] }] })).body;
 
-  // SO cards: A (lot 1, all thaans), B (lot 2, 200 m), C (BB lot 3 thaan 1, not sent)
-  const cardA = (await api('post', '/so-cards', { cardDate: '2026-10-16', lots: [{ greyLotId: lot1.id, thaanNos: [1, 2, 3] }] })).body;
-  const cardB = (await api('post', '/so-cards', { cardDate: '2026-10-16', lots: [{ greyLotId: lot2.id, meters: 200 }] })).body;
-  const cardC = (await api('post', '/so-cards', { cardDate: '2026-10-17', lots: [{ greyLotId: lot3.id, thaanNos: [1] }] })).body;
-  const fd = (await api('get', '/jobs/form-data')).body;
-  const rowOf = (card) => fd.rows.find((r) => r.soCard.id === card.id).soCardLotId;
-  const job1 = (await api('post', '/jobs', { departmentId: s.DYEING.id, items: [{ soCardLotId: rowOf(cardA) }] })).body;
-  const job2 = (await api('post', '/jobs', { departmentId: s.DYEING.id, items: [{ soCardLotId: rowOf(cardB) }] })).body;
-  await api('put', `/jobs/${job2.id}/status`, { status: 'PROCESSING' });
+  // grey parties: came 700, SO card 200, fabric return 100, in store 400 (thaan 4 + lot 2), SO card not sent 200 + return in Folding 100
+  let r = (await api('get', '/reports/grey/parties')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ party: 'AZ', lots: 2, inwardMeters: 900, soCardMeters: 200, fabricReturnMeters: 100, inStoreMeters: 600, notSentMeters: 200, inProcessMeters: 100 });
+  r = (await api('get', '/reports/cloth-now?groupBy=party_department')).body;
+  expect(r.sections[0].totals.meters).toBe(900);
 
-  // chemical: RED 2 kg at 100 for the whole job 1 = 200
+  // Dyeing with a chemical
   const red = await StoreItem.findOne({ where: { companyId: company.id, store: 'CHEMICAL', name: 'RED' } });
-  await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorName: 'ALI CHEM', lines: [{ itemId: red.id, qty: 10, rate: 100 }], approve: true });
-  await api('put', `/jobs/${job1.id}/status`, { status: 'PROCESSING' });
+  await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-12', vendorName: 'ALI', lines: [{ itemId: red.id, qty: 10, rate: 100 }], approve: true });
   await api('put', '/stores/chemical/department-access/DYEING', { add: [red.id] });
-  const cr = (await api('post', '/departments/DYEING/chemical-requests', { jobId: job1.id, lines: [{ itemId: red.id, qty: 2 }] })).body;
+  const fd = (await api('get', '/jobs/form-data')).body;
+  const dye = (await api('post', '/jobs', { departmentId: s.DYEING.id, items: fd.rows.filter((x) => x.soCard.id === so.id).map((x) => ({ soCardLotId: x.soCardLotId })) })).body;
+  await api('put', `/departments/DYEING/jobs/${dye.id}/status`, { status: 'PROCESSING' });
+  const cr = (await api('post', '/departments/DYEING/chemical-requests', { jobId: dye.id, lines: [{ itemId: red.id, qty: 2 }] })).body;
   await api('post', `/stores/chemical/requests/${cr.id}/accept`);
-  expect((await api('post', `/stores/chemical/requests/${cr.id}/send`)).body.status).toBe('IN_WAY');
+  await api('post', `/stores/chemical/requests/${cr.id}/send`);
+  await api('put', `/departments/DYEING/jobs/${dye.id}/status`, { status: 'COMPLETE' });
+  await api('put', `/departments/DYEING/jobs/${dye.id}/operator`, { operatorName: 'Aslam', processDate: '2026-10-18' });
 
-  // job 1: Dyeing -> Folding (grade) -> Packing -> packing list -> gate pass
-  await api('put', `/departments/DYEING/jobs/${job1.id}/status`, { status: 'COMPLETE' });
-  await api('put', `/departments/DYEING/jobs/${job1.id}/operator`, { operatorName: 'Aslam', processDate: '2026-10-17' });
+  r = (await api('get', '/reports/chemicals/usage')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ department: 'Dyeing', jobNo: dye.jobNo, soNo: so.cardNo, chemical: 'RED', qty: 2, amount: 200, meters: 200, thaans: 2 });
+  expect((await api('get', '/reports/chemicals/usage?groupBy=chemical')).body.sections[0].totals.amount).toBe(200);
+  expect((await api('get', '/reports/chemicals/stock')).body.sections[0].totals).toMatchObject({ qty: 8, value: 800 });
+  expect((await api('get', '/reports/chemicals/purchases')).body.sections[0].totals.amount).toBe(1000);
+
+  r = (await api('get', '/reports/departments/summary')).body;
+  expect(r.sections[0].rows.find((x) => x.department === 'Dyeing')).toMatchObject({ jobs: 1, soCards: 1, lots: 1, thaans: 2, meters: 200, doneMeters: 200, chemicalCost: 200 });
+  r = (await api('get', '/reports/departments/DYEING/jobs')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ operatorName: 'Aslam', lots: String(lot.lotNo), meters: 200, chemicalCost: 200, costPerMeter: 1 });
+  r = (await api('get', '/reports/operators')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ department: 'Dyeing', operator: 'Aslam', jobs: 1, meters: 200, chemicalCost: 200 });
+
+  // to Folding, graded, to Packing
   const form = (await api('get', '/departments/DYEING/send-form')).body;
-  const fold = (await api('post', '/departments/DYEING/send', { toDepartmentCode: 'FOLDING', items: [{ jobItemId: form.rows.find((r) => r.soCard.id === cardA.id).jobItemId }] })).body;
+  const fold = (await api('post', '/departments/DYEING/send', { toDepartmentCode: 'FOLDING', items: form.rows.map((x) => ({ jobItemId: x.jobItemId })) })).body;
   await api('post', `/departments/FOLDING/jobs/${fold.id}/accept`);
-  const ls = (await api('get', `/departments/FOLDING/folding/${fold.id}/${cardA.id}`)).body.lots[0].lines;
-  await api('put', `/departments/FOLDING/folding/${fold.id}/${cardA.id}/grades`, { lines: [
-    { greyLotId: lot1.id, thaanId: ls[0].thaanId, a: 100 }, { greyLotId: lot1.id, thaanId: ls[1].thaanId, b: 120 }, { greyLotId: lot1.id, thaanId: ls[2].thaanId, a: 80 },
-  ] });
-  const pack = (await api('post', `/departments/FOLDING/folding/${fold.id}/${cardA.id}/send-packing`, { keepRemaining: false })).body.packingJob;
-  await api('post', `/departments/PACKING/jobs/${pack.id}/accept`);
+  const url = `/departments/FOLDING/folding/${fold.id}/${so.id}`;
+  const row = (await api('get', url)).body;
+  await api('put', `${url}/grades`, { lines: row.lots[0].lines.map((l) => ({ greyLotId: lot.id, thaanId: l.thaanId, a: 90, b: 5 })) });
+  await api('post', `${url}/send-packing`, { keepRemaining: false });
+  r = (await api('get', '/reports/folding')).body;
+  const fr = r.sections[0].rows.find((x) => x.soNo === so.cardNo);
+  expect(fr).toMatchObject({ fromDepartment: 'Dyeing', receivedMeters: 200, aMeters: 180, bMeters: 10, diff: -10, sentToPacking: 190, leftInFolding: 0, thaans: 2, chemicalCost: 200 });
 
-  // before the gate pass, the cloth is still in packing
-  let active = (await api('get', '/reports/active-fabric?by=party')).body;
-  expect(row(active, { party: `AZ (${az.code})` })).toMatchObject({ inProcessMeters: 200, inFoldingMeters: 0, inPackingMeters: 300, activeMeters: 500 });
-
-  const pf = (await api('get', `/departments/PACKING/packing/so-cards/${cardA.id}/form`)).body;
-  const pl = (await api('post', '/departments/PACKING/packing-lists', {
-    soCardId: cardA.id, rateA: 50, rateB: 20,
-    lines: pf.lots[0].thaans.map((t) => ({ greyLotId: lot1.id, thaanId: t.thaanId, grade: t.suggestedLines[0].grade, meters: t.suggestedLines[0].meters })),
-  })).body;
+  // fabric return goes Folding -> Packing as it is
+  const fi = (await api('get', '/departments/FOLDING/incoming')).body.data.find((j) => j.soNos.includes(ret.cardNo));
+  await api('post', `/departments/FOLDING/jobs/${fi.id}/accept`);
+  await api('post', `/departments/FOLDING/folding/${fi.id}/${ret.id}/send-packing`, {});
+  for (const j of (await api('get', '/departments/PACKING/incoming')).body.data) await api('post', `/departments/PACKING/jobs/${j.id}/accept`);
+  const pf = (await api('get', `/departments/PACKING/packing/so-cards/${so.id}/form`)).body;
+  const pl = (await api('post', '/departments/PACKING/packing-lists', { soCardId: so.id, rateA: 10, lines: pf.lots[0].thaans.flatMap((t) => [{ greyLotId: lot.id, thaanId: t.thaanId, grade: 'A', meters: 90 }, { greyLotId: lot.id, thaanId: t.thaanId, grade: 'B', meters: 5 }]) })).body;
   await api('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1', passDate: '2030-01-01' });
+  await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1', destination: 'Lahore' });
 
-  // ---- catalog ----
-  const cat = (await api('get', '/reports')).body;
-  expect(cat.reports.length).toBeGreaterThan(10);
-  expect(cat.departments.map((d) => d.code)).toEqual(expect.arrayContaining(['DYEING', 'FOLDING', 'PACKING']));
+  r = (await api('get', '/reports/packing-lists')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ listNo: 1, thaans: 2, aMeters: 180, bMeters: 10, meters: 190, amount: 1800, gatePassNo: 1 });
+  expect((await api('get', '/reports/packing-lists?view=lines')).body.sections[0].totals.meters).toBe(190);
+  r = (await api('get', '/reports/gate-passes')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ gatePassNo: 1, driverName: 'Akram', vehicleNo: 'LEA-1', thaans: 2 });
 
-  // ---- grey ----
-  const parties = (await api('get', '/reports/grey/parties')).body;
-  expect(parties.columns.find((c) => c.key === 'inwardMeters')).toMatchObject({ type: 'meters', total: true });
-  expect(row(parties, { customer: 'AZ' })).toMatchObject({
-    lots: 2, inwardMeters: 800, returnedMeters: 100, soCardMeters: 500, greyStockMeters: 200,
-    soDeskMeters: 0, inProcessMeters: 200, inPackingMeters: 0, activeMeters: 200, packedMeters: 300, dispatchedMeters: 300,
-  });
-  expect(row(parties, { customer: 'BB' })).toMatchObject({ inwardMeters: 100, soCardMeters: 50, greyStockMeters: 50, greyStockThaans: 1, soDeskMeters: 50 });
-  expect(parties.totals).toMatchObject({ inwardMeters: 900, greyStockMeters: 250 });
-  expect((await api('get', `/reports/grey/parties?customerId=${bb.id}`)).body.total).toBe(1);
-  expect((await api('get', '/reports/grey/parties?dateFrom=2026-10-16')).body.rows.map((r) => r.customer)).toEqual(['BB']);
+  // parties now: 200 + 100 reached Packing, 190 on lists, 190 gone with a gate pass
+  r = (await api('get', '/reports/grey/parties')).body;
+  expect(r.sections[0].rows[0]).toMatchObject({ inStoreMeters: 600, atPackingMeters: 290, packedMeters: 190, dispatchedMeters: 190, inProcessMeters: 0, notSentMeters: 0 });
+  r = (await api('get', '/reports/grey/lots?status=in_store')).body;
+  expect(r.sections[0].rows.map((x) => x.inStoreMeters).sort()).toEqual([100, 500]);
 
-  const lots = (await api('get', '/reports/grey/lots')).body;
-  expect(row(lots, { lotNo: lot1.lotNo })).toMatchObject({ thaans: 3, inwardMeters: 300, balanceMeters: 0, freeThaans: 0, dispatchedMeters: 300, soCards: String(cardA.cardNo) });
-  expect(row(lots, { lotNo: lot2.lotNo })).toMatchObject({ returnedMeters: 100, balanceMeters: 200, activeMeters: 200 });
-  expect((await api('get', '/reports/grey/lots?stock=in-stock')).body.total).toBe(2);
-  expect((await api('get', '/reports/grey/returns')).body).toMatchObject({ total: 1, totals: { meters: 100 } });
+  // SO card reports
+  r = (await api('get', '/reports/so-cards')).body;
+  expect(r.sections[0].rows.find((x) => x.soNo === so.cardNo)).toMatchObject({ lotCount: 1, thaans: 2, meters: 200, atPackingMeters: 190, chemicalCost: 200, wentTo: 'Dyeing, Folding, Packing' });
+  expect((await api('get', '/reports/so-cards?isGreyReturn=true')).body.total).toBe(1);
+  r = (await api('get', '/reports/so-cards/movement')).body;
+  expect(r.sections[0].rows.map((x) => x.department).sort()).toEqual(['Dyeing', 'Folding', 'Folding', 'Packing', 'Packing']);
+  r = (await api('get', `/reports/so-cards/${so.id}`)).body;
+  expect(r.header).toMatchObject({ soNo: so.cardNo, party: 'AZ', chemicalCost: 200 });
+  expect(r.sections.map((x) => x.key)).toEqual(['lots', 'path', 'chemicals', 'now', 'packing']);
+  expect(r.sections[1].rows.map((x) => x.department)).toEqual(['Dyeing', 'Folding', 'Packing']);
+  expect(r.sections[0].rows[0].thaanNos).toBe('1, 2');
+  expect(r.sections[4].rows[0]).toMatchObject({ listNo: 1, gatePassNo: 1, vehicleNo: 'LEA-1' });
 
-  // ---- SO cards ----
-  const cards = (await api('get', '/reports/so-cards')).body;
-  expect(row(cards, { cardNo: cardA.cardNo })).toMatchObject({ lots: 1, thaans: 3, meters: 300, departments: 'Dyeing > Folding > Packing', chemicalCost: 200, dispatchedMeters: 300, packingLists: 1, gatePasses: 1 });
-  expect(row(cards, { cardNo: cardB.cardNo })).toMatchObject({ inProcessMeters: 200, departments: 'Dyeing' });
-  expect(row(cards, { cardNo: cardC.cardNo })).toMatchObject({ soDeskMeters: 50, sentMeters: 0, departments: '' });
-  expect((await api('get', `/reports/so-cards?departmentId=${s.FOLDING.id}`)).body.total).toBe(1);
-  const cl = (await api('get', `/reports/so-cards/lots?soCardId=${cardA.id}`)).body;
-  expect(cl.rows[0]).toMatchObject({ lotNo: lot1.lotNo, thaans: 3, thaanNos: '1 (100), 2 (120), 3 (80)', meters: 300 });
-
-  const detail = (await api('get', `/reports/so-cards/${cardA.id}`)).body;
-  expect(detail.header).toMatchObject({ cardNo: cardA.cardNo, chemicalCost: 200, cloth: { dispatchedMeters: 300 } });
-  const t = (k) => detail.tables.find((x) => x.key === k);
-  expect(t('journey').rows.map((r) => r.department)).toEqual(['Dyeing', 'Folding', 'Packing']);
-  expect(t('journey').rows[0]).toMatchObject({ operatorName: 'Aslam', chemicalCost: 200, thaans: 3 });
-  expect(t('chemicals').rows).toEqual([expect.objectContaining({ department: 'Dyeing', chemical: 'RED', qty: 2, value: 200 })]);
-  expect(t('thaans').rows.map((r) => r.chemicalCost)).toEqual([66.67, 80, 53.33]);
-  expect(t('folding').totals).toMatchObject({ a: 180, b: 120, sent: 300 });
-  expect(t('packing').rows[0]).toMatchObject({ thaans: 3, meters: 300, amount: 11400, gatePassNo: 1, vehicleNo: 'LEA-1' });
-  expect((await api('get', '/reports/so-cards/00000000-0000-4000-8000-000000000000')).status).toBe(404);
-
-  // ---- departments ----
-  const deps = (await api('get', '/reports/departments')).body;
-  expect(row(deps, { department: 'Dyeing' })).toMatchObject({ jobs: 2, soCards: 2, thaans: 3, meters: 500, processingMeters: 200, completeMeters: 300, chemicalCost: 200, costPerMeter: 0.4, activeNowMeters: 200 });
-  expect(row(deps, { department: 'Folding' })).toMatchObject({ jobs: 1, meters: 300, activeNowMeters: 0 });
-  expect(row(deps, { department: 'Packing' })).toMatchObject({ jobs: 1, activeNowMeters: 0 });
-
-  const jobs = (await api('get', `/reports/departments/jobs?departmentId=${s.DYEING.id}`)).body;
-  expect(jobs.total).toBe(2);
-  expect(row(jobs, { jobNo: job1.jobNo })).toMatchObject({ fromDepartment: 'SO Card', cardNo: cardA.cardNo, thaans: 3, meters: 300, status: 'Complete', operatorName: 'Aslam', chemicalCost: 200 });
-  expect((await api('get', '/reports/departments/jobs?operatorName=asl')).body.total).toBe(1);
-
-  const ops = (await api('get', `/reports/departments/operators?departmentId=${s.DYEING.id}`)).body;
-  expect(row(ops, { operatorName: 'Aslam' })).toMatchObject({ jobs: 1, completeJobs: 1, soCards: 1, thaans: 3, meters: 300, chemicalCost: 200 });
-  expect(row(ops, { operatorName: '(not entered)' })).toMatchObject({ meters: 200 });
-
-  // ---- chemical cost ----
-  const byCard = (await api('get', '/reports/chemical-cost')).body;
-  expect(byCard).toMatchObject({ total: 1, totalCost: 200, totals: { value: 200 } });
-  expect(byCard.rows[0]).toMatchObject({ department: 'Dyeing', cardNo: cardA.cardNo, meters: 300, value: 200, chemicalNames: 'RED' });
-  const byThaan = (await api('get', '/reports/chemical-cost?by=thaan')).body;
-  expect(byThaan.rows.map((r) => [r.thaanNo, r.meters, r.value])).toEqual([[1, 100, 66.67], [2, 120, 80], [3, 80, 53.33]]);
-  expect((await api('get', '/reports/chemical-cost?by=chemical')).body.rows[0]).toMatchObject({ lotNo: lot1.lotNo, chemical: 'RED', qty: 2, value: 200 });
-  expect((await api('get', '/reports/chemical-cost?by=item')).body.rows[0]).toMatchObject({ chemical: 'RED', qty: 2, avgRate: 100, soCards: 1 });
-  expect((await api('get', '/reports/chemical-cost?dateTo=2000-01-01')).body.total).toBe(0);
-
-  // ---- folding ----
-  const f = (await api('get', '/reports/folding')).body;
-  expect(f.rows[0]).toMatchObject({ fromDepartment: 'Dyeing', cardNo: cardA.cardNo, thaans: 3, receivedMeters: 300, aMeters: 180, bMeters: 120, sentToPackingMeters: 300, leftInFoldingMeters: 0, chemicalCost: 200 });
-  expect((await api('get', '/reports/folding?by=party')).body.rows[0]).toMatchObject({ name: `AZ (${az.code})`, receivedMeters: 300 });
-  expect((await api('get', '/reports/folding?by=from-department')).body.rows[0]).toMatchObject({ name: 'Dyeing', jobs: 1 });
-  expect((await api('get', '/reports/folding?tab=open')).body.total).toBe(0);
-
-  // ---- active fabric (after the gate pass) ----
-  active = (await api('get', '/reports/active-fabric?by=party')).body;
-  expect(row(active, { party: `AZ (${az.code})` })).toMatchObject({ inProcessMeters: 200, inPackingMeters: 0, activeMeters: 200 });
-  expect(row(active, { party: `BB (${bb.code})` })).toMatchObject({ soDeskMeters: 50, activeMeters: 0 });
-  const byDept = (await api('get', '/reports/active-fabric?by=department')).body;
-  expect(row(byDept, { department: 'SO Card (not sent)' })).toMatchObject({ meters: 50 });
-  expect(row(byDept, { department: 'Dyeing' })).toMatchObject({ processingMeters: 200, meters: 200, soCards: 1 });
-  expect(row(byDept, { department: 'Packing' })).toMatchObject({ meters: 0 });
-  const detailRows = (await api('get', '/reports/active-fabric?by=detail')).body;
-  expect(detailRows.rows).toEqual([expect.objectContaining({ department: 'Dyeing', status: 'Processing', cardNo: cardB.cardNo, meters: 200 })]);
-  expect((await api('get', `/reports/active-fabric?by=party&departmentId=${s.DYEING.id}`)).body.error.code).toBe('BAD_FILTER');
-
-  // ---- packing, gate passes ----
-  const lists = (await api('get', '/reports/packing-lists')).body;
-  expect(lists.rows[0]).toMatchObject({ status: 'Final', cardNo: cardA.cardNo, thaans: 3, aMeters: 180, bMeters: 120, meters: 300, amount: 11400, gatePassNo: 1 });
-  expect((await api('get', '/reports/packing-lists?gatePass=no')).body.total).toBe(0);
-  const lines = (await api('get', '/reports/packing-lists/lines?grade=B')).body;
-  expect(lines.rows).toEqual([expect.objectContaining({ thaanNo: 2, grade: 'B', meters: 120, rate: 20, amount: 2400 })]);
-  const gp = (await api('get', '/reports/gate-passes?search=lea')).body;
-  expect(gp.rows[0]).toMatchObject({ gatePassNo: 1, thaans: 3, meters: 300, driverName: 'Akram', party: `AZ (${az.code})` });
-
-  // ---- overview, paging, download ----
-  const ov = (await api('get', '/reports/overview')).body;
-  expect(ov.summary).toMatchObject({ grey: { lots: 3, inward: 900 }, chemicalCost: 200, gatePasses: { passes: 1, meters: 300 }, now: { activeMeters: 200, soDeskMeters: 50 } });
-  const p1 = (await api('get', '/reports/grey/lots?limit=1')).body;
-  expect(p1).toMatchObject({ total: 3, page: 1, limit: 1, totals: { inwardMeters: 900 } });
-  expect(p1.rows).toHaveLength(1);
-  expect((await api('get', '/reports/grey/lots?limit=1&all=true')).body.rows).toHaveLength(3);
-  expect((await api('get', '/reports/grey/lots?dateFrom=16-10-2026')).status).toBe(400);
-
-  // ---- access: every report group is its own service ----
-  const user = await makeUser({ userType: 'USER', companyId: company.id });
-  const uauth = { Authorization: `Bearer ${(await loginAs(user)).accessToken}` };
-  const asUser = (url) => request(app).get(`/api/v1${url}`).set(uauth);
-  expect((await asUser('/reports/grey/parties')).status).toBe(403);
-  expect((await asUser('/reports')).status).toBe(403);
-  await api('put', `/users/${user.id}/services`, { services: [{ serviceId: s.REPORT_GREY.id, access: 'VIEW' }] });
-  expect((await asUser('/reports/grey/parties')).status).toBe(200);
-  expect((await asUser('/reports/so-cards')).status).toBe(403);
-  expect((await asUser('/reports/overview')).status).toBe(403);
-  expect((await asUser('/reports/gate-passes')).status).toBe(403);
-  const mine = (await asUser('/reports')).body;
-  expect(mine.reports.map((r) => r.key)).toEqual(['grey-parties', 'grey-lots', 'grey-returns']);
-  expect(mine.reports[0].service).toBe('REPORT_GREY');
-  expect((await api('get', '/reports')).body.reports).toHaveLength(16);
+  // export returns every row; a department person only sees his departments
+  expect((await api('get', '/reports/so-cards?export=true&limit=1')).body.export).toBe(true);
+  const clerk = await makeUser({ userType: 'USER', companyId: company.id });
+  const cauth = { Authorization: `Bearer ${(await loginAs(clerk)).accessToken}` };
+  expect((await request(app).get('/api/v1/reports/grey/parties').set(cauth)).status).toBe(403);
 });

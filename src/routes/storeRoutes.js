@@ -17,6 +17,7 @@ const deptChem = require('../services/departmentChemicalService');
 const { Joi } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
 
+const ymdDay = ymdDate();
 const SERVICE = { chemical: 'CHEMICAL_STORE', general: 'GENERAL_STORE' };
 const admin = requireUserType('CLIENT_ADMIN');
 
@@ -47,6 +48,7 @@ function crud(r, path, rules, ctl, viewMw, fullMw) {
 
 const vendors = express.Router();
 vendors.use(authenticate);
+vendors.get('/options', eitherStore('VIEW'), (req, res) => res.json({ statuses: v.VENDOR_STATUS, types: v.VENDOR_TYPES, payments: v.VENDOR_PAYMENT, provinces: ['Sindh', 'Punjab', 'Khyber Pakhtunkhwa', 'Balochistan', 'Islamabad', 'Gilgit-Baltistan', 'Azad Kashmir'] }));
 vendors.get('/', eitherStore('VIEW'), validate(v.vendor.list), c.vendor.list);
 vendors.post('/', eitherStore('FULL'), validate(v.vendor.create), c.vendor.create);
 vendors.get('/:id', eitherStore('VIEW'), validate(v.vendor.get), c.vendor.get);
@@ -70,6 +72,27 @@ stores.get('/:store/items/:id/usage', view, validate({ params: idP }), async (re
 stores.get('/:store/batches/:id/usage', view, validate({ params: idP }), async (req, res) => res.json(await inw.batchUsage(req, req.store, req.params.id)));
 stores.get('/:store/stock', view, validate({ query: v.stock.query }), c.stock);
 
+// bought stock sent back to the vendor (owner 2026-10-22)
+stores.get('/:store/vendor-returns/returnable', view, validate(v.vendorReturn.returnable), c.vendorReturn.returnable);
+stores.get('/:store/vendor-returns', view, validate(v.vendorReturn.list), c.vendorReturn.list);
+stores.post('/:store/vendor-returns', full, validate(v.vendorReturn.create), c.vendorReturn.create);
+stores.get('/:store/vendor-returns/:id', view, validate(v.vendorReturn.get), c.vendorReturn.get);
+stores.post('/:store/vendor-returns/:id/cancel', full, validate(v.vendorReturn.cancel), c.vendorReturn.cancel);
+
+// store reports and ledgers (owner 2026-10-22): the Store Reports service, every report has ?export=true for PDF / Excel
+const storeReport = require('../services/storeReportService');
+const reportQuery = Joi.object({
+  page: Joi.number().integer().min(1).default(1), limit: Joi.number().integer().min(1).max(100000).default(100), export: Joi.boolean().default(false),
+  dateFrom: ymdDay, dateTo: ymdDay, date: ymdDay, itemId: Joi.string().guid(), categoryId: Joi.string().guid(), vendorId: Joi.string().guid(), departmentId: Joi.string().guid(),
+  kind: Joi.string().valid('INWARD', 'INWARD_UNDO', 'INWARD_EDIT', 'ISSUE', 'RETURN', 'ADJUST', 'VENDOR_RETURN', 'VENDOR_RETURN_UNDO'), jobNo: Joi.number().integer().min(1), operator: Joi.string().trim().max(80),
+  groupBy: Joi.string().valid('none', 'chemical', 'department', 'job', 'so_card'), showZero: Joi.boolean().default(false),
+});
+stores.get('/:store/reports/:name', (req, res, next) => (storeReport.REPORTS[req.params.name] ? next() : next(AppError.notFound('Report'))),
+  (req, res, next) => (storeReport.CHEMICAL_ONLY.has(req.params.name) && req.params.store.toLowerCase() !== 'chemical' ? next(AppError.notFound('Report')) : next()),
+  (req, res, next) => { req.store = String(req.params.store).toLowerCase(); return SERVICE[req.store] ? next() : next(AppError.notFound('Store')); },
+  requireService('STORE_REPORTS', 'VIEW'), validate({ query: reportQuery }),
+  async (req, res) => res.json(await storeReport.REPORTS[req.params.name](req, req.store.toUpperCase(), req.validatedQuery)));
+
 // Chemical Store decides which chemicals each department sees (chemical store only)
 const chemicalOnly = (req, res, next) => (String(req.params.store).toLowerCase() === 'chemical' ? next() : next(AppError.notFound('Page')));
 const deptParam = Joi.object({ store: Joi.string(), departmentId: Joi.string().max(60).required() });
@@ -86,6 +109,7 @@ stores.get('/:store/inwards/:id', view, validate(v.inward.get), c.inward.get);
 stores.patch('/:store/inwards/:id', full, validate(v.inward.update), c.inward.update);
 stores.delete('/:store/inwards/:id', full, validate(v.inward.get), c.inward.remove);
 stores.post('/:store/inwards/:id/approve', full, validate(v.inward.get), c.inward.approve);
+stores.post('/:store/inwards/:id/correct', full, validate(v.inward.correct), c.inward.correct);
 stores.post('/:store/inwards/:id/unapprove', admin, full, validate(v.inward.get), c.inward.unapprove);
 
 // Chemical requests from departments (Step 8): Queue -> Process -> In-Way -> Delivered

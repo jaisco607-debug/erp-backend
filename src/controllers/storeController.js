@@ -28,6 +28,7 @@ exports.inward = {
     await inwards.remove(req, req.store, req.params.id);
     res.status(204).end();
   },
+  correct: async (req, res) => res.json(await inwards.correct(req, req.store, req.params.id, req.body)),
   approve: async (req, res) => res.json(await inwards.approve(req, req.store, req.params.id)),
   unapprove: async (req, res) => res.json(await inwards.unapprove(req, req.store, req.params.id)),
 };
@@ -35,3 +36,12 @@ exports.inward = {
 exports.stock = async (req, res) => res.json(await inwards.stock(req, req.store, req.validatedQuery));
 exports.itemStock = async (req, res) => res.json(await inwards.itemStock(req, req.store, req.params.id));
 exports.itemMoves = async (req, res) => res.json(await inwards.itemMoves(req, req.store, req.params.id, req.validatedQuery));
+
+const vendorReturns = require('../services/vendorReturnService');
+exports.vendorReturn = {
+  list: async (req, res) => res.json(await vendorReturns.list(req, req.store, req.validatedQuery)),
+  returnable: async (req, res) => res.json(await vendorReturns.returnable(req, req.store, req.validatedQuery)),
+  get: async (req, res) => res.json(await vendorReturns.get(req, req.store, req.params.id)),
+  create: async (req, res) => res.status(201).json(await vendorReturns.create(req, req.store, req.body)),
+  cancel: async (req, res) => res.json(await vendorReturns.cancel(req, req.store, req.params.id, req.body)),
+};

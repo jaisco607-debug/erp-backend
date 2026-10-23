@@ -9,7 +9,11 @@ const audit = require('./auditService');
 const { round } = require('../utils/money');
 const avgRate = (i) => (i.stockQty > 0 ? round(i.stockValue / i.stockQty, 4) : 0);
 
-const vendorJSON = (v) => ({ id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, label: `${v.name} (${v.code})` });
+const VENDOR_FIELDS = ['legalName', 'status', 'type', 'payment', 'cnic', 'ntn', 'gstNo', 'email', 'city', 'province', 'bankName', 'bankBranch', 'accountTitle', 'accountNo', 'iban'];
+const vendorJSON = (v) => ({
+  id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, label: `${v.name} (${v.code})`,
+  ...Object.fromEntries(VENDOR_FIELDS.map((f) => [f, v[f] ?? null])),
+});
 const namedJSON = (r) => ({ id: r.id, name: r.name, isActive: r.isActive });
 /**
  * Kg and grams (litres and ml) are shown apart, never as 3.5 kg:
@@ -43,15 +47,17 @@ const itemJSON = (i) => ({
   subUnit: SUB_UNITS[i.unit] || null,
   avgRate: avgRate(i),
   stockValue: i.stockValue,
+  reorderLevel: i.reorderLevel ?? null,
+  isLow: i.reorderLevel != null && i.stockQty <= i.reorderLevel,
   isActive: i.isActive,
 });
 const itemInclude = [{ model: StoreCategory, as: 'category' }, { model: StoreBrand, as: 'brand' }];
 
 const KINDS = {
-  vendor: { Model: Vendor, json: vendorJSON, entity: 'Vendor', fields: ['name', 'phone', 'address', 'isActive'], shared: true },
+  vendor: { Model: Vendor, json: vendorJSON, entity: 'Vendor', fields: ['name', 'phone', 'address', 'isActive', ...VENDOR_FIELDS], shared: true },
   category: { Model: StoreCategory, json: namedJSON, entity: 'StoreCategory', fields: ['name', 'isActive'] },
   brand: { Model: StoreBrand, json: namedJSON, entity: 'StoreBrand', fields: ['name', 'isActive'] },
-  item: { Model: StoreItem, json: itemJSON, entity: 'StoreItem', fields: ['name', 'unit', 'categoryId', 'brandId', 'isActive'], include: itemInclude },
+  item: { Model: StoreItem, json: itemJSON, entity: 'StoreItem', fields: ['name', 'unit', 'categoryId', 'brandId', 'reorderLevel', 'isActive'], include: itemInclude },
 };
 
 const scope = (kind, req, store) => (KINDS[kind].shared ? { companyId: req.user.companyId } : { companyId: req.user.companyId, store });
@@ -71,6 +77,11 @@ async function nameTaken(kind, req, store, name, exceptId, transaction, category
   return Boolean(await KINDS[kind].Model.findOne({ where, transaction }));
 }
 
+/** The Chemical Store counts in kilograms or litres only. */
+function checkUnit(store, unit) {
+  if (store === 'CHEMICAL' && unit && !['KG', 'LTR'].includes(unit)) throw AppError.rule('CHEMICAL_UNIT', 'A chemical is counted in KG or LTR');
+}
+
 /** An item's category and brand must be of the same company and store. */
 async function checkLinks(req, store, data, transaction) {
   for (const [field, Model, label] of [['categoryId', StoreCategory, 'CATEGORY'], ['brandId', StoreBrand, 'BRAND']]) {
@@ -81,7 +92,7 @@ async function checkLinks(req, store, data, transaction) {
   }
 }
 
-async function list(kind, req, store, { page, limit, search, isActive, categoryId, brandId }) {
+async function list(kind, req, store, { page, limit, search, isActive, categoryId, brandId, export: exporting }) {
   const { Model, json, include } = KINDS[kind];
   const where = scope(kind, req, store);
   if (isActive !== undefined) where.isActive = isActive;
@@ -92,8 +103,29 @@ async function list(kind, req, store, { page, limit, search, isActive, categoryI
     if (kind === 'vendor' && /^\d+$/.test(search)) or.push({ code: Number(search) });
     where[Op.or] = or;
   }
+  if (exporting) return exportList(kind, await Model.findAll({ where, include, order: [[kind === 'vendor' ? 'code' : 'name', 'ASC']] }), store, { search, isActive, categoryId, brandId });
   const { rows, count } = await Model.findAndCountAll({ where, include, order: [[kind === 'vendor' ? 'code' : 'name', 'ASC']], limit, offset: (page - 1) * limit, distinct: true });
   return { data: rows.map(json), page, limit, total: count };
+}
+
+const col = (key, label, type = 'text') => ({ key, label, type });
+const YES = (b) => (b ? 'Active' : 'Switched off');
+/** Whole list in the report shape (see reports.md) so the frontend makes PDF / Excel the same way. */
+function exportList(kind, rows, store, filters) {
+  let columns;
+  let data;
+  let title;
+  if (kind === 'vendor') {
+    title = 'Vendors list';
+    columns = [col('code', 'Code', 'number'), col('name', 'Name'), col('legalName', 'Legal name'), col('status', 'Status'), col('type', 'Type'), col('payment', 'Payment'), col('phone', 'Contact #'), col('email', 'Email'),
+      col('city', 'City'), col('province', 'Province'), col('address', 'Address'), col('cnic', 'CNIC'), col('ntn', 'NTN'), col('gstNo', 'GST# (STRN)'), col('bankName', 'Bank'), col('accountNo', 'Account #'), col('iban', 'IBAN'), col('state', 'State')];
+    data = rows.map((r) => ({ ...vendorJSON(r), state: YES(r.isActive) }));
+  } else {
+    title = store === 'CHEMICAL' ? 'Chemicals list' : 'Items list';
+    columns = [col('category', 'Category'), col('name', store === 'CHEMICAL' ? 'Chemical' : 'Item'), col('brand', 'Brand'), col('unit', 'Unit'), col('stockQty', 'Stock', 'number'), col('reorderLevel', 'Minimum stock', 'number'), col('avgRate', 'Average rate', 'money'), col('stockValue', 'Stock value', 'money'), col('state', 'State')];
+    data = rows.map((r) => { const j = itemJSON(r); return { category: j.category && j.category.name, name: j.name, brand: j.brand && j.brand.name, unit: j.unit, stockQty: j.stockQty, reorderLevel: j.reorderLevel, avgRate: j.avgRate, stockValue: j.stockValue, state: YES(r.isActive) }; });
+  }
+  return { title, generatedAt: new Date().toISOString(), filters, sections: [{ key: kind, title, columns, rows: data, totals: {} }], page: 1, limit: data.length, total: data.length, export: true };
 }
 
 async function get(kind, req, store, id) {
@@ -105,7 +137,7 @@ async function create(kind, req, store, data) {
   return sequelize.transaction(async (transaction) => {
     if (await nameTaken(kind, req, store, data.name, null, transaction, data.categoryId)) throw AppError.rule('NAME_TAKEN', `"${data.name}" already exists`);
     const fields = { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === '' ? null : v])), ...scope(kind, req, store), createdById: req.user.id };
-    if (kind === 'item') await checkLinks(req, store, fields, transaction);
+    if (kind === 'item') { checkUnit(store, fields.unit); await checkLinks(req, store, fields, transaction); }
     if (kind === 'vendor') {
       await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`vendor-code:${req.user.companyId}`], transaction });
       if (fields.code) {
@@ -128,6 +160,7 @@ async function update(kind, req, store, id, changes) {
     const newCategory = changes.categoryId !== undefined ? changes.categoryId : row.categoryId;
     if ((changes.name || changes.categoryId !== undefined) && (await nameTaken(kind, req, store, changes.name || row.name, id, transaction, newCategory))) throw AppError.rule('NAME_TAKEN', `"${changes.name}" already exists`);
     if (kind === 'item') {
+      checkUnit(store, changes.unit);
       await checkLinks(req, store, changes, transaction);
       // stock is counted in this unit, so it cannot change once stock exists
       if (changes.unit && changes.unit !== row.unit && (row.stockQty !== 0 || (await StoreInwardLine.count({ where: { itemId: id }, transaction })))) {
@@ -161,4 +194,4 @@ async function remove(kind, req, store, id) {
   });
 }
 
-module.exports = { splitQty, SUB_UNITS, list, get, create, update, remove, vendorJSON, namedJSON, itemJSON, itemInclude, avgRate, round };
+module.exports = { VENDOR_FIELDS, splitQty, SUB_UNITS, list, get, create, update, remove, vendorJSON, namedJSON, itemJSON, itemInclude, avgRate, round };
