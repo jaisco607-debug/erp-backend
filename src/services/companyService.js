@@ -7,6 +7,8 @@ const { sequelize, Company, Service, CompanyService, User, RefreshToken, UserSer
 const AppError = require('../utils/AppError');
 const { hashPassword } = require('../utils/password');
 const audit = require('./auditService');
+const { signAccessToken } = require('../utils/tokens');
+const { profile } = require('./accessService');
 const { endAllSessions } = require('./authService');
 const { freeCode } = require('./loginCodeService');
 const { adminEffect } = require('./companyAccessService');
@@ -266,4 +268,27 @@ async function resetAdminPassword(req, companyId, userId, newPassword) {
   });
 }
 
-module.exports = { list, details, create, update, newCode, setServices, toggleService, remove, createAdmin, deleteAdmin, updateAdmin, resetAdminPassword };
+// How long a super admin stays inside a company he opened (no refresh token: after this he signs in again).
+const OPEN_COMPANY_TTL = '4h';
+
+/**
+ * The super admin opens a company: a session as the company's first active client admin, so every screen
+ * works as it does for that admin. The token carries the super admin's id; every action is recorded with his name.
+ */
+async function openCompany(req, id) {
+  return sequelize.transaction(async (transaction) => {
+    const company = await findOr404(id, transaction);
+    if (!company.isActive) throw AppError.rule('COMPANY_INACTIVE', 'This company is switched off: switch it on first');
+    const admin = await User.findOne({ where: { companyId: company.id, userType: 'CLIENT_ADMIN', isActive: true }, order: [['createdAt', 'ASC']], transaction });
+    if (!admin) throw AppError.rule('NO_ACTIVE_CLIENT_ADMIN', 'This company has no active client admin to open it as');
+    await audit.log(req, { action: 'COMPANY_OPENED', entityType: 'Company', entityId: company.id, companyId: company.id, after: { companyName: company.name, asClientAdmin: admin.email, validFor: OPEN_COMPANY_TTL } }, { transaction });
+    return {
+      accessToken: signAccessToken(admin, { impersonator: req.user, ttl: OPEN_COMPANY_TTL }),
+      tokenType: 'Bearer',
+      expiresIn: OPEN_COMPANY_TTL,
+      ...(await profile(admin, { transaction })),
+    };
+  });
+}
+
+module.exports = { list, details, create, update, newCode, setServices, toggleService, remove, createAdmin, deleteAdmin, updateAdmin, resetAdminPassword, openCompany };
