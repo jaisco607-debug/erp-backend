@@ -1,10 +1,17 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
+const { VENDOR_STATUS, VENDOR_PAYMENT, vendorFields } = require('./storeValidator');
 
 // optional text; '' or null clears it (the services turn '' into null)
 const text = (max) => Joi.string().trim().max(max).allow('', null);
 const meters = Joi.number().precision(2).positive().max(99999999);
+// the width of the cloth (inches or whatever the mill uses), typed at inward
+const width = Joi.number().precision(2).positive().max(9999);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
+
+// customer form = the vendor form (same fields); only the type list differs
+const CUSTOMER_TYPES = ['CUSTOMERS'];
+const customerFields = { ...vendorFields, type: Joi.string().valid(...CUSTOMER_TYPES) };
 
 const master = {
   list: { query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean() }) },
@@ -22,7 +29,10 @@ const lotFields = {
   lotNo: Joi.number().integer().min(1).max(99999999),
   unit: Joi.string().uppercase().valid('METER', 'YARD'),
   // length of every thaan in `unit`, e.g. [52.5, 48, 50]; pieces and totals are worked out
-  thaans: Joi.array().items(meters).min(1).max(2000),
+  // a thaan is its length, or { length, width } when it has its own width
+  thaans: Joi.array().items(Joi.alternatives().try(meters, Joi.object({ length: meters.required(), width: width.allow(null) }))).min(1).max(2000),
+  // the width of the whole lot: every thaan without its own width gets it
+  width: width.allow(null),
   inwardMeters: meters,
   inwardYards: meters,
   pieces: Joi.number().integer().min(0).max(1000000),
@@ -36,6 +46,7 @@ const lotFields = {
 };
 
 module.exports = {
+  CUSTOMER_TYPES, CUSTOMER_STATUS: VENDOR_STATUS, CUSTOMER_PAYMENT: VENDOR_PAYMENT,
   customer: {
     ...master,
     create: {
@@ -44,11 +55,12 @@ module.exports = {
         name: Joi.string().trim().min(2).max(150).required(),
         phone: text(30),
         address: text(300),
+        ...customerFields,
       }),
     },
     update: {
       params: uuidParam,
-      body: Joi.object({ name: Joi.string().trim().min(2).max(150), phone: text(30), address: text(300), isActive: Joi.boolean() }).min(1),
+      body: Joi.object({ name: Joi.string().trim().min(2).max(150), phone: text(30), address: text(300), isActive: Joi.boolean(), ...customerFields }).min(1),
     },
   },
   quality: {

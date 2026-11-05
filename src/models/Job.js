@@ -37,6 +37,12 @@ function init(sequelize) {
       receivedAt: { type: DataTypes.DATE, allowNull: true },
       acceptedById: { type: DataTypes.UUID, allowNull: true },
       acceptedAt: { type: DataTypes.DATE, allowNull: true },
+      // returned to the SO card desk (a department that got the cloth straight from an SO card sent it back)
+      returnedToSoCard: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+      returnReason: { type: DataTypes.STRING(300), allowNull: true },
+      returnedAt: { type: DataTypes.DATE, allowNull: true },
+      returnedById: { type: DataTypes.UUID, allowNull: true },
+      returnedFromJobId: { type: DataTypes.UUID, allowNull: true },
       statusById: { type: DataTypes.UUID, allowNull: true },
       statusAt: { type: DataTypes.DATE, allowNull: true },
       createdById: { type: DataTypes.UUID, allowNull: true },

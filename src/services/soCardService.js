@@ -41,9 +41,9 @@ const include = [
   {
     model: SoCardLot, as: 'lots',
     include: [{
-      model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'typeNo', 'dcNo', 'inwardDate', 'isReprocess', 'unit', 'glm', 'gsm', 'inwardMeters', 'pieces'], paranoid: false,
+      model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'typeNo', 'dcNo', 'inwardDate', 'isReprocess', 'unit', 'glm', 'gsm', 'width', 'inwardMeters', 'pieces'], paranoid: false,
       include: [{ model: Quality, as: 'quality', attributes: ['id', 'name'], paranoid: false }],
-    }, { model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['thaanNo', 'meters', 'yards'] }] }],
+    }, { model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['thaanNo', 'meters', 'yards', 'width'] }] }],
   },
   { model: User, as: 'createdBy', attributes: ['id', 'name'] },
   {
@@ -122,7 +122,7 @@ function json(c, position) {
     lots: (c.lots || []).map((l) => {
       const g = l.greyLot || {};
       const showYards = g.unit === 'YARD';
-      const thaans = (l.thaanParts || []).map((p) => ({ thaanNo: p.thaan.thaanNo, thaanMeters: p.thaan.meters, meters: p.meters }))
+      const thaans = (l.thaanParts || []).map((p) => ({ thaanNo: p.thaan.thaanNo, thaanMeters: p.thaan.meters, meters: p.meters, width: p.thaan.width ?? g.width ?? null }))
         .sort((a, b) => a.thaanNo - b.thaanNo);
       return {
         id: l.id,
@@ -134,6 +134,9 @@ function json(c, position) {
         quality: g.quality ? { id: g.quality.id, name: g.quality.name } : null,
         glm: g.glm ?? null,
         gsm: g.gsm ?? null,
+        // the width of the cloth: the lot's width, and every width of the thaans on this card
+        width: g.width ?? null,
+        widths: [...new Set((thaans.length ? thaans.map((t) => t.width) : [g.width]).filter((w) => w != null))].sort((a, b) => a - b),
         unit: g.unit || 'METER',
         showYards,
         isReprocess: g.isReprocess,
@@ -150,7 +153,7 @@ function json(c, position) {
         thaanNos: thaans.map((t) => t.thaanNo),
         // meters = taken on this card; thaanMeters = the thaan's full length; isPart when only part was taken
         thaans: thaans.map((t) => ({
-          thaanNo: t.thaanNo, meters: t.meters, thaanMeters: t.thaanMeters, isPart: t.meters < t.thaanMeters,
+          thaanNo: t.thaanNo, width: t.width, meters: t.meters, thaanMeters: t.thaanMeters, isPart: t.meters < t.thaanMeters,
           yards: showYards ? round(t.meters / YARD) : null,
         })),
       };
@@ -212,7 +215,7 @@ async function availableLots(req, { customerId, search, limit }, mine) {
       const thaans = (thaansOf.get(l.id) || []).filter((t) => t.status !== 'RETURNED' && t.meters - t.takenMeters + onCard(t) > 0)
         .map((t) => {
           const free = round(t.meters - t.takenMeters + onCard(t));
-          const row = { thaanNo: t.thaanNo, meters: free, thaanMeters: t.meters, takenMeters: round(t.takenMeters - onCard(t)), yards: l.unit === 'YARD' ? round(free / YARD) : null };
+          const row = { thaanNo: t.thaanNo, width: t.width ?? l.width ?? null, meters: free, thaanMeters: t.meters, takenMeters: round(t.takenMeters - onCard(t)), yards: l.unit === 'YARD' ? round(free / YARD) : null };
           if (mine) Object.assign(row, { onThisCard: onCard(t), selected: onCard(t) > 0 });
           return row;
         });
@@ -220,7 +223,7 @@ async function availableLots(req, { customerId, search, limit }, mine) {
         id: l.id, lotNo: l.lotNo, typeNo: l.typeNo, dcNo: l.dcNo, inwardDate: l.inwardDate,
         customer: { id: l.customer.id, code: l.customer.code, name: l.customer.name },
         quality: { id: l.quality.id, name: l.quality.name },
-        glm: l.glm, gsm: l.gsm, unit: l.unit, showYards: l.unit === 'YARD',
+        glm: l.glm, gsm: l.gsm, width: l.width ?? null, unit: l.unit, showYards: l.unit === 'YARD',
         inwardMeters: l.inwardMeters, pieces: l.pieces, outwardMeters: out,
         // already gone: on SO cards + given back to the party
         soCardMeters: round(out - l.returnedMeters), returnedMeters: l.returnedMeters,

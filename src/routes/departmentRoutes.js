@@ -19,6 +19,25 @@ const deptChem = require('../services/departmentChemicalService');
 const router = express.Router();
 router.use(authenticate, requireUserType('CLIENT_ADMIN', 'USER'));
 
+// A department the client admin did not give chemical requests shows NO chemical field (counts, amounts, cost per metre, Folding cost) on any of its screens.
+const CHEMICAL_KEYS = new Set(['chemicalCount', 'chemicalAmount', 'previousChemicalAmount', 'totalChemicalAmount', 'costPerMeter', 'totalCostPerMeter', 'chemicalRequests', 'pendingChemicalRequests', 'foldingChemicalAmount', 'cost']);
+const stripChemical = (v) => {
+  if (Array.isArray(v)) return v.map(stripChemical);
+  if (v && typeof v === 'object' && !(v instanceof Date)) return Object.fromEntries(Object.entries(v).filter(([k]) => !CHEMICAL_KEYS.has(k)).map(([k, x]) => [k, stripChemical(x)]));
+  return v;
+};
+router.use('/:code', async (req, res, next) => {
+  try {
+    if (req.user.userType === 'CLIENT_ADMIN') return next();
+    const d = (await companyServices(req.user.companyId)).find((x) => ['PROCESS', 'FOLDING'].includes(x.kind) && x.code === String(req.params.code).toUpperCase());
+    if (d && !(await require('../services/departmentSettingsService').chemicalEnabled(req.user.companyId, d.id))) {
+      const json = res.json.bind(res);
+      res.json = (body) => json(stripChemical(body));
+    }
+    return next();
+  } catch (e) { return next(e); }
+});
+
 /** :code -> the company's department service (404 when the company does not have it). */
 async function byCode(req, code) {
   const s = (await companyServices(req.user.companyId)).find((x) => ['PROCESS', 'FOLDING', 'PACKING'].includes(x.kind) && x.code === String(code).toUpperCase());
@@ -32,6 +51,9 @@ router.get('/', async (req, res) => {
   const list = (await companyServices(req.user.companyId)).filter((s) => ['PROCESS', 'FOLDING', 'PACKING'].includes(s.kind));
   res.json(list.map((s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, tracksColour: s.tracksColour })));
 });
+
+// the Process Management overview: the jobs per status of every department the person may see, in one call
+router.get('/overview', async (req, res) => res.json(await jobService.overview(req)));
 
 // only the chemicals the Chemical Store gave this department
 router.get('/:code/chemicals', validate({ query: Joi.object({ search: Joi.string().trim().max(100), categoryId: Joi.string().guid() }) }), async (req, res) => {
@@ -122,6 +144,23 @@ router.post('/:code/jobs/:jobId/reject', validate({
 }), async (req, res) => {
   await ownJob(req);
   res.json(await jobService.setStatus(req, req.params.jobId, 'REJECTED', req.body.reason || req.body.remarks));
+});
+
+// cloth that came straight from an SO card goes back to the SO card desk: all of the job, some of its SO cards (soCardIds) or chosen rows (jobItemIds)
+const returnBody = Joi.object({
+  all: Joi.boolean(), soCardIds: Joi.array().items(Joi.string().guid()).min(1).max(200), jobItemIds: Joi.array().items(Joi.string().guid()).min(1).max(500), reason: Joi.string().trim().max(300).allow('', null),
+}).or('all', 'soCardIds', 'jobItemIds').oxor('all', 'soCardIds').oxor('all', 'jobItemIds').oxor('soCardIds', 'jobItemIds');
+router.post('/:code/jobs/:jobId/return-to-so-card', validate({ params: jobKey, body: returnBody }), async (req, res) => {
+  await ownJob(req);
+  const d = await byCode(req, req.params.code);
+  res.json(await jobService.returnToSoCard(req, d.id, { jobId: req.params.jobId, ...req.body }));
+});
+// several jobs of the department at once: tick rows (jobItemIds) from any of its jobs
+router.post('/:code/return-to-so-card', validate({
+  body: Joi.object({ jobItemIds: Joi.array().items(Joi.string().guid()).min(1).max(500).required(), reason: Joi.string().trim().max(300).allow('', null) }),
+}), async (req, res) => {
+  const d = await byCode(req, req.params.code);
+  res.json(await jobService.returnToSoCard(req, d.id, req.body));
 });
 
 // the sender answers a rejection: ACCEPT (valid) or DISPUTE (not valid, with reason)

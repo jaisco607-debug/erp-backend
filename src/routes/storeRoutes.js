@@ -57,6 +57,9 @@ vendors.delete('/:id', eitherStore('FULL'), validate(v.vendor.get), c.vendor.rem
 
 const stores = express.Router();
 stores.use(authenticate);
+// the Store Management overview in one call: only the stores the person has a service for (a store they cannot see is simply not in the answer)
+stores.get('/overview', validate({ query: Joi.object({ months: Joi.number().integer().min(1).max(12).default(6) }) }),
+  async (req, res) => res.json(await require('../services/storeOverviewService').overview(req, req.validatedQuery)));
 crud(stores, '/:store/categories', v.category, c.category, view, full);
 crud(stores, '/:store/brands', v.brand, c.brand, view, full);
 crud(stores, '/:store/items', v.item, c.item, view, full);

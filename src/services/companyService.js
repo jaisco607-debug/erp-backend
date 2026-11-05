@@ -153,7 +153,7 @@ async function newCode(req, id) {
 async function setServices(req, id, serviceIds) {
   return sequelize.transaction(async (transaction) => {
     const company = await findOr404(id, transaction, true);
-    const services = await loadServices(serviceIds, transaction);
+    const services = await require('./processBundle').withBundle(await loadServices(serviceIds, transaction), transaction); // a process brings folding and packing
     const current = await company.getServices({ transaction, joinTableAttributes: [] });
 
     const keep = services.map((s) => s.id);

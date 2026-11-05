@@ -11,7 +11,7 @@ const avgRate = (i) => (i.stockQty > 0 ? round(i.stockValue / i.stockQty, 4) : 0
 
 const VENDOR_FIELDS = ['legalName', 'status', 'type', 'payment', 'cnic', 'ntn', 'gstNo', 'email', 'city', 'province', 'bankName', 'bankBranch', 'accountTitle', 'accountNo', 'iban'];
 const vendorJSON = (v) => ({
-  id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, label: `${v.name} (${v.code})`,
+  id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, creditLimit: v.creditLimit == null ? null : Number(v.creditLimit), creditDays: v.creditDays ?? 0, label: `${v.name} (${v.code})`,
   ...Object.fromEntries(VENDOR_FIELDS.map((f) => [f, v[f] ?? null])),
 });
 const namedJSON = (r) => ({ id: r.id, name: r.name, isActive: r.isActive });
@@ -54,7 +54,7 @@ const itemJSON = (i) => ({
 const itemInclude = [{ model: StoreCategory, as: 'category' }, { model: StoreBrand, as: 'brand' }];
 
 const KINDS = {
-  vendor: { Model: Vendor, json: vendorJSON, entity: 'Vendor', fields: ['name', 'phone', 'address', 'isActive', ...VENDOR_FIELDS], shared: true },
+  vendor: { Model: Vendor, json: vendorJSON, entity: 'Vendor', fields: ['name', 'phone', 'address', 'isActive', ...VENDOR_FIELDS, 'creditLimit', 'creditDays'], shared: true },
   category: { Model: StoreCategory, json: namedJSON, entity: 'StoreCategory', fields: ['name', 'isActive'] },
   brand: { Model: StoreBrand, json: namedJSON, entity: 'StoreBrand', fields: ['name', 'isActive'] },
   item: { Model: StoreItem, json: itemJSON, entity: 'StoreItem', fields: ['name', 'unit', 'categoryId', 'brandId', 'reorderLevel', 'isActive'], include: itemInclude },

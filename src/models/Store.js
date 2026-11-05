@@ -52,6 +52,8 @@ function init(sequelize) {
       accountTitle: { type: DataTypes.STRING(150), allowNull: true },
       accountNo: { type: DataTypes.STRING(50), allowNull: true },
       iban: { type: DataTypes.STRING(40), allowNull: true },
+      creditLimit: { type: DataTypes.DECIMAL(18, 2), allowNull: true },
+      creditDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { sequelize, modelName: 'Vendor', tableName: 'vendors' },
   );

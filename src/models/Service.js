@@ -3,7 +3,7 @@ const { DataTypes, Model } = require('sequelize');
 
 const SERVICE_KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
 // the tab of the client's menu a service belongs to (shown grouped on the super admin screen)
-const MENU_GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS'];
+const MENU_GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL'];
 
 class Service extends Model {}
 

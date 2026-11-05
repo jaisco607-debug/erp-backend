@@ -7,9 +7,11 @@ const v = require('../validators/authValidator');
 const c = require('../controllers/authController');
 const AppError = require('../utils/AppError');
 
-// A super admin who opened a company is working inside the client admin's account: he must not change its password or end its sessions.
+// A super admin who opened a company (or a client admin who opened an employee) is working inside the client admin's account: he must not change its password or end its sessions.
 const notWhileCompanyOpened = (req, res, next) => (req.impersonator
-  ? next(AppError.rule('COMPANY_OPENED_BY_SUPER_ADMIN', 'Not available while you are viewing a company as super admin'))
+  ? next(req.impersonator.userType === 'SUPER_ADMIN'
+    ? AppError.rule('COMPANY_OPENED_BY_SUPER_ADMIN', 'Not available while you are viewing a company as super admin')
+    : AppError.rule('ACCOUNT_OPENED_BY_ADMIN', 'Not available while you are viewing an employee account as client admin'))
   : next());
 
 const router = express.Router();

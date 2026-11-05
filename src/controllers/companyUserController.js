@@ -4,6 +4,10 @@ exports.serviceOptions = async (req, res) => {
   res.json(await companyUserService.serviceOptions(req));
 };
 
+exports.roles = async (req, res) => {
+  res.json(await companyUserService.roles(req));
+};
+
 exports.list = async (req, res) => {
   res.json(await companyUserService.list(req, req.validatedQuery));
 };
@@ -18,6 +22,10 @@ exports.create = async (req, res) => {
 
 exports.update = async (req, res) => {
   res.json(await companyUserService.update(req, req.params.id, req.body));
+};
+
+exports.open = async (req, res) => {
+  res.json(await companyUserService.openUser(req, req.params.id));
 };
 
 exports.resetPassword = async (req, res) => {

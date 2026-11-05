@@ -148,6 +148,10 @@ async function level(req, serviceId, transaction) {
 
 async function needDept(req, code, want, transaction) {
   const d = await departmentByCode(req, code, transaction);
+  // the client admin decides which departments may request chemicals (Settings > Departments)
+  if (!(await require('./departmentSettingsService').chemicalEnabled(req.user.companyId, d.id, transaction))) {
+    throw new AppError(403, 'CHEMICAL_NOT_ALLOWED', `${d.name} has no chemical request access`);
+  }
   const l = await level(req, d.id, transaction);
   if (!l || (want === 'FULL' && l !== 'FULL')) throw AppError.forbidden(want === 'FULL' ? 'You need FULL access to this department' : 'You do not have this department');
   return d;

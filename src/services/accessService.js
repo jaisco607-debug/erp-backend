@@ -5,14 +5,20 @@ const { Company, Service, UserService } = require('../models');
 /** Active services a company has been given, in menu order. */
 async function companyServices(companyId, transaction) {
   const company = await Company.findByPk(companyId, {
-    include: [{ model: Service, as: 'services', where: { isActive: true }, required: false, through: { attributes: [] } }],
+    include: [{ model: Service, as: 'services', where: { isActive: true }, required: false, through: { attributes: ['chemicalRequests'] } }],
     order: [[{ model: Service, as: 'services' }, 'sortOrder', 'ASC']],
     transaction,
   });
   return company ? company.services : [];
 }
 
-const serviceJSON = (s, access) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, access });
+const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING'];
+/** `hasStore`: the company has the Chemical Store. A department shows `chemicalRequests`: it may request chemicals only when the store is given AND the client admin left the switch on. */
+const serviceJSON = (s, access, hasStore = true) => ({
+  id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, access,
+  ...(DEPARTMENT_KINDS.includes(s.kind) ? { chemicalRequests: Boolean(hasStore && (!s.CompanyService || s.CompanyService.chemicalRequests !== false)) } : {}),
+});
+const storeOf = (list) => list.some((s) => s.code === 'CHEMICAL_STORE');
 
 /**
  * A user's own services: what the client admin gave them, but only while the company still has the
@@ -39,9 +45,11 @@ async function profile(user, { transaction } = {}) {
   const company = user.company || (await Company.findByPk(user.companyId, { transaction }));
   let services = [];
   if (user.userType === 'CLIENT_ADMIN') {
-    services = (await companyServices(user.companyId, transaction)).map((s) => serviceJSON(s, 'FULL'));
+    const all = await companyServices(user.companyId, transaction);
+    services = all.map((s) => serviceJSON(s, 'FULL', storeOf(all)));
   } else {
-    services = (await userServices(user, transaction)).map((g) => serviceJSON(g.service, g.access));
+    const store = storeOf(await companyServices(user.companyId, transaction));
+    services = (await userServices(user, transaction)).map((g) => serviceJSON(g.service, g.access, store));
   }
   return {
     user: user.toSafeJSON(),
@@ -67,10 +75,10 @@ async function servicesOfUsers(users, transaction) {
   const grants = ids.length ? await UserService.findAll({ where: { userId: ids }, transaction }) : [];
   for (const u of users) {
     const list = have.get(u.companyId) || [];
-    if (u.userType === 'CLIENT_ADMIN') out.set(u.id, list.map((s) => serviceJSON(s, 'FULL')));
+    if (u.userType === 'CLIENT_ADMIN') out.set(u.id, list.map((s) => serviceJSON(s, 'FULL', storeOf(list))));
     if (u.userType === 'USER') {
       const given = new Map(grants.filter((g) => g.userId === u.id).map((g) => [g.serviceId, g.access]));
-      out.set(u.id, list.filter((s) => given.has(s.id)).map((s) => serviceJSON(s, given.get(s.id))));
+      out.set(u.id, list.filter((s) => given.has(s.id)).map((s) => serviceJSON(s, given.get(s.id), storeOf(list))));
     }
   }
   return out;

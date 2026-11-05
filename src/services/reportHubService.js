@@ -142,13 +142,13 @@ async function greyReturns(req, f) {
   if (f.dateTo) { where.push('r."returnDate" <= :dateTo'); rep.dateTo = f.dateTo; }
   if (f.search) { where.push('(r."returnNo"::text = :search OR gl."lotNo"::text = :search OR gl."dcNo" ILIKE :like OR cu.name ILIKE :like OR r."vehicleNo" ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
   const rows = await q(`SELECT r."returnNo", r."returnDate", gl."lotNo", gl."typeNo", gl."dcNo", cu.name AS party, qu.name AS quality, r.pieces AS thaans, r.meters::float AS meters,
-      r."vehicleNo", r.remarks,
+      r."vehicleNo", r.remarks, (SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, gl.width)::float8 AS w FROM grey_lot_thaans t WHERE t."returnId" = r.id UNION ALL SELECT gl.width::float8 WHERE NOT EXISTS (SELECT 1 FROM grey_lot_thaans t2 WHERE t2."returnId" = r.id)) x WHERE w IS NOT NULL) AS width,
       (SELECT string_agg(t."thaanNo"::text, ', ' ORDER BY t."thaanNo") FROM grey_lot_thaans t WHERE t."returnId" = r.id) AS "thaanNos"
     FROM grey_returns r JOIN grey_lots gl ON gl.id = r."lotId" JOIN customers cu ON cu.id = gl."customerId" LEFT JOIN qualities qu ON qu.id = gl."qualityId"
     WHERE ${where.join(' AND ')} ORDER BY r."returnNo" DESC`, rep);
-  const columns = [col('returnNo', 'Return#', 'number'), col('returnDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'),
+  const columns = [col('returnNo', 'Return#', 'number'), col('returnDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'), col('width', 'Width (m)', 'list'),
     col('thaans', 'Thaans', 'number'), col('thaanNos', 'Thaan numbers', 'list'), col('meters', 'Meters', 'number'), col('vehicleNo', 'Vehicle'), col('remarks', 'Remarks')];
-  return respond('Grey given back', f, [section('returns', 'Grey given back', columns, rows.map((r) => ({ ...r, meters: round(r.meters) })), ['thaans', 'meters'])], f);
+  return respond('Grey given back', f, [section('returns', 'Grey given back', columns, rows.map((r) => ({ ...r, width: r.width || '', meters: round(r.meters) })), ['thaans', 'meters'])], f);
 }
 
 /** SO cards with every lot and its thaans: one row per card and lot. */
@@ -164,16 +164,16 @@ async function soCardLots(req, f) {
   if (f.dateTo) { where.push('sc."cardDate" <= :dateTo'); rep.dateTo = f.dateTo; }
   if (f.search) { where.push('(sc."cardNo"::text = :search OR gl."lotNo"::text = :search OR gl."dcNo" ILIKE :like OR cu.name ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
   const rows = await q(`SELECT sc.id AS "soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", sc."cardDate", sc.status, cu.name AS party, qu.name AS quality,
-      gl."lotNo", gl."typeNo", gl."dcNo", scl.meters::float AS meters,
+      gl."lotNo", gl."typeNo", gl."dcNo", scl.meters::float AS meters, (SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, gl.width)::float8 AS w FROM so_card_lot_thaans p JOIN grey_lot_thaans t ON t.id = p."thaanId" WHERE p."soCardLotId" = scl.id UNION ALL SELECT gl.width::float8 WHERE NOT EXISTS (SELECT 1 FROM so_card_lot_thaans p2 WHERE p2."soCardLotId" = scl.id)) x WHERE w IS NOT NULL) AS width,
       (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = scl.id) AS thaans,
       (SELECT string_agg(t."thaanNo"::text, ', ' ORDER BY t."thaanNo") FROM so_card_lot_thaans p JOIN grey_lot_thaans t ON t.id = p."thaanId" WHERE p."soCardLotId" = scl.id) AS "thaanNos"
     FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" JOIN grey_lots gl ON gl.id = scl."greyLotId" JOIN customers cu ON cu.id = sc."customerId"
     LEFT JOIN qualities qu ON qu.id = COALESCE(sc."qualityId", gl."qualityId")
     WHERE ${where.join(' AND ')} ORDER BY sc."cardNo" DESC, gl."lotNo"`, rep);
-  const columns = [col('soNo', 'SO#', 'number'), col('cardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'),
+  const columns = [col('soNo', 'SO#', 'number'), col('cardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'), col('width', 'Width (m)', 'list'),
     col('thaans', 'Thaans', 'number'), col('thaanNos', 'Thaan numbers', 'list'), col('meters', 'Meters', 'number'), col('statusText', 'Status'), col('tag', 'Tag', 'tag')];
   const pos = await cardPositions(req.user.companyId);
-  const data = rows.filter((r) => !f.status || (pos.get(r.soCardId) || {}).key === positionKey(f.status)).map((r) => ({ ...r, meters: round(r.meters), status: (pos.get(r.soCardId) || {}).key || 'RETURN', statusText: (pos.get(r.soCardId) || { text: 'Fabric return' }).text, tag: r.isGreyReturn ? 'Fabric return grey (not processed)' : '' }));
+  const data = rows.filter((r) => !f.status || (pos.get(r.soCardId) || {}).key === positionKey(f.status)).map((r) => ({ ...r, width: r.width || '', meters: round(r.meters), status: (pos.get(r.soCardId) || {}).key || 'RETURN', statusText: (pos.get(r.soCardId) || { text: 'Fabric return' }).text, tag: r.isGreyReturn ? 'Fabric return grey (not processed)' : '' }));
   return respond('SO cards: lots and thaans', f, [section('lots', 'Lots and thaans', columns, data, ['thaans', 'meters'])], f);
 }
 

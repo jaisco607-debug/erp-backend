@@ -110,6 +110,7 @@ async function canSeeDepartment(req, d) {
 async function mine(req, code, { search, categoryId }) {
   const d = await departmentOr404(req, code);
   if (!(await canSeeDepartment(req, d))) throw AppError.forbidden('You do not have this department');
+  if (!(await require('./departmentSettingsService').chemicalEnabled(req.user.companyId, d.id))) throw new AppError(403, 'CHEMICAL_NOT_ALLOWED', `${d.name} has no chemical request access`);
   const given = await DepartmentChemical.findAll({ where: { companyId: req.user.companyId, departmentId: d.id }, attributes: ['itemId'] });
   const where = { id: given.map((g) => g.itemId), isActive: true };
   if (search) where.name = { [Op.iLike]: `%${search}%` };

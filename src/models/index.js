@@ -16,6 +16,7 @@ const SoCardModel = require('./SoCard');
 const SoCardLotModel = require('./SoCardLot');
 const SoCardMoveModel = require('./SoCardMove');
 const ColourModel = require('./Colour');
+const AccountModel = require('./Account');
 const JobModel = require('./Job');
 const JobItemModel = require('./JobItem');
 const FoldingEntryModel = require('./FoldingEntry');
@@ -41,6 +42,7 @@ const SoCardLot = SoCardLotModel.init(sequelize);
 const SoCardLotThaan = SoCardLotModel.initThaans(sequelize);
 const SoCardMove = SoCardMoveModel.init(sequelize);
 const Colour = ColourModel.init(sequelize);
+const Account = AccountModel.init(sequelize);
 const Job = JobModel.init(sequelize);
 const JobItem = JobItemModel.init(sequelize);
 const FoldingEntry = FoldingEntryModel.init(sequelize);
@@ -151,6 +153,7 @@ module.exports = {
   SoCardLotThaan,
   SoCardMove,
   Colour,
+  Account,
   Job,
   JobItem,
   FoldingEntry,
@@ -161,4 +164,5 @@ module.exports = {
   ACCESS_LEVELS: UserServiceModel.ACCESS_LEVELS,
   USER_TYPES: UserModel.USER_TYPES,
   SERVICE_KINDS: ServiceModel.SERVICE_KINDS,
+  ACCOUNT_TYPES: AccountModel.ACCOUNT_TYPES,
 };

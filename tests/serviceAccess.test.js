@@ -34,7 +34,7 @@ test('a new company gets nothing; the super admin gives modules, reports and dep
   const me = await login(company, 'boss@test.com', 'Boss-Pass-123');
   expect(me.services.map((s) => [s.code, s.menuGroup]).sort()).toEqual([
     ['CHEMICAL_STORE', 'STORE'], ['DYEING', 'PROCESS'], ['FOLDING', 'PROCESS'], ['GREY_STORE', 'PRODUCTION'],
-    ['PACKING', 'PROCESS'], ['REPORT_GREY', 'REPORTS'], ['STORE_REPORTS', 'STORE'],
+    ['PACKING', 'PRODUCTION'], ['REPORT_GREY', 'REPORTS'], ['STORE_REPORTS', 'STORE'],
   ]);
 
   // take one away (toggle): it disappears from the menu
@@ -47,14 +47,17 @@ test('services list: kinds, menu groups, a module can be given to companies from
   const { sup, company } = await setup();
   const all = (await sup('get', '/services')).body.data;
   const by = (g) => all.filter((s) => s.menuGroup === g).map((s) => s.code);
-  expect(by('PRODUCTION').sort()).toEqual(['GATE_PASS', 'GREY_STORE', 'SO_CARD']);
+  expect(by('PRODUCTION').sort()).toEqual(['GATE_PASS', 'GREY_STORE', 'PACKING', 'SO_CARD']);
   expect(by('STORE').sort()).toEqual(['CHEMICAL_STORE', 'GENERAL_STORE', 'STORE_REPORTS']);
   expect(by('REPORTS')).toHaveLength(9);
-  expect(by('PROCESS')).toEqual(expect.arrayContaining(['DYEING', 'FOLDING', 'PACKING']));
-  expect((await sup('get', '/services?kind=REPORT')).body.data).toHaveLength(10);
+  expect(by('PROCESS')).toEqual(expect.arrayContaining(['DYEING', 'FOLDING']));
+  expect((await sup('get', '/services?kind=REPORT')).body.data).toHaveLength(11);
   expect(all.find((s) => s.code === 'REPORTS')).toBeUndefined();
   // built-in services cannot be deleted (the screen hides their delete button)
-  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(16);
+  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(29);
+  expect(by('ACCOUNTS').sort()).toEqual(['ACC_BANK', 'ACC_COA', 'ACC_CONTRA', 'ACC_JOURNAL', 'ACC_PAYMENTS', 'ACC_PURCHASES', 'ACC_RECEIPTS', 'ACC_REPORTS', 'ACC_SALES']);
+  expect(by('PAYROLL').sort()).toEqual(['PAYROLL_APPLICATIONS', 'PAYROLL_EMPLOYEES', 'PAYROLL_REPORTS', 'PAYROLL_SALARY']);
+  expect(all.filter((s) => s.menuGroup === 'PAYROLL').every((s) => s.kind === 'MODULE' && s.isBuiltIn)).toBe(true);
   expect(all.find((s) => s.code === 'DYEING').isBuiltIn).toBe(false);
 
   // modules used to be refused here ("given automatically")
@@ -130,4 +133,45 @@ test('client admin passes on only what the company has; losing a service removes
   const get = (url) => request(app).get(`/api/v1${url}`).set({ Authorization: `Bearer ${t}` });
   expect((await get('/reports/folding')).status).toBe(403);
   expect((await get('/reports/grey/lots')).status).toBe(200);
+});
+
+test('payroll: four module services in their own PAYROLL tab; super admin gives them to a company, the client admin to an employee, /auth/me shows code, kind, menuGroup and access', async () => {
+  const { sup, company } = await setup();
+  const codes = ['PAYROLL_SALARY', 'PAYROLL_REPORTS', 'PAYROLL_APPLICATIONS', 'PAYROLL_EMPLOYEES'];
+  // the super admin's service list has them (VIEW and FULL: modules, not reports)
+  const all = (await sup('get', '/services')).body.data;
+  expect(all.filter((s) => s.menuGroup === 'PAYROLL').map((s) => [s.code, s.kind]).sort()).toEqual(codes.map((c) => [c, 'MODULE']).sort());
+  expect((await sup('get', '/services?kind=MODULE')).body.data.map((s) => s.code)).toEqual(expect.arrayContaining(codes));
+  // a company gets two of them
+  const given = await sup('put', `/companies/${company.id}/services`, { serviceIds: await idsOf('PAYROLL_SALARY', 'PAYROLL_EMPLOYEES') });
+  expect(given.status).toBe(200);
+  expect(given.body.services.map((s) => [s.code, s.kind, s.menuGroup]).sort()).toEqual([['PAYROLL_EMPLOYEES', 'MODULE', 'PAYROLL'], ['PAYROLL_SALARY', 'MODULE', 'PAYROLL']]);
+
+  // the client admin: /auth/me and the services they can hand out
+  const boss = await login(company, 'boss@test.com', 'Boss-Pass-123');
+  expect(boss.services.map((s) => [s.code, s.kind, s.menuGroup, s.access]).sort()).toEqual([['PAYROLL_EMPLOYEES', 'MODULE', 'PAYROLL', 'FULL'], ['PAYROLL_SALARY', 'MODULE', 'PAYROLL', 'FULL']]);
+  const bossAuth = { Authorization: `Bearer ${boss.accessToken}` };
+  const me = (await request(app).get('/api/v1/auth/me').set(bossAuth)).body;
+  expect(me.services.map((s) => [s.code, s.kind, s.menuGroup, s.access]).sort()).toEqual([['PAYROLL_EMPLOYEES', 'MODULE', 'PAYROLL', 'FULL'], ['PAYROLL_SALARY', 'MODULE', 'PAYROLL', 'FULL']]);
+  const options = (await request(app).get('/api/v1/users/service-options').set(bossAuth)).body.data;
+  expect(options.map((o) => [o.code, o.menuGroup, o.accessLevels]).sort()).toEqual([['PAYROLL_EMPLOYEES', 'PAYROLL', ['VIEW', 'FULL']], ['PAYROLL_SALARY', 'PAYROLL', ['VIEW', 'FULL']]]);
+
+  // the client admin gives one to an employee (VIEW); a service the company does not have cannot be given
+  const salary = options.find((o) => o.code === 'PAYROLL_SALARY');
+  const made = await request(app).post('/api/v1/users').set(bossAuth).send({ name: 'Clerk', email: 'clerk@test.com', password: 'Clerk-Pass-123', services: [{ serviceId: salary.id, access: 'VIEW' }] });
+  expect(made.status).toBe(201);
+  const clerk = await login(company, 'clerk@test.com', 'Clerk-Pass-123');
+  expect(clerk.services.map((s) => [s.code, s.kind, s.menuGroup, s.access])).toEqual([['PAYROLL_SALARY', 'MODULE', 'PAYROLL', 'VIEW']]);
+  const notMine = (await idsOf('PAYROLL_REPORTS'))[0];
+  expect((await request(app).post('/api/v1/users').set(bossAuth).send({ name: 'X', email: 'x@test.com', password: 'Xxxx-Pass-123', services: [{ serviceId: notMine, access: 'VIEW' }] })).status).toBeGreaterThanOrEqual(400);
+
+  // a new service may be put in the PAYROLL tab by the super admin (create and edit)
+  const custom = await sup('post', '/services', { code: 'TEST_PAYROLL_X', name: 'Payroll X', kind: 'MODULE', menuGroup: 'PAYROLL' });
+  expect(custom.status).toBe(201);
+  expect(custom.body).toMatchObject({ menuGroup: 'PAYROLL', kind: 'MODULE', isBuiltIn: false });
+  expect((await sup('patch', `/services/${custom.body.id}`, { menuGroup: 'STORE' })).body.menuGroup).toBe('STORE');
+  expect((await sup('patch', `/services/${custom.body.id}`, { menuGroup: 'PAYROLL' })).body.menuGroup).toBe('PAYROLL');
+  // the built-in payroll services cannot be deleted
+  const salaryService = all.find((s) => s.code === 'PAYROLL_SALARY');
+  expect((await sup('delete', `/services/${salaryService.id}`)).body.error.code).toBe('CORE_MODULE');
 });

@@ -95,10 +95,10 @@ async function form(req, code, soCardId, exceptListId) {
   const info = (await cardInfo(req, d.id, [soCardId])).get(soCardId);
   if (!info) throw AppError.notFound('SO card');
   const lots = await q(`
-    SELECT gl.id, gl."lotNo", SUM(l.meters)::float AS meters FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId"
+    SELECT gl.id, gl."lotNo", gl.width::float AS width, SUM(l.meters)::float AS meters FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId"
     WHERE l."soCardId" = :id GROUP BY gl.id ORDER BY gl."lotNo"`, { id: soCardId });
   const thaans = await q(`
-    SELECT gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", p.meters::float AS meters
+    SELECT gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", COALESCE(t.width, gl.width)::float AS width, p.meters::float AS meters
     FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId" JOIN so_card_lot_thaans p ON p."soCardLotId" = l.id JOIN grey_lot_thaans t ON t.id = p."thaanId"
     WHERE l."soCardId" = :id ORDER BY t."thaanNo"`, { id: soCardId });
   // what Folding sent to Packing, per lot / thaan and category
@@ -111,7 +111,7 @@ async function form(req, code, soCardId, exceptListId) {
     FROM packing_list_lines x JOIN packing_lists pk ON pk.id = x."packingListId"
     WHERE pk."soCardId" = :id AND pk.id <> :except GROUP BY x."greyLotId", x."thaanId", x.grade`,
   { id: soCardId, except: exceptListId || '00000000-0000-0000-0000-000000000000' });
-  const lineOf = (lotId, thaanId, thaanNo, meters) => {
+  const lineOf = (lotId, thaanId, thaanNo, meters, width = null) => {
     const f = fold.find((x) => x.lotId === lotId && (x.thaanId || null) === thaanId) || { a: 0, b: 0, cp: 0 };
     const folding = { a: round(f.a), b: round(f.b), cp: round(f.cp) };
     // suggested packing lines: one per category Folding sent, minus what is already packed
@@ -123,7 +123,7 @@ async function form(req, code, soCardId, exceptListId) {
     }
     const onLists = packed.filter((x) => x.lotId === lotId && (x.thaanId || null) === thaanId);
     return {
-      thaanId, thaanNo, meters, folding, foldingTotal: round(folding.a + folding.b + folding.cp),
+      thaanId, thaanNo, width, meters, folding, foldingTotal: round(folding.a + folding.b + folding.cp),
       suggestedLines: suggested,
       packed: onLists.map((x) => ({ grade: x.grade, meters: round(x.meters), listNo: x.listNo })),
       alreadyPacked: !suggested.length && onLists.length > 0,
@@ -134,8 +134,8 @@ async function form(req, code, soCardId, exceptListId) {
     lots: lots.map((l) => {
       const ts = thaans.filter((t) => t.lotId === l.id);
       return {
-        id: l.id, lotNo: l.lotNo, meters: round(l.meters), hasThaans: ts.length > 0, thaanCount: ts.length,
-        thaans: ts.length ? ts.map((t) => lineOf(l.id, t.thaanId, t.thaanNo, t.meters)) : [lineOf(l.id, null, null, round(l.meters))],
+        id: l.id, lotNo: l.lotNo, width: l.width ?? null, widths: [...new Set((ts.length ? ts.map((t) => t.width) : [l.width]).filter((w) => w != null))].sort((a, b) => a - b), meters: round(l.meters), hasThaans: ts.length > 0, thaanCount: ts.length,
+        thaans: ts.length ? ts.map((t) => lineOf(l.id, t.thaanId, t.thaanNo, t.meters, t.width)) : [lineOf(l.id, null, null, round(l.meters), l.width)],
       };
     }),
     grades: GRADES.map((g) => ({ value: g, text: GRADE_TEXT[g] })),
@@ -164,7 +164,7 @@ async function load(req, depId, id, transaction) {
     FROM packing_lists p LEFT JOIN users cb ON cb.id = p."createdById" LEFT JOIN users ub ON ub.id = p."updatedById" LEFT JOIN users fb ON fb.id = p."finalizedById"
     WHERE p.id = :id AND p."companyId" = :companyId`, { id, companyId: req.user.companyId }, transaction);
   if (!p) throw AppError.notFound('Packing list');
-  const lines = (await q(`SELECT pl.*, pl.meters::float AS meters, gl."lotNo" FROM packing_list_lines pl JOIN grey_lots gl ON gl.id = pl."greyLotId"
+  const lines = (await q(`SELECT pl.*, pl.meters::float AS meters, gl."lotNo", COALESCE(t.width, gl.width)::float AS width FROM packing_list_lines pl JOIN grey_lots gl ON gl.id = pl."greyLotId" LEFT JOIN grey_lot_thaans t ON t.id = pl."thaanId"
     WHERE pl."packingListId" = :id ORDER BY pl."lineNo"`, { id }, transaction));
   const info = (await cardInfo(req, depId, [p.soCardId], transaction)).get(p.soCardId);
   const rates = { A: Number(p.rateA), B: Number(p.rateB), CP: Number(p.rateCP) };
@@ -172,7 +172,7 @@ async function load(req, depId, id, transaction) {
   for (const l of lines) {
     let lot = lots.find((x) => x.id === l.greyLotId);
     if (!lot) lots.push(lot = { id: l.greyLotId, lotNo: l.lotNo, thaans: [] });
-    lot.thaans.push({ lineNo: l.lineNo, thaanId: l.thaanId, thaanNo: l.thaanNo, grade: l.grade, gradeText: GRADE_TEXT[l.grade], meters: l.meters, rate: rates[l.grade], amount: round(l.meters * rates[l.grade]) });
+    lot.thaans.push({ lineNo: l.lineNo, thaanId: l.thaanId, thaanNo: l.thaanNo, width: l.width ?? null, grade: l.grade, gradeText: GRADE_TEXT[l.grade], meters: l.meters, rate: rates[l.grade], amount: round(l.meters * rates[l.grade]) });
   }
   for (const lot of lots) lot.summary = summary(lot.thaans, rates);
   return {
@@ -443,4 +443,4 @@ async function listGatePasses(req, code, query) {
   return { data, total: ids.length, page: query.page, limit: query.limit };
 }
 
-module.exports = { gatePassOf, saveGatePass, listGatePasses, soCards, form, list, get, create, update, setFinal, remove };
+module.exports = { cardInfo, gatePassOf, saveGatePass, listGatePasses, soCards, form, list, get, create, update, setFinal, remove };

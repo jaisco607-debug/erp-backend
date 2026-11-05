@@ -33,6 +33,8 @@ function init(sequelize) {
       phone: { type: DataTypes.STRING(30), allowNull: true },
       address: { type: DataTypes.STRING(300), allowNull: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      // 1 = January ... 12 = December; Pakistan's usual fiscal year starts in July (accounting settings)
+      fiscalYearStartMonth: { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 7 },
       createdById: { type: DataTypes.UUID, allowNull: true },
     },
     { sequelize, modelName: 'Company', tableName: 'companies', paranoid: true },

@@ -1,0 +1,27 @@
+// /api/v1/purchase-invoices  -  Purchase Invoice (service ACC_PURCHASES). Company people only: VIEW reads, FULL adds / edits / deletes / approves.
+const express = require('express');
+const validate = require('../middlewares/validate');
+const authenticate = require('../middlewares/authenticate');
+const requireService = require('../middlewares/requireService');
+const v = require('../validators/purchaseInvoiceValidator');
+const c = require('../controllers/purchaseInvoiceController');
+
+const SERVICE = 'ACC_PURCHASES';
+const view = requireService(SERVICE, 'VIEW');
+const full = requireService(SERVICE, 'FULL');
+
+const router = express.Router();
+router.use(authenticate);
+router.get('/options', view, c.options);
+router.get('/credit/:id', view, validate(v.get), c.credit);
+router.get('/inwards', view, validate(v.inwards), c.inwards);
+router.get('/', view, validate(v.list), c.list);
+router.post('/', full, validate(v.create), c.create);
+router.get('/:id', view, validate(v.get), c.get);
+router.patch('/:id', full, validate(v.update), c.update);
+router.delete('/:id', full, validate(v.get), c.remove);
+router.post('/:id/approve', full, validate(v.get), c.approve);
+router.post('/:id/unapprove', full, validate(v.unapprove), c.unapprove);
+router.get('/:id/accounts-entry', view, validate(v.get), c.accountsEntry);
+
+module.exports = router;

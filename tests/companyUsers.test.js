@@ -77,7 +77,7 @@ test('changing services, switching off and resetting the password', async () => 
   expect(changed.body.services.map((x) => x.code)).toEqual(['FOLDING']);
   expect((await request(app).get('/api/v1/auth/me').set(userAuth)).body.services).toEqual([expect.objectContaining({ code: 'FOLDING', name: 'Folding', kind: 'FOLDING', access: 'FULL' })]);
   const log = await AuditLog.findOne({ where: { action: 'USER_SERVICES_CHANGED' } });
-  expect(log.before.services).toEqual(['DYEING:VIEW']);
+  expect(log.before.services).toEqual(['DYEING:VIEW', 'FOLDING:VIEW']); // a process brings folding and packing
   expect(log.after.services).toEqual(['FOLDING:FULL']);
 
   await request(app).post(`/api/v1/users/${user.id}/reset-password`).set(auth).send({ newPassword: 'Ali-New-Pass-1' }).expect(204);

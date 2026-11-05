@@ -124,8 +124,9 @@ async function formData(req, store) {
     nextIdNo: nextId,
     nextIdText: idText(nextId),
     today: today(),
-    billTypes: store === 'CHEMICAL' ? ['GST', 'OTHER'] : ['OTHER'],
-    gstRates: [0, 17, 18],
+    billTypes: ['OTHER'], // no GST on a store inward any more: the tax is chosen on the purchase invoice
+    gstRates: [],
+    taxOnInward: false,
     subUnits: m.SUB_UNITS,
     units: UNITS,
     vendors: vendors.map(m.vendorJSON),
@@ -221,7 +222,9 @@ const totals = (lines) => ({
   amount: m.round(lines.reduce((s, l) => s + l.amount, 0), 2),
 });
 
-const headerFields = ['inwardDate', 'billType', 'vendorId', 'acntNo', 'dcNo', 'grnNo', 'notes', 'salesTax', 'gstPercent'];
+// The store no longer takes any sales tax (owner 2026-10-28): the tax % is chosen on the purchase invoice (accounting). billType, salesTax and gstPercent
+// sent by a client are ignored; an inward made before this change keeps the GST it has.
+const headerFields = ['inwardDate', 'vendorId', 'acntNo', 'dcNo', 'grnNo', 'notes'];
 
 /** With a GST % picked, the sales tax = amount x % (OTHER bills have no GST). */
 function applyGst(e) {
@@ -235,8 +238,7 @@ async function create(req, store, data) {
     const lines = await prepare(req, store, data, transaction);
     const idNo = await counters.take(companyId, ID(store), async () => ((await StoreInward.max('idNo', { where: { companyId, store }, transaction })) || 0) + 1, transaction);
     const header = Object.fromEntries(headerFields.filter((f) => data[f] !== undefined).map((f) => [f, blank(data[f])]));
-    if (store === 'GENERAL') header.billType = 'OTHER';
-    const e = StoreInward.build({ ...header, companyId, store, idNo, ...totals(lines), createdById: req.user.id });
+    const e = StoreInward.build({ ...header, billType: 'OTHER', gstPercent: null, salesTax: 0, companyId, store, idNo, ...totals(lines), createdById: req.user.id });
     applyGst(e);
     await e.save({ transaction });
     await StoreInwardLine.bulkCreate(lines.map((l) => ({ ...l, inwardId: e.id })), { transaction });
@@ -254,7 +256,6 @@ async function update(req, store, id, data) {
     const before = await load(id, transaction);
     const lines = await prepare(req, store, data, transaction);
     for (const f of headerFields) if (data[f] !== undefined) e[f] = blank(data[f]);
-    if (store === 'GENERAL') e.billType = 'OTHER';
     if (lines) {
       await StoreInwardLine.destroy({ where: { inwardId: id }, transaction });
       await StoreInwardLine.bulkCreate(lines.map((l) => ({ ...l, inwardId: id })), { transaction });
@@ -324,6 +325,7 @@ async function correct(req, store, id, data) {
     const companyId = req.user.companyId;
     const e = await findOr404(req, store, id, transaction);
     if (!e.isApproved) throw AppError.rule('NOT_APPROVED', 'This entry is not approved yet; edit it normally');
+    await assertNotOnPurchaseInvoice(id, transaction);
     const before = await load(id, transaction);
     const reason = data.reason;
     const fresh = await prepare(req, store, { ...data, lines: data.lines.map((l) => ({ ...l })) }, transaction);
@@ -392,7 +394,6 @@ async function correct(req, store, id, data) {
     for (const i of Object.values(items)) await i.save({ transaction });
     // header; vendor and date follow into the batches and the old movements of this entry
     for (const f of headerFields) if (data[f] !== undefined) e[f] = blank(data[f]);
-    if (store === 'GENERAL') e.billType = 'OTHER';
     const all = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
     Object.assign(e, totals(all.map((l) => ({ qty: l.qty, amount: l.amount }))));
     applyGst(e);
@@ -407,11 +408,22 @@ async function correct(req, store, id, data) {
 
 const approve = (req, store, id) => sequelize.transaction((t) => approveIn(req, store, id, t));
 
+/**
+ * A purchase on a purchase invoice (accounting) is not changed in the store: its amounts are on the vendor's bill. The purchase invoice must be
+ * un-approved or deleted first; the invoice takes the new amounts when it is saved again.
+ */
+async function assertNotOnPurchaseInvoice(inwardId, transaction) {
+  const [b] = await sequelize.query(`SELECT p."voucherNo" FROM purchase_invoice_lines l JOIN purchase_invoices p ON p.id = l."invoiceId" WHERE l."inwardId" = :inwardId`,
+    { replacements: { inwardId }, type: sequelize.QueryTypes.SELECT, transaction });
+  if (b) throw AppError.rule('ENTRY_ON_PURCHASE_INVOICE', `This purchase is on purchase invoice ${String(b.voucherNo).padStart(5, '0')}. Un-approve or delete that invoice first`);
+}
+
 async function unapprove(req, store, id) {
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
     const e = await findOr404(req, store, id, transaction);
     if (!e.isApproved) throw AppError.rule('NOT_APPROVED', 'This entry is not approved');
+    await assertNotOnPurchaseInvoice(id, transaction);
     const lines = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
     const items = Object.fromEntries((await lockItems(lines.map((l) => l.itemId), transaction)).map((i) => [i.id, i]));
     const used = await sequelize.query(`SELECT b.id, it.name FROM store_batches b JOIN store_items it ON it.id = b."itemId"

@@ -15,6 +15,8 @@ const vendorFields = {
   legalName: text(150), status: Joi.string().valid(...VENDOR_STATUS), type: Joi.string().valid(...VENDOR_TYPES), payment: Joi.string().valid(...VENDOR_PAYMENT),
   cnic: text(20), ntn: text(30), gstNo: text(30), email: Joi.string().trim().email().max(150).allow('', null), city: text(80), province: text(80),
   bankName: text(100), bankBranch: text(100), accountTitle: text(150), accountNo: text(50), iban: text(40),
+  creditLimit: Joi.number().strict().precision(2).min(0).max(9999999999999).allow(null), // empty = no limit
+  creditDays: Joi.number().strict().integer().min(0).max(3650), // 0 = due the same day
 };
 const listQuery = Joi.object({ ...paging, export: Joi.boolean(), limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean(), categoryId: id, brandId: id });
 const params = Joi.object({ id: id.required(), store: Joi.string() });
@@ -80,7 +82,7 @@ module.exports = {
     create: { body: Joi.object({ returnDate: date, vendorId: id.required(), reason: Joi.string().valid(...REASONS).required(), notes: text(500), lines: Joi.array().items(vendorReturnLine).min(1).max(100).required() }) },
     cancel: { params, body: Joi.object({ reason: Joi.string().trim().min(3).max(300).required() }) },
   },
-  VENDOR_STATUS, VENDOR_TYPES, VENDOR_PAYMENT,
+  VENDOR_STATUS, VENDOR_TYPES, VENDOR_PAYMENT, vendorFields,
   vendor: master('vendor'),
   category: master('category'),
   brand: master('brand'),

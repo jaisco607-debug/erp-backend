@@ -32,6 +32,8 @@ function init(sequelize) {
       returnedMeters: { ...num('returnedMeters'), allowNull: false, defaultValue: 0 },
       returnedPieces: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       glm: { ...num('glm'), allowNull: true },
+      // the width of the cloth, typed at inward: the lot's default (each thaan can have its own)
+      width: { ...num('width'), allowNull: true },
       gsm: { ...num('gsm'), allowNull: true },
       partyRef: { type: DataTypes.STRING(80), allowNull: true },
       vehicleNo: { type: DataTypes.STRING(30), allowNull: true },
@@ -66,6 +68,8 @@ function initThaans(sequelize) {
       soCardLotId: { type: DataTypes.UUID, allowNull: true },
       // meters of this thaan already on SO cards (a card can take part of a thaan)
       takenMeters: { ...num('takenMeters'), allowNull: false, defaultValue: 0 },
+      // the width of this thaan, typed at inward; it goes with the cloth to the SO card, the departments, Folding and Packing
+      width: { ...num('width'), allowNull: true },
     },
     { sequelize, modelName: 'GreyLotThaan', tableName: 'grey_lot_thaans', timestamps: false },
   );

@@ -9,8 +9,10 @@ const AppError = require('../utils/AppError');
 const { hashPassword } = require('../utils/password');
 const audit = require('./auditService');
 const { endAllSessions } = require('./authService');
-const { companyServices, userServices, servicesOfUsers } = require('./accessService');
+const { companyServices, userServices, servicesOfUsers, profile } = require('./accessService');
+const { signAccessToken } = require('../utils/tokens');
 const { assertEmailFree } = require('./userEmail');
+const { JOB_ROLES, DEFAULT_JOB_ROLE } = require('../utils/jobRoles');
 
 const TYPE = 'USER';
 
@@ -31,8 +33,8 @@ async function details(user, transaction) {
 }
 
 /**
- * Every requested service must be one the company has now. Report services are read-only, so they are
- * always stored as VIEW. Returns the rows ready to save.
+ * Every requested service must be one the company has now. Every service, reports too, can be given as VIEW or FULL
+ * (the client admin decides). Returns the rows ready to save.
  */
 async function prepare(req, wanted, transaction) {
   const have = new Map((await companyServices(req.user.companyId, transaction)).map((s) => [s.id, s]));
@@ -40,7 +42,11 @@ async function prepare(req, wanted, transaction) {
   if (missing.length) {
     throw AppError.rule('SERVICE_NOT_IN_COMPANY', 'You can only give services your company has', { serviceIds: missing });
   }
-  return wanted.map((w) => ({ serviceId: w.serviceId, access: have.get(w.serviceId).kind === 'REPORT' ? 'VIEW' : w.access }));
+  const rows = wanted.map((w) => ({ serviceId: w.serviceId, access: w.access }));
+  // a process brings the company's folding and packing services (VIEW unless given already)
+  const extras = await require('./processBundle').extrasFor(wanted.map((w) => have.get(w.serviceId)), transaction);
+  for (const s of extras) if (have.has(s.id) && !rows.some((r) => r.serviceId === s.id)) rows.push({ serviceId: s.id, access: 'VIEW' });
+  return rows;
 }
 
 async function codesOf(user, transaction) {
@@ -61,15 +67,23 @@ async function serviceOptions(req) {
   return {
     data: services.map((s) => ({
       id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup,
-      // report services are read-only: only VIEW can be given
-      accessLevels: s.kind === 'REPORT' ? ['VIEW'] : ['VIEW', 'FULL'],
+      // every service can be given as VIEW (read only) or FULL (can change)
+      accessLevels: ['VIEW', 'FULL'],
     })),
   };
 }
 
-async function list(req, { page, limit, search, isActive }) {
+/** The job roles for the dropdown and the filter, each with the number of employees of this company who have it. */
+async function roles(req) {
+  const rows = await User.findAll({ attributes: ['jobRole', [sequelize.fn('count', sequelize.col('id')), 'n']], where: { userType: TYPE, companyId: req.user.companyId }, group: ['jobRole'], raw: true });
+  const count = new Map(rows.map((r) => [r.jobRole, Number(r.n)]));
+  return { default: DEFAULT_JOB_ROLE, data: JOB_ROLES.map((r) => ({ code: r.code, label: r.label, count: count.get(r.code) || 0 })) };
+}
+
+async function list(req, { page, limit, search, isActive, jobRole }) {
   const where = { userType: TYPE, companyId: req.user.companyId };
   if (isActive !== undefined) where.isActive = isActive;
+  if (jobRole) where.jobRole = { [Op.in]: jobRole };
   if (search) where[Op.or] = [{ name: { [Op.iLike]: `%${search}%` } }, { email: { [Op.iLike]: `%${search}%` } }, { phone: { [Op.iLike]: `%${search}%` } }];
   const { rows, count } = await User.findAndCountAll({ where, order: [['createdAt', 'ASC']], limit, offset: (page - 1) * limit });
   const services = await servicesOfUsers(rows);
@@ -80,12 +94,12 @@ async function get(req, id) {
   return details(await findOr404(req, id));
 }
 
-async function create(req, { name, email, phone, password, services }) {
+async function create(req, { name, email, phone, password, services, jobRole }) {
   return sequelize.transaction(async (transaction) => {
     const grants = await prepare(req, services, transaction);
     await assertEmailFree(req.user.companyId, email, null, transaction);
     const user = await User.create(
-      { name, email, phone: phone || null, passwordHash: await hashPassword(password), userType: TYPE, companyId: req.user.companyId, createdById: req.user.id },
+      { name, email, phone: phone || null, passwordHash: await hashPassword(password), userType: TYPE, jobRole: jobRole || DEFAULT_JOB_ROLE, companyId: req.user.companyId, createdById: req.user.id },
       { transaction },
     );
     await replaceGrants(req, user, grants, transaction);
@@ -108,6 +122,7 @@ async function update(req, id, changes) {
     if (changes.name !== undefined) user.name = changes.name;
     if (changes.phone !== undefined) user.phone = changes.phone || null;
     if (changes.isActive !== undefined) user.isActive = changes.isActive;
+    if (changes.jobRole !== undefined) user.jobRole = changes.jobRole;
     await user.save({ transaction });
     // a new email changes who they are at login: end their sessions like a switch-off does
     if ((before.isActive && changes.isActive === false) || before.email !== user.email) await endAllSessions(user, transaction);
@@ -149,4 +164,26 @@ async function setServices(req, id, services) {
   });
 }
 
-module.exports = { serviceOptions, list, get, create, update, resetPassword, setServices };
+const OPEN_USER_TTL = '4h';
+
+/**
+ * "Open account": the client admin works inside one employee's account for 4 hours and sees exactly what the employee sees.
+ * The token is the employee's (own services) with the admin's id inside; there is no refresh token. Every change made in that session is
+ * recorded under the admin's name. If a super admin had opened this company, the super admin stays the one behind the token.
+ */
+async function openUser(req, id) {
+  if (id === req.user.id) throw AppError.rule('CANNOT_OPEN_SELF', 'You cannot open your own account');
+  return sequelize.transaction(async (transaction) => {
+    const user = await findOr404(req, id, transaction);
+    if (!user.isActive) throw AppError.rule('USER_INACTIVE', 'This user is switched off: switch it on first');
+    await audit.log(req, { action: 'USER_OPENED', entityType: 'User', entityId: user.id, after: { employeeEmail: user.email, employeeName: user.name, validFor: OPEN_USER_TTL } }, { transaction });
+    return {
+      accessToken: signAccessToken(user, { impersonator: req.impersonator || req.user, ttl: OPEN_USER_TTL }),
+      tokenType: 'Bearer',
+      expiresIn: OPEN_USER_TTL,
+      ...(await profile(user, { transaction })),
+    };
+  });
+}
+
+module.exports = { openUser, roles, serviceOptions, list, get, create, update, resetPassword, setServices };

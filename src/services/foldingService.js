@@ -67,11 +67,11 @@ async function rows(req, depId, extra, replacements, transaction) {
   if (!base.length) return [];
   const jobIds = [...new Set(base.map((r) => r.jobId))];
   const items = await q(`
-    SELECT ji.id, ji."jobId", ji."soCardId", ji."soCardLotId", ji.meters::float AS meters, gl.id AS "lotId", gl."lotNo"
+    SELECT ji.id, ji."jobId", ji."soCardId", ji."soCardLotId", ji.meters::float AS meters, gl.id AS "lotId", gl."lotNo", gl.width::float AS width
     FROM job_items ji JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
     WHERE ji."jobId" IN (:jobIds)`, { jobIds }, transaction);
   const thaans = await q(`
-    SELECT ji."jobId", ji."soCardId", gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", p.meters::float AS meters
+    SELECT ji."jobId", ji."soCardId", gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", COALESCE(t.width, gl.width)::float AS width, p.meters::float AS meters
     FROM job_items ji JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
     JOIN so_card_lot_thaans p ON p."soCardLotId" = scl.id JOIN grey_lot_thaans t ON t.id = p."thaanId"
     WHERE ji."jobId" IN (:jobIds)`, { jobIds }, transaction);
@@ -95,8 +95,8 @@ async function rows(req, depId, extra, replacements, transaction) {
       const lotThaans = [...new Map(thaans.filter((t) => t.jobId === r.jobId && t.soCardId === r.soCardId && t.lotId === lotId).map((t) => [t.thaanId, t])).values()]
         .sort((a, b) => a.thaanNo - b.thaanNo);
       const src = lotThaans.length
-        ? lotThaans.map((t) => ({ thaanId: t.thaanId, thaanNo: t.thaanNo, received: num(t.meters) }))
-        : [{ thaanId: null, thaanNo: null, received: num(lotItems.reduce((t, i) => t + i.meters, 0)) }];
+        ? lotThaans.map((t) => ({ thaanId: t.thaanId, thaanNo: t.thaanNo, width: t.width, received: num(t.meters) }))
+        : [{ thaanId: null, thaanNo: null, width: lotItems[0].width, received: num(lotItems.reduce((t, i) => t + i.meters, 0)) }];
       const lines = src.map((s) => {
         const g = graded.find((x) => x.jobId === r.jobId && x.soCardId === r.soCardId && x.greyLotId === lotId && (x.thaanId || null) === s.thaanId) || {};
         const grade = { a: num(g.aMeters), b: num(g.bMeters), cp: num(g.cpMeters) };
@@ -104,7 +104,7 @@ async function rows(req, depId, extra, replacements, transaction) {
         const folded = sum3(grade);
         const inFolding = { a: round(grade.a - sent.a), b: round(grade.b - sent.b), cp: round(grade.cp - sent.cp) };
         return {
-          thaanId: s.thaanId, thaanNo: s.thaanNo, label: s.thaanId ? `Thaan ${s.thaanNo}` : 'Whole lot',
+          thaanId: s.thaanId, thaanNo: s.thaanNo, width: s.width ?? null, label: s.thaanId ? `Thaan ${s.thaanNo}` : 'Whole lot',
           received: s.received, ...grade, folded,
           // gain / loss is known only when the whole thaan is graded or the row is closed;
           // cloth still waiting in Folding is not a loss (owner 2026-10-19)
@@ -121,7 +121,7 @@ async function rows(req, depId, extra, replacements, transaction) {
       });
       const t = (f) => round(lines.reduce((x, l) => x + f(l), 0));
       lots.push({
-        lotId, lotNo: lotItems[0].lotNo, hasThaans: lotThaans.length > 0, thaanCount: lotThaans.length,
+        lotId, lotNo: lotItems[0].lotNo, width: lotItems[0].width ?? null, widths: [...new Set(lines.map((l) => l.width).filter((w) => w != null))].sort((a, b) => a - b), hasThaans: lotThaans.length > 0, thaanCount: lotThaans.length,
         jobItemIds: lotItems.map((i) => i.id),
         received: t((l) => l.received), a: t((l) => l.a), b: t((l) => l.b), cp: t((l) => l.cp), folded: t((l) => l.folded),
         sent: t((l) => l.sent.total), inFolding: t((l) => l.inFolding.total), notGraded: t((l) => l.notGraded),

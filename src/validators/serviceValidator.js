@@ -1,7 +1,7 @@
 const { Joi, uuidParam } = require('./common');
 
 const KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
-const GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS'];
+const GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL'];
 
 module.exports = {
   // kind: one or more of MODULE, PROCESS, FOLDING, PACKING, REPORT, e.g. ?kind=PROCESS&kind=FOLDING (or ?kind=PROCESS,FOLDING)
@@ -33,7 +33,9 @@ module.exports = {
   update: {
     params: uuidParam,
     body: Joi.object({
-      name: Joi.string().trim().min(2).max(120),
+      code: Joi.forbidden().messages({ 'any.unknown': 'the code of a service cannot be changed' }),
+      name: Joi.string().trim().min(1).max(120),
+      kind: Joi.string().valid(...KINDS),
       tracksColour: Joi.boolean(),
       isActive: Joi.boolean(),
       sortOrder: Joi.number().integer().min(0).max(100000),

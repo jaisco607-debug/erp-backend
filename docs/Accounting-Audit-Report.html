@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Accounting Module: Audit and Test Report</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.5pt; line-height: 1.45; color: #1c2430; margin: 0; }
+  h1 { font-size: 22pt; margin: 0 0 4px; color: #0b3d5c; }
+  h2 { font-size: 14pt; margin: 22px 0 8px; color: #0b3d5c; border-bottom: 2px solid #0b3d5c; padding-bottom: 3px; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 14px 0 4px; color: #1c2430; page-break-after: avoid; }
+  p { margin: 5px 0; }
+  .sub { color: #5b6672; margin-bottom: 14px; }
+  .verdict { background: #e8f5ec; border: 1px solid #2f8f4e; border-left: 6px solid #2f8f4e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .verdict b { color: #1e6b37; }
+  .warn { background: #fff6e0; border: 1px solid #d9a21b; border-left: 6px solid #d9a21b; padding: 8px 14px; margin: 10px 0; border-radius: 4px; }
+  .cards { display: flex; gap: 8px; margin: 10px 0; }
+  .card { flex: 1; border: 1px solid #cfd8e0; border-radius: 6px; padding: 8px 10px; text-align: center; }
+  .card .n { font-size: 20pt; font-weight: 700; color: #0b3d5c; }
+  .card .l { font-size: 8.5pt; color: #5b6672; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 9.5pt; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th { background: #0b3d5c; color: #fff; text-align: left; padding: 5px 7px; }
+  td { border-bottom: 1px solid #dde4ea; padding: 5px 7px; vertical-align: top; }
+  tr:nth-child(even) td { background: #f6f9fb; }
+  .ok { color: #1e6b37; font-weight: 700; }
+  .bad { color: #b3261e; font-weight: 700; }
+  .lim { color: #8a6100; font-weight: 700; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 8.5pt; font-weight: 700; color: #fff; }
+  .low { background: #6b7a89; } .med { background: #d9a21b; } .info { background: #3b82b6; } .fixed { background: #2f8f4e; }
+  ul { margin: 4px 0 4px 18px; padding: 0; }
+  li { margin: 2px 0; }
+  .small { font-size: 9pt; color: #5b6672; }
+  code { background: #eef2f5; padding: 0 3px; border-radius: 3px; font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<h1>Accounting Module: Audit and Test Report</h1>
+<div class="sub">ERP backend (textile mill) &middot; audit date 27 October 2026 &middot; scope: everything built in the accounting module since 24 October 2026</div>
+
+<div class="verdict">
+  <b>Result: no accounting defect was found that changes a number in the books.</b>
+  Every accounting test that can run here passes (88 of 90; the other 2 need the real test database), the books of the real development company balance to the paisa, and the module refused every wrong, hostile or cross-company request it was given.
+  One small hardening was made during the audit (section 5, finding F1). Items that could not be tested in this environment, and the things that are not built yet, are listed honestly in sections 6 and 7.
+</div>
+
+<h2>1. What was audited</h2>
+<table>
+  <tr><th style="width:26%">Area</th><th>What it contains</th></tr>
+  <tr><td>Chart of Accounts</td><td>Account tree (folders and accounts), numbering rules, system accounts, contra accounts, templates, opening balances, fiscal year setting, issue checks</td></tr>
+  <tr><td>Journal engine</td><td>One balanced entry per document; reversals instead of edits; database rules that block changes to posted lines</td></tr>
+  <tr><td>Sales Invoice, Purchase Invoice</td><td>Draft, approve (posts the entry), un-approve (reverses it), payment status</td></tr>
+  <tr><td>Vouchers</td><td>Payment Voucher (vendors), Receipt Voucher (customers), Journal Voucher; advances; income tax withholding</td></tr>
+  <tr><td>Ledgers</td><td>Party Ledger, Accounts Payables / Receivables, Bank Summary with clearing dates and bank reconciliation figures</td></tr>
+  <tr><td>Reports</td><td>Trial Balance, Customer / vendor balances, Profit &amp; Loss, Balance Sheet, Receivable &amp; payable at cut-off</td></tr>
+</table>
+<div class="cards">
+  <div class="card"><div class="n">12</div><div class="l">Database migrations</div></div>
+  <div class="card"><div class="n">~85</div><div class="l">API endpoints</div></div>
+  <div class="card"><div class="n">~4,000</div><div class="l">Lines of service code</div></div>
+  <div class="card"><div class="n">90</div><div class="l">Accounting tests</div></div>
+</div>
+
+<h2>2. How it was checked</h2>
+<ul>
+  <li><b>Automated tests</b> of every feature (90 tests in 10 files), each run against the real database inside a transaction that is rolled back, so no test data remains.</li>
+  <li><b>New audit tests</b> written for this audit (6 tests, file <code>tests/accountingAudit.test.js</code>): who may call what, company separation, bad and hostile input, exact tax arithmetic, 70 random operations, and the journal engine itself.</li>
+  <li><b>Regression run</b> of the other (non-accounting) test files, to see that the accounting changes did not break the rest of the system.</li>
+  <li><b>Integrity check on the real data</b> of the development company: trial balance, all 8 built-in checks, balance sheet, and direct database queries.</li>
+  <li><b>Code reading</b> of the journal engine, the voucher confirm / un-confirm paths, invoice approve / un-approve, routes and permissions, and a scan for queries that are not limited to one company.</li>
+</ul>
+
+<h2>3. Test results</h2>
+<table>
+  <tr><th>Test file</th><th>What it covers</th><th>Tests</th><th>Result</th></tr>
+  <tr><td>accounts</td><td>Account tree, numbering, templates, system / contra accounts, balances</td><td>18</td><td><span class="ok">17 pass</span> &middot; <span class="lim">1 not runnable here</span> (see 6)</td></tr>
+  <tr><td>journal</td><td>Journal engine, default accounts, reversals</td><td>7</td><td><span class="ok">6 pass</span> &middot; <span class="lim">1 not runnable here</span> (see 6)</td></tr>
+  <tr><td>openingBalances</td><td>Opening balances, settings, issues</td><td>10</td><td class="ok">10 pass</td></tr>
+  <tr><td>trialBalance</td><td>Trial Balance, ledger, the checks</td><td>7</td><td class="ok">7 pass</td></tr>
+  <tr><td>salesInvoices</td><td>Sales invoice flow and its entries</td><td>9</td><td class="ok">9 pass</td></tr>
+  <tr><td>purchaseInvoices</td><td>Purchase invoice flow and its entries</td><td>10</td><td class="ok">10 pass</td></tr>
+  <tr><td>vouchers</td><td>Payment, Receipt and Journal vouchers, access</td><td>14</td><td class="ok">14 pass</td></tr>
+  <tr><td>partyLedger</td><td>Party Ledger, Payables / Receivables, Bank Summary</td><td>4</td><td class="ok">4 pass</td></tr>
+  <tr><td>reports</td><td>Profit &amp; Loss, Balance Sheet, balances, cut-off</td><td>5</td><td class="ok">5 pass</td></tr>
+  <tr><td>accountingAudit (new)</td><td>Access, company separation, bad input, arithmetic, random operations, engine</td><td>6</td><td class="ok">6 pass</td></tr>
+  <tr><td><b>Total</b></td><td></td><td><b>90</b></td><td><b>88 pass, 2 not runnable here, 0 failed because of the accounting code</b></td></tr>
+</table>
+<p class="small">88 of the 90 accounting tests pass; the two that cannot run in this environment are explained in section 6. The service catalogue test file (<code>serviceAccess</code>) was also updated for the new Bank Summary service; 3 of its 4 tests pass here (section 6).</p>
+
+<h3>3.1 What the new audit tests proved</h3>
+<table>
+  <tr><th style="width:24%">Test</th><th>What was done</th><th style="width:14%">Result</th></tr>
+  <tr><td>Access</td><td>24 read endpoints and 19 write endpoints called three ways: without login (must be 401), with a login but without the service (must be 403), and with view-only access (writes must be 403).</td><td class="ok">All correct</td></tr>
+  <tr><td>Company separation</td><td>A second company tried to read, change, delete, confirm, un-confirm and open the ledger of 28 records of the first company, and to use the first company's vendor, customer, bill, invoice and accounts inside its own vouchers.</td><td class="ok">All refused (404 / 422). Nothing leaked into the other company's books.</td></tr>
+  <tr><td>Bad and hostile input</td><td>Zero, negative, text, 3-decimal, huge and null amounts; bad rates, ids, dates and page sizes; SQL-injection strings, scripts, 5,000-character text, emoji and null bytes, in every search box and text field.</td><td class="ok">Every request ended in a clean 4xx or a normal answer. No server error. All tables and the books intact afterwards.</td></tr>
+  <tr><td>Tax arithmetic</td><td>12 amounts (from 0.01 to 99,999.99) against 12 rates (0.25 % to 33.33 %), for payments and receipts, compared with an independent exact calculation using whole paisas.</td><td class="ok">Every paisa equal. The posted entry of a confirmed receipt is exactly balanced.</td></tr>
+  <tr><td>Random operations</td><td>70 random steps: drafts of payments, receipts and journal vouchers, confirms, moves to draft, deletes, with random amounts, rates, dates, banks and cash. The books were checked every 23 steps and at the end.</td><td class="ok">The Trial Balance and all 8 checks stayed green; the Balance Sheet balanced; the lists and reports agreed with each other; no invoice was ever over-paid.</td></tr>
+  <tr><td>Journal engine</td><td>The engine called directly with a customer / vendor of another company, unbalanced lines, one-sided lines, and a single line.</td><td class="ok">All refused; nothing saved. A real party still works.</td></tr>
+</table>
+
+<h3>3.2 Integrity of the real development data</h3>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>Company "Textile": 14 entries, 42 accounts, 3 reversed entries. Trial Balance balanced (difference 0.00)</td><td class="ok">Pass</td></tr>
+  <tr><td>All 8 built-in checks (balance, control accounts vs customers / vendors, invoices vs ledger, vouchers vs ledger, paid amounts vs vouchers)</td><td class="ok">8 of 8 OK</td></tr>
+  <tr><td>Balance Sheet: assets = liabilities + equity</td><td class="ok">Balanced (difference 0.00)</td></tr>
+  <tr><td>Database: entries whose debit is not equal to credit</td><td class="ok">0</td></tr>
+  <tr><td>Database: lines posted to an account of a different company</td><td class="ok">0</td></tr>
+  <tr><td>Database: lines posted to a folder (group) account</td><td class="ok">0</td></tr>
+</table>
+
+<h2>4. Features confirmed working</h2>
+<ul>
+  <li>An entry always balances; a posted entry is never edited, only reversed; the database itself refuses to change posted lines.</li>
+  <li>Saving a voucher or invoice as a draft changes nothing in the books; confirming posts exactly one entry; moving back to draft posts a reversal and restores the paid amounts.</li>
+  <li>Two draft vouchers cannot spend the same bill twice: the second one is refused when it is confirmed.</li>
+  <li>Advances go to their own accounts with the party named; customer and vendor totals always agree with the control accounts.</li>
+  <li>Income tax withholding is exact (cheque + tax = bill amount for receipts; tax = bills x rate for payments).</li>
+  <li>Party Ledger, Payables / Receivables, Customer / vendor balances and the cut-off report give the same totals for the same date.</li>
+  <li>Profit &amp; Loss, Balance Sheet and Trial Balance agree with each other; a contra account shows with the correct sign.</li>
+  <li>Every report and every screen is limited to the user's own company and to the services given to that user.</li>
+</ul>
+
+<h2>5. Findings</h2>
+<table>
+  <tr><th style="width:5%">#</th><th style="width:11%">Level</th><th>Finding</th><th style="width:32%">Action</th></tr>
+  <tr><td>F1</td><td><span class="tag low">Low</span></td><td>The journal engine did not itself check that a customer / vendor named on a line belongs to the same company. Every screen already checked it, so no wrong entry could be made through the application; the engine just relied on its callers.</td><td><span class="tag fixed">Fixed</span> The engine now checks it (<code>PARTY_NOT_FOUND</code>). A new test covers it. One older Trial Balance test had used an invented customer id on purpose; it now creates a real customer (the test was corrected, not the rule). All accounting suites were re-run after the change.</td></tr>
+  <tr><td>F2</td><td><span class="tag info">Note</span></td><td>Sales and purchase invoice totals (gross, tax, net) are worked out with rounded ordinary numbers; vouchers, accounts and reports use exact whole-paisa arithmetic. The database column is exact to 2 decimals and the Trial Balance check compares each invoice with its ledger entry, so a difference would be shown.</td><td>No change. Recommended later: move the invoices to the same exact arithmetic.</td></tr>
+  <tr><td>F3</td><td><span class="tag info">Note</span></td><td>Some updates and deletes work on a record by its id after the record was first loaded with a company filter. This is safe today, but the filter is not repeated in the second statement.</td><td>No change. Optional hardening later.</td></tr>
+  <tr><td>F4</td><td><span class="tag med">Medium (missing feature)</span></td><td>There is no period lock and no year-end closing. A user with full access can post or change vouchers dated in a month that is already finished.</td><td>Not built yet. Recommended next: a "locked until" date per company, and a year-end close.</td></tr>
+  <tr><td>F5</td><td><span class="tag info">Note</span></td><td>Voucher numbers are the highest number plus one. If the last draft is deleted, its number is used again.</td><td>Decision for the owner: keep (simple) or never re-use numbers.</td></tr>
+  <tr><td>F6</td><td><span class="tag info">Note</span></td><td>During the audit one request returned a server error while two test runs were using the same database at the same time. It did not repeat when the same test was run alone (three clean runs). In the same period another test file (greyReturn) reported "Client has encountered a connection error", so the most likely cause is the database connection being overloaded by two simultaneous test runs, not the accounting code. This is not proven, so it is reported here and not hidden.</td><td>Watch for it in real use; run the real <code>npm test</code> on a separate test database.</td></tr>
+</table>
+
+<h2>6. What could not be tested here</h2>
+<div class="warn">
+  The standard test command (<code>npm test</code>) needs a separate empty database called <code>erp_test</code>, which does not exist yet. The audit used a rollback runner on the development database instead. Because of this:
+  <ul>
+    <li><b>2 accounting tests cannot run</b> in the rollback runner (not failures of the code): the test that opens two connections at the same moment to prove that many users adding accounts never get the same code, and the test that checks that the database refuses to change posted lines (it needs a transaction to fail, which the runner does not allow). They must be run once with the real <code>npm test</code>; until then they are unconfirmed.</li>
+    <li>Real simultaneous use by several people (true concurrency) was checked by reading the code (every confirm / approve takes a per-company lock) but not by a live stress test.</li>
+  </ul>
+</div>
+<h3>Other (non-accounting) test files, run for regression</h3>
+<table>
+  <tr><th>Result</th><th>Files</th></tr>
+  <tr><td class="ok">Pass</td><td>chemicalBatches, chemicalRequests, colours, departmentChemicals, departmentFlow, foldingThaans, greyThaans, jobs, packing, reportsHub, soCardThaans, storeLedgers, stores, vendorReturns</td></tr>
+  <tr><td class="lim">Cannot run in the runner (it does not support <code>afterAll</code>)</td><td>app, auth, companies, companyUsers, grey, soCards, superAdmin</td></tr>
+  <tr><td class="lim">Database connection dropped during the run</td><td>greyReturn ("Client has encountered a connection error"); it was running at the same time as another test run</td></tr>
+  <tr><td class="lim">Fail only because the development database holds real companies</td><td>employees (the super admin sees the real company too), serviceAccess (1 of 4: "a new company gets nothing" sees the real company)</td></tr>
+  <tr><td class="lim">Cannot run in the runner (it does not run <code>beforeAll</code> / <code>jest</code> helpers)</td><td>storeMasters (its setup is in <code>beforeAll</code>), locks (uses <code>jest</code> timers)</td></tr>
+</table>
+<p class="small">These files should be run once with the real <code>npm test</code> on the <code>erp_test</code> database before going live. None of the accounting changes touched them except small integrations (the packing and store inward guards), whose own suites (stores, storeLedgers, chemical, grey-related) passed where they could run.</p>
+
+<h2>7. Not built yet (known gaps)</h2>
+<ul>
+  <li>Period lock and year-end closing (finding F4).</li>
+  <li>Debit note for goods returned to a vendor; purchase bills without a store inward; expense bills.</li>
+  <li>A screen to apply an advance to an invoice (today: by a Journal Voucher).</li>
+  <li>Bank statement import and automatic matching; server-made PDF / Excel for reports; FBR upload.</li>
+  <li>Comparison with a previous period, cash-flow statement.</li>
+</ul>
+
+<h2>8. Before going live</h2>
+<ol>
+  <li>Create the <code>erp_test</code> database and run the real <code>npm test</code>; every file must pass.</li>
+  <li>Restart the server; the super admin must give the new services to the company: Purchase Invoice, Accounting Reports, Payment / Receipt / Journal Voucher, Bank Summary.</li>
+  <li>Take a backup of the production database before running the new migrations (12 migrations, 24 to 30 October).</li>
+  <li>Enter the opening balances through the Opening Balances screen, then check the Trial Balance and the Balance Sheet (both must balance).</li>
+  <li>Decide about the period lock (F4) before real month-end work starts.</li>
+  <li>Nothing has been committed to git yet. Use a branch and a pull request, not the main branch.</li>
+</ol>
+
+<p class="small" style="margin-top:18px">Prepared by Claude Code (automated audit). Evidence: test files in <code>tests/</code>, the guides in <code>docs/frontend/</code>, the change log in <code>docs/CHANGELOG-accounts-v2.md</code>.</p>
+</body>
+</html>

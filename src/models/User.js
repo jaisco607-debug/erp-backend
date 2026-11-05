@@ -3,6 +3,7 @@
 //   CLIENT_ADMIN  runs one company, gives its users some or all of the company's services
 //   USER          works in one company with the services given to them
 const { DataTypes, Model } = require('sequelize');
+const { labelOf } = require('../utils/jobRoles');
 
 const USER_TYPES = ['SUPER_ADMIN', 'CLIENT_ADMIN', 'USER'];
 
@@ -15,6 +16,8 @@ class User extends Model {
       email: this.email,
       phone: this.phone,
       userType: this.userType,
+      jobRole: this.jobRole || null,
+      jobRoleText: labelOf(this.jobRole),
       companyId: this.companyId,
       isActive: this.isActive,
       lastLoginAt: this.lastLoginAt,
@@ -50,6 +53,8 @@ function init(sequelize) {
       lastLoginAt: { type: DataTypes.DATE, allowNull: true },
       passwordChangedAt: { type: DataTypes.DATE, allowNull: true },
       createdById: { type: DataTypes.UUID, allowNull: true },
+      // what the person is (Employee, Manager, Accountant ...): a label and a filter, never a permission; only employees have one
+      jobRole: { type: DataTypes.STRING(30), allowNull: true },
     },
     { sequelize, modelName: 'User', tableName: 'users', paranoid: true },
   );

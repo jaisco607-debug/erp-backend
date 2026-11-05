@@ -366,7 +366,7 @@ Full frontend guide: `docs/frontend/step7-stores.md`. `:store` is `chemical` or 
   `POST /inwards`, `GET/PATCH/DELETE /inwards/:id`, `POST /inwards/:id/approve`, `POST /inwards/:id/unapprove` (client admin).
 
 ## Reports (2026-10-20)
-Full frontend guide (screens, PDF / Excel download): `docs/frontend/reports.md`. Every report group is its own service (`REPORT_OVERVIEW`, `REPORT_GREY`, `REPORT_SO_CARDS`, `REPORT_DEPARTMENTS`, `REPORT_CHEMICAL_COST`, `REPORT_FOLDING`, `REPORT_ACTIVE_FABRIC`, `REPORT_PACKING`, `REPORT_GATE_PASSES`); VIEW is enough. `GET /v1/reports` lists only the reports the person may open. All `GET`.
+Full frontend guide (screens, PDF / Excel download): `docs/frontend/accounting-reports.md`. Every report group is its own service (`REPORT_OVERVIEW`, `REPORT_GREY`, `REPORT_SO_CARDS`, `REPORT_DEPARTMENTS`, `REPORT_CHEMICAL_COST`, `REPORT_FOLDING`, `REPORT_ACTIVE_FABRIC`, `REPORT_PACKING`, `REPORT_GATE_PASSES`); VIEW is enough. `GET /v1/reports` lists only the reports the person may open. All `GET`.
 Every list report answers `{ report, title, filters, columns: [{key, label, type, total?}], rows, totals, page, limit, total }`; `totals` are over all filtered rows; `all=true` sends every row (max 20,000) for downloads. Common query: `page`, `limit` (max 500), `all`, `dateFrom`, `dateTo`, `customerId`.
 - `GET /v1/reports`: report list + filter dropdowns (departments, customers, qualities, statuses).
 - `GET /v1/reports/overview`: headline numbers of every module (`rows` + `summary`).
@@ -406,3 +406,120 @@ Full frontend guide: `docs/frontend/employees.md`.
 
 ## Colours: Dyeing employees (2026-10-20)
 Details: `docs/frontend/colours.md`. `GET /v1/colours` (+ `/:id`) and `POST /v1/colours` are open to **Dyeing** (the only department that gives colours) as well as to the SO Card service: list = VIEW on either, create = FULL on either. `PATCH` / `DELETE` stay with SO Card FULL. Other departments still get 403. The job data (`colour`, `colours`, `items[].colour`) carries the colour to every department, so screens should not look names up in `/v1/colours`.
+
+## Accounting: Chart of Accounts, journal, Sales Invoice (2026-10-24 to 2026-10-26)
+
+All under `/api/v1`. Guides: `docs/frontend/chart-of-accounts.md`, `docs/frontend/sales-invoice.md`. The list of what changed in version 2 is `docs/CHANGELOG-accounts-v2.md`.
+
+- **Chart of Accounts** (service `ACC_COA`): `GET /accounts/options`, `/accounts/tree`, `/accounts`, `/accounts/next-code`, `/accounts/presets`, `/accounts/templates`, `/accounts/issues`, `/accounts/:id`; `POST /accounts`, `POST /accounts/apply-template`; `PATCH` and `DELETE /accounts/:id`.
+- **Opening balances and settings** (service `ACC_COA`): `GET|PUT /accounting/opening-balances`, `GET|PUT /accounting/settings`.
+- **Sales Invoice** (service `ACC_SALES`): `GET /sales-invoices/options`, `/sales-invoices/gate-passes`, `/sales-invoices`, `/sales-invoices/:id`, `/sales-invoices/:id/accounts-entry`; `POST /sales-invoices`, `POST /sales-invoices/:id/approve`, `POST /sales-invoices/:id/unapprove`; `PATCH` and `DELETE /sales-invoices/:id`.
+- **Customers** now carry the vendor-style fields (legal name, status, type, payment, CNIC, NTN, GST#, email, city, province, bank); `GET /customers/options` has the dropdown values.
+- **Purchase Invoice** (service `ACC_PURCHASES`): `GET /purchase-invoices/options`, `/purchase-invoices/inwards`, `/purchase-invoices`, `/purchase-invoices/:id`, `/purchase-invoices/:id/accounts-entry`; `POST /purchase-invoices`, `POST /purchase-invoices/:id/approve`, `POST /purchase-invoices/:id/unapprove`; `PATCH` and `DELETE /purchase-invoices/:id`. Guide: `docs/frontend/purchase-invoice.md`.
+- **Reports** (service `ACC_REPORTS`, read only): `GET /accounting/trial-balance`, `GET /accounting/ledger?accountId=`. Guide: `docs/frontend/trial-balance.md`.
+- The journal (the accounting engine) has no endpoints of its own yet: invoices and vouchers post through `journalService`; a posted line is never changed (a reversal entry is posted instead).
+
+## Vouchers (accounting)
+
+- **Payment Voucher** (`ACC_PAYMENTS`): `/payment-vouchers` - `GET /options`, `GET /bills?vendorId`, `GET /`, `POST /`, `GET|PATCH|DELETE /:id`, `POST /:id/confirm`, `POST /:id/unconfirm`, `GET /:id/accounts-entry`.
+- **Receipt Voucher** (`ACC_RECEIPTS`): `/receipt-vouchers` - same, with `GET /invoices?customerId`.
+- **Journal Voucher** (`ACC_JOURNAL`): `/journal-vouchers` - same, without the picker.
+Guide: `docs/frontend/vouchers.md`.
+
+## Ledgers (accounting reports)
+
+- `GET /accounting/party-ledger?partyType&partyId`, `GET /accounting/payables`, `GET /accounting/receivables` (ACC_REPORTS).
+- `GET /accounting/bank-accounts`, `GET /accounting/bank-summary?accountId`, `PUT /accounting/bank-clearing`, `DELETE /accounting/bank-clearing/:lineId` (ACC_BANK).
+Guide: `docs/frontend/ledgers.md`.
+
+## Reports (accounting, ACC_REPORTS)
+
+`GET /accounting/profit-loss`, `/balance-sheet`, `/balances`, `/balances/open-items`, `/cutoff` (and `/trial-balance`, `/ledger`). Guide: `docs/frontend/accounting-reports.md`.
+
+Credit terms (2026-10-29): customers / vendors carry `creditLimit` (optional) and `creditDays`; both invoices have `dueDate`, `isOverdue` and `creditWarning` (a warning only); `GET /sales-invoices/credit/:customerId`, `GET /purchase-invoices/credit/:vendorId`; `GET /accounting/due-schedule` (receivable / payable / net by due date; `date`, `buckets=15,30,60`, `search`, `detail`). Guide: `docs/frontend/credit-terms.md`.
+
+## Contra voucher (accounting, ACC_CONTRA)
+
+`/contra-vouchers`: `GET /options`, `GET /invoices?customerId`, `GET /bills?vendorId`, `GET /`, `POST /`, `GET|PATCH|DELETE /:id`, `POST /:id/confirm`, `POST /:id/unconfirm`, `GET /:id/accounts-entry`. Guide: `docs/frontend/contra-voucher.md`.
+
+## Default accounts (ACC_COA)
+
+`GET /accounts/defaults`, `GET /accounts/defaults/:key/candidates`, `PUT /accounts/defaults/:key`, `POST /accounts/defaults/:key/create`, `POST /accounts/defaults/create-all`. Guide: `docs/frontend/default-accounts.md`.
+
+Open an employee's account (2026-10-29): `POST /users/:id/open` (client admin only) answers `{ accessToken, tokenType, expiresIn: "4h", user, company, services }`, no refresh token. Guide: `docs/frontend/open-employee-account.md`.
+
+Process overview (2026-10-30): `GET /v1/departments/overview` answers an array, one item per department the person may see (a client admin: all; a user: the ones given): `{ id, code, name, kind, counts: { IN_WAY, QUEUE, PENDING, PROCESSING, COMPLETE, REJECTED, rejectedHere } }`. The five statuses are the incoming list with show=active; `REJECTED` = the department's `/rejected` list (jobs it sent that were rejected); `rejectedHere` = incoming with status=REJECTED. Rate limit: every signed-in person has their own bucket (`RATE_LIMIT_USER_PER_MINUTE`, default 1200/min), anonymous requests share `RATE_LIMIT_IP_PER_MINUTE` (default 300/min) per IP; before, 300/min was shared by everyone behind one IP.
+
+Store overview (2026-10-30): `GET /v1/stores/overview?months=6` (1 to 12, default 6, including the current month) answers `{ asOf, stores: [ { store, name, series[months], stock { value, itemCount, lowCount, outCount, byCategory[] }, topVendors[5], drafts { inwards, outwards } } ] }` for the stores the person has a service for (an empty list when none). Inwards = approved inwards by date at the billed amount (amount + tax); outwards = ISSUE store moves at the stock rate (the General Store has none: zeros); `drafts.outwards` = chemical requests still waiting in the store (Queue / Process). Money is a string with 2 decimals. Seven aggregated queries for all stores together. Test: `tests/storeOverview.test.js`.
+
+Accounting overview (2026-10-30): `GET /v1/accounting/overview` answers the whole Accounting Overview screen: `asOf`, `today { sales, purchases, received, paid }`, `cashBank`, `partyBalances`, `stock`, `profit`, `books`, `months` (6), `vouchers`, `topReceivables`, `topPayables`, `recentSales`, `recentPurchases`, `recentVouchers`. Every block is checked on its own against the person's services (ACC_SALES, ACC_PURCHASES, ACC_RECEIPTS, ACC_PAYMENTS, ACC_JOURNAL, ACC_COA, ACC_REPORTS, CHEMICAL_STORE / GENERAL_STORE): a block the person may not see is `null` (200, never 403), an allowed empty list is `[]`. Money is a string with 2 decimals, counts are integers. `profit` and `books` are the Profit & Loss and Balance Sheet reports' own answers; `partyBalances` follow `/accounting/balances`; `months` is the Profit & Loss by month. Test: `tests/accountingOverview.test.js`.
+
+Payroll services (2026-10-30): `PAYROLL` is a valid `menuGroup` (create / edit service). Four built-in MODULE services in that tab (VIEW / FULL): `PAYROLL_SALARY`, `PAYROLL_REPORTS`, `PAYROLL_APPLICATIONS`, `PAYROLL_EMPLOYEES`. They are given to companies and employees like every other service and show in `GET /services`, `GET /users/service-options` and `GET /auth/me` (`services[]`). No payroll data endpoints yet.
+
+Employee job roles and access levels (2026-10-30): `users.jobRole` (a label and a filter, never a permission; list in `src/utils/jobRoles.js`: Employee, Supervisor, Assistant Manager, Manager, Department Manager, Accountant, Finance, Assistant Accountant, Store Manager, Store Inventory Employee ...). `GET /v1/users/roles` -> `{ default: "EMPLOYEE", data: [{ code, label, count }] }`; `POST /v1/users` takes `jobRole` (default EMPLOYEE), `PATCH /v1/users/:id` can change it; `GET /v1/users?jobRole=ACCOUNTANT,MANAGER` filters; user objects (list, get, auth/me, login) have `jobRole` and `jobRoleText` (null for admins). Every service, report services too, can be given to an employee as VIEW or FULL (`accessLevels` is always `["VIEW","FULL"]`, a report service is no longer forced to VIEW).
+
+Payroll masters (2026-10-30, chunk 1 of Payroll): `/v1/payroll/{groups,departments,designations,shifts,holidays,banks}` (list, create, get, patch, delete; list `{ data, page, limit, total }`) and `GET /v1/payroll/masters` (all active masters for the dropdowns). Read: any payroll service (VIEW); change: `PAYROLL_EMPLOYEES` FULL. The four default groups (Factory, Outlet, Head Office, Admin) are made per company on first use and can never be deleted; a group, department, designation, shift, bank or holiday is deleted only when nothing uses it (`IN_USE`). Guide: `docs/frontend/payroll-masters.md`.
+
+Payroll employee master (2026-10-30, chunk 2): `/v1/payroll/employees` (list with filters and `closed=false|true|all`, `/summary` for the tab numbers, create, get, patch, delete a draft), `POST /:id/confirm`, `/unconfirm`, `/close` `{ leavingDate }`, `/reopen`, and the documents `PUT|GET|DELETE /:id/files/{photo,cnic-front,cnic-back}`. Files are kept in the database (`payroll_files`, bytea, up to 2 MB, JPG / PNG / PDF, the type read from the first bytes); upload = the raw file as the request body (not multipart) with `X-File-Name`; download needs the bearer token. Money is a string with 2 decimals; payment is cash automatically without bank details. Read: any payroll service; change: `PAYROLL_EMPLOYEES` FULL. Guide: `docs/frontend/payroll-employees.md`.
+
+Payroll policy (2026-10-30, chunk 3): `/v1/payroll/policies` (list, create, get, patch, delete), `GET /policies/by-group?month=YYYY-MM` (the policy in force for every active group) and `GET /policies/effective?groupId&month`. A policy is a version of a group that holds from its month until the next version; a month with none uses the built-in defaults (`source: DEFAULT`). Rules: late limit, half-day limit (must be more than the late limit), lates per half day, weekly off day, overtime factor, leave earned per month, max leave per year, months before leave. A new version starts from the policy in force that month. Read: any payroll service; change: `PAYROLL_EMPLOYEES` FULL. The payroll will copy the policy when it is created. Guide: `docs/frontend/payroll-policy.md`.
+
+Payroll joining applications (2026-10-31, chunk 4): `/v1/payroll/applications` (list, summary, create, get, patch, delete, `POST /:id/submit`, `POST /:id/withdraw`, `PUT|GET|DELETE /:id/files/:kind` with kind photo, cnic-front, cnic-back, form). Read: any payroll service; change: `PAYROLL_APPLICATIONS` FULL. The employee card has `yearlyIncomeTax` (renamed from `monthlyIncomeTax`) and `monthlyEobi`. See docs/frontend/payroll-applications.md.
+
+Payroll application approval (2026-10-31, chunk 5): `PATCH /v1/payroll/applications/:id/review`, `POST /applications/:id/approve`, `POST /applications/:id/reject` (reviewer: client admin or a chosen approver), `POST /applications/:id/reopen` (HR); `GET|PUT /v1/payroll/approvers`. Application statuses DRAFT / IN_REVIEW / APPROVED / REJECTED; approving creates a CONFIRMED employee card with the photo and CNIC copies. See docs/frontend/payroll-approval.md.
+
+Payroll IBAN and percents (2026-10-31): employees and joining applications have `iban` (PK + 22 characters, optional, apart from `accountNo`), `yearlyIncomeTaxPercent` and `monthlyEobiPercent` (0 to 100, 2 decimals, percent of the basic salary; they replace the amount fields `yearlyIncomeTax` and `monthlyEobi`) and the read only `monthlyDeductions { incomeTax, eobi, total }`.
+
+Payroll attendance (2026-11-01, chunk 6): `/v1/payroll/attendance`: `GET /overview`, `POST /punches/preview`, `POST /punches/import` (rows of employee ID + date + time, up to 5000 per call), `GET /punches`, `GET /unmapped`, `GET /batches`, `DELETE /batches/:id` (undo an import), `GET /devices`, `PATCH /devices/:id`, `POST /fetch` (machine API, answers `API_NOT_CONFIGURED` for now), `POST /process`, `GET /days` (month grid), `GET /summary` (totals, overtime days, payable days), `GET /daily`, `PATCH|DELETE /days/:employeeId/:date` (HR correction / reset). Read: any payroll service; change: `PAYROLL_SALARY` FULL. See docs/frontend/payroll-attendance.md.
+
+Payroll resignation applications (2026-11-02, chunk 7): `/v1/payroll/resignations` (list, summary, create, get, patch, delete, `POST /:id/submit`, `/withdraw`, `/reopen` for HR; `PATCH /:id/review`, `POST /:id/approve`, `/reject` for a client admin or chosen approver), `GET /resignations/absentees?days=N` (employees with no punch for N days). Approving closes the employee card with the last working day. Read: any payroll service; HR writes with `PAYROLL_APPLICATIONS` FULL. See docs/frontend/payroll-resignations.md.
+
+Employee loans (2026-11-03, chunk 8): `/v1/payroll/loans` (list, summary, create, get, patch, delete, `POST /:id/submit`, `/withdraw`, `/reopen`, `/attachments` for HR; `PATCH /:id/review`, `POST /:id/approve`, `/reject` for a client admin or chosen approver; `GET /loans/summary` for the tabs). The money is paid by the new **Employee Loan Voucher**: `/v1/employee-loan-vouchers` (same shape as the other vouchers, service `ACC_PAYMENTS`; `GET /loans` is the loan picker): Debit Employee Loans, Credit Bank / Cash. New default account role `EMPLOYEE_LOANS` (group PAYROLL) in `GET /accounts/defaults`. See docs/frontend/payroll-loans.md.
+
+Payroll leave applications and the Annual Leaves report (2026-11-04, chunk 9): `/v1/payroll/leaves` (list, summary, preview, balance, create, get, patch, delete, `POST /:id/submit`, `/withdraw`, `/reopen` for HR; `PATCH /:id/review`, `POST /:id/approve`, `/reject`, `/cancel` for a client admin or chosen approver), `GET /v1/payroll/reports/annual-leaves` and `/annual-leaves/:employeeId`. Annual leave comes from the group policy (earned per month, yearly maximum, months before leave); an approved leave shows as AL in the attendance. See docs/frontend/payroll-leaves.md.
+
+Payroll (2026-11-05, chunk 10): `/v1/payroll/runs` (list by month, create, get, delete, `PATCH /:id/policy`, `POST /:id/add-employees`, `GET /:id/slips`, `GET /:id/attendance`, `POST /:id/slips/move`), `/v1/payroll/slips/:id` (get, patch, delete, `PUT /days/:date`, `POST /get-attendance`, `/calculate`, `/suspend`, `/resume`, `/review`, `/final-review`, `/approve`, `/send-back`). HR (`PAYROLL_SALARY` FULL) changes; a client admin or chosen approver reviews and approves. Approving a payslip posts the entry (Debit Salaries, Credit Salaries Payable / Employee Loans / EOBI Payable / Income Tax Payable - Salaries / Other Employee Deductions) and writes the loan instalment. Salary is paid by the **Salary Payment Voucher** `/v1/salary-payment-vouchers` (service `ACC_PAYMENTS`; `GET /slips` is the payslip picker). Five new default account roles (group PAYROLL). See docs/frontend/payroll-runs.md.
+
+## EOBI Contribution List (payroll reports) and EOBI voucher
+Full guide: `docs/frontend/eobi.md`. Routes under `/payroll/eobi/*` (providers, locations, rates, lists, rows, import, summary; read = any payroll service, write = `PAYROLL_REPORTS` FULL) and `/v1/eobi-vouchers` (`ACC_PAYMENTS`, label `EOV-`). Confirming posts Dr EOBI Payable + Dr EOBI Employer Contribution / Cr Bank. New default role `EOBI_EMPLOYER_EXPENSE`.
+
+## Employee income tax and the salary tax voucher
+Full guide: `docs/frontend/income-tax.md`. `/payroll/income-tax` (list with tax per employee, `PUT employees/:id` edit from a month, `POST import` sheet with `dryRun`, `report`; read = any payroll service, write = `PAYROLL_EMPLOYEES` FULL) and `/v1/salary-tax-vouchers` (`ACC_PAYMENTS`, label `STV-`; confirm posts Dr Income Tax Payable - Salaries / Cr Bank). Payslips expose `taxSource`.
+
+## Services: edit, Packing in Production, Process brings Folding + Packing
+`PATCH /v1/services/:id` (super admin): `name`, `kind`, `menuGroup`, `tracksColour`, `isActive`, `sortOrder`; `code` is refused (400). Built-in modules: `kind` / `menuGroup` / `tracksColour` changes give 403 `CORE_MODULE` (rename allowed). A `PACKING` service always has `menuGroup = PRODUCTION`. Enabling a `PROCESS` service for a company (toggle, list, from the service side) also gives it every active `FOLDING` and `PACKING` service; a user granted a process also gets the company's folding / packing as VIEW (an access level already given is kept). Disabling is not coupled.
+
+## Payroll overview
+`GET /api/v1/payroll/overview?month=YYYY-MM` (any payroll service, VIEW enough; `Cache-Control: private, max-age=30`): month, monthLabel, employees, payroll {totals, runs[]} (same as `/payroll/runs`, no payslips), trend (6 months; net = approved net), breakdown (basic = gross - overtime), attendance, compliance {eobi, tax}, approvals.waiting. A part that cannot be worked out is left out. Test: `tests/payrollOverview.test.js`.
+
+## Salary sheet, attendance sheet, payslip PDF
+Guide: `docs/frontend/payroll-sheets.md`. `GET /payroll/runs/:id/salary-sheet|attendance-sheet[?format=xlsx]`, `GET /payroll/slips/:id/pdf`, `GET /payroll/runs/:id/payslips.pdf` (any payroll service). Food and maintenance are now pro-rata on P + L + HD + R (FIXED salary: in full; HR-typed figures stay). New dependencies `pdfkit`, `exceljs`.
+
+## Salary increment (during the year)
+Guide: `docs/frontend/salary-increment.md`. `/payroll/increments` (list with tabs and counts, csv, sample.csv, employees picker, create drafts, import CSV, page, edit, delete, submit / withdraw / final-review / approve / send-back / reject, bulk steps). HR = `PAYROLL_APPLICATIONS` FULL, approvers = client admin or a chosen approver. Posting updates salary AND food / mobile / maintenance on the employee master. Migration `20261120000001-salary-increments.js`.
+
+## Bank upload file and cash sheet
+Guide: `docs/frontend/bank-file-cash-sheet.md`. Bank file (Meezan Bank layout): `GET /payroll/runs/:id/bank-file[?scope=unpaid|all&onlyNew=true]` (preview, saves nothing), `POST /payroll/runs/:id/bank-file {format, scope, onlyNew}` (PAYROLL_SALARY FULL: makes and keeps the file, ticks the payslips; can be made again), `GET /payroll/runs/:id/bank-files` (history), `GET /payroll/bank-files/:id/download` (the file exactly as made). Payslip JSON has `bankFile` (null or {id, code, label}); the payroll JSON has `bankFile {bankSlips, inFile, last}`. Cash sheet: `GET /payroll/runs/:id/cash-sheet[?scope=&denominations=5000,1000,...&format=json|xlsx|pdf]`. Migration `20261121000001-bank-files.js`.
+
+## Employee card and joining application: fixed tax, no EOBI percent (2026-11-11)
+Guide: `docs/frontend/employee-card-changes.md`. `monthlyIncomeTax` (money string, a fixed amount every month; "0" clears) replaces `yearlyIncomeTaxPercent`; `monthlyEobiPercent` is removed (EOBI comes from the EOBI list); new optional `eobiNo`, `scssiNo` (max 30). The joining application no longer needs any bank data (no bank = cash; old bank data is kept); the reviewer edits `monthlyIncomeTax`. Income-tax screens: `cardPercent` is now `cardAmount`. Migration `20261122000001`.
+
+## Attendance punches upload: strict rows, duplicates (2026-11-11)
+`POST /payroll/attendance/punches/preview|import` rows are `{ employeeId, date: "YYYY-MM-DD", time: "HH:MM" | "HH:MM:SS", device?, mode? }` (max 5000). Only that date and 24-hour time format is accepted (year 2000 to 2100); anything else is an `invalidRows` entry with the reason `Date must be YYYY-MM-DD` / `Time must be HH:MM or HH:MM:SS`. `device` and `mode` are optional (stored as null; no "Unknown" device). A punch is identified by company + employee + exact second; a file with nothing new answers **200** with `inserted: 0`, `batchId: null` and makes no batch and no recalculation (new punches answer 201). The optional server-side `month` check was NOT added.
+
+## Attendance Report and Punch Report (monthly)
+Guide: `docs/frontend/attendance-reports.md`. `GET /payroll/attendance/report` (all employees x dates: code + in / out), `GET /payroll/attendance/report/employees/:id?month=` (one employee, every date), `GET /payroll/attendance/punch-report` (all employees x dates: every punch time), `GET /payroll/attendance/punch-report/employees/:id?month=` (every punch with device and source). Filters: `month, groupId, departmentId, designationId, employeeId, search, closed, page, limit`; `&format=xlsx` for Excel. Any payroll service (VIEW). Test: `tests/payrollAttendance.test.js`.
+
+## Grey width (2026-11-12)
+Guide: `docs/frontend/grey-width.md`. `width` (lot) and `thaans[]` items `{ length, width }` on `POST/PATCH /grey-lots`; lot JSON has `width`, `widths`, `thaans[].width`. The width follows the thaan to the SO card (`lots[].width/widths/thaans[].width`), job items, Folding rows, the packing form and the packing list lines. Migration `20261123000001-grey-width.js`. Test: `tests/greyWidth.test.js`.
+
+Grey width in reports: a `width` column (list text, e.g. "58, 60, 63") on grey lot-wise, grey returns, SO card lots, one SO card (lots and cloth now), cloth now, folding; a numeric `width` per line on packing lists (thaan wise). See `docs/frontend/grey-width.md` section 6.
+
+## Return cloth to the SO Card section (2026-11-13)
+Guide: `docs/frontend/return-to-so-card.md`. `POST /departments/:code/jobs/:jobId/return-to-so-card {all | soCardIds | jobItemIds, reason}` and `POST /departments/:code/return-to-so-card {jobItemIds, reason}`: cloth that came straight from an SO card goes back to the SO desk (job `canReturnToSoCard`; In-Way / Queue / Pending only; FULL access to the department). A job is returned in full (REJECTED + `returnedToSoCard`, statusText "Returned to SO Card") or, for some SO cards only, the returned rows move to a new job. Migration `20261124000001`. Test: `tests/returnToSoCard.test.js`.
+
+## Advance (employee advance, 2026-11-14)
+Guide: `docs/frontend/advance.md`. No approval. `/payroll/advances` (list, summary, `employee/:id` = the form data with the loan history, create / change / delete; HR = PAYROLL_APPLICATIONS FULL), `/v1/employee-advance-vouchers` (accounting voucher with the advance picker, confirm posts Debit Employee Advances / Credit Bank or Cash), payslip `deductions.advance` (+ `advances[]` on the slip, adjustable with `advances: [{advanceId, amount}]`), salary sheet and payslip PDF column. New default account role `EMPLOYEE_ADVANCES`. Migration `20261125000001`. Test: `tests/payrollAdvances.test.js`.
+
+## Chemical requests per department (2026-11-15)
+Guide: `docs/frontend/department-chemical-access.md`. Client admin: `GET /department-settings`, `PUT /department-settings {departments:[{code, chemicalRequests}]}`, `PATCH /department-settings/:code {chemicalRequests}`. `company_services.chemicalRequests` (default true) per department, only counts while the company has the Chemical Store. A department without it: chemical request / return / cost / own-chemicals endpoints give 403 `CHEMICAL_NOT_ALLOWED`; every JSON under `/departments/:code/...` for its people drops the chemical fields; `/auth/me` services of kind PROCESS / FOLDING have `chemicalRequests`. Migration `20261126000001`. Test: `tests/departmentChemicalAccess.test.js`.

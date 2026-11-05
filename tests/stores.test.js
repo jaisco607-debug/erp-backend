@@ -24,7 +24,7 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
   expect((await api('post', '/stores/chemical/items', { name: 'X', unit: 'KG', categoryId: gcat.id })).body.error.code).toBe('UNKNOWN_CATEGORY');
 
   const fd = (await api('get', '/stores/chemical/inwards/form-data')).body;
-  expect(fd).toMatchObject({ nextIdNo: 1, nextIdText: '00001', billTypes: ['GST', 'OTHER'] });
+  expect(fd).toMatchObject({ nextIdNo: 1, nextIdText: '00001', billTypes: ['OTHER'], gstRates: [], taxOnInward: false }); // no tax on a store inward: it is chosen on the purchase invoice
   expect(fd.items).toHaveLength(1);
 
   // draft: rate not known yet
@@ -36,7 +36,7 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
 
   // rate known now: enter it and approve in one save
   const ok = (await api('patch', `/stores/chemical/inwards/${draft.id}`, { lines: [{ itemId: soda.id, qty: 25.5, rate: 100 }], salesTax: 459, approve: true })).body;
-  expect(ok).toMatchObject({ ipNo: 1, isApproved: true, amount: 2550, salesTax: 459, billed: 3009, balance: 3009 });
+  expect(ok).toMatchObject({ ipNo: 1, isApproved: true, amount: 2550, salesTax: 0, billed: 2550, balance: 2550 }); // the salesTax sent is ignored
   expect((await api('patch', `/stores/chemical/inwards/${draft.id}`, { notes: 'x' })).body.error.code).toBe('ENTRY_APPROVED');
 
   // second purchase at another rate -> average
@@ -45,13 +45,13 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
   expect(st.data[0]).toMatchObject({ name: 'Caustic Soda', stockQty: 50, stockValue: 5490, avgRate: 109.8 });
   expect((await api('get', '/stores/chemical/stock?groupBy=category')).body.data[0]).toMatchObject({ name: 'Dyes', byUnit: { KG: 50 } });
   expect((await api('get', `/stores/chemical/items/${soda.id}/moves`)).body.data).toHaveLength(2);
-  expect((await api('get', '/stores/chemical/inwards?tab=gst')).body.total).toBe(1);
+  expect((await api('get', '/stores/chemical/inwards?tab=gst')).body.total).toBe(0); // no inward carries GST any more
   expect((await api('get', '/stores/chemical/inwards?vendor=nexus')).body.total).toBe(2);
   expect((await api('get', '/stores/chemical/inwards?description=caustic')).body.total).toBe(2);
   expect(st.data[0].stock).toMatchObject({ main: 50, sub: 0, text: '50 KG' });
   // GST % from the dropdown, kg and grams in two boxes
   const g = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', billType: 'GST', gstPercent: 18, lines: [{ itemId: soda.id, qtyMain: 3, qtySub: 500, rate: 1000 }] })).body;
-  expect(g).toMatchObject({ totalQty: 3.5, totalQtyText: '3 KG 500 G', amount: 3500, gstPercent: 18, salesTax: 630, billed: 4130 });
+  expect(g).toMatchObject({ totalQty: 3.5, totalQtyText: '3 KG 500 G', amount: 3500, gstPercent: null, salesTax: 0, billed: 3500, billType: 'OTHER' }); // billType and gstPercent sent are ignored
   expect(g.lines[0].qtySplit).toMatchObject({ main: 3, mainUnit: 'KG', sub: 500, subUnit: 'G' });
   expect((await api('patch', `/stores/chemical/inwards/${g.id}`, { lines: [{ itemId: soda.id, qtyMain: 1, qtySub: 1000, rate: 1 }] })).body.error.code).toBe('SUB_TOO_BIG');
   expect((await api('patch', `/stores/chemical/inwards/${g.id}`, { billType: 'OTHER' })).body).toMatchObject({ gstPercent: null });

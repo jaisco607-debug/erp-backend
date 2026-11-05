@@ -5,11 +5,16 @@ const { sequelize, Customer, Quality, Colour } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 
-const customerJSON = (c) => ({ id: c.id, code: c.code, name: c.name, phone: c.phone, address: c.address, isActive: c.isActive });
+const CUSTOMER_FIELDS = ['legalName', 'status', 'type', 'payment', 'cnic', 'ntn', 'gstNo', 'email', 'city', 'province', 'bankName', 'bankBranch', 'accountTitle', 'accountNo', 'iban'];
+const CREDIT_FIELDS = ['creditLimit', 'creditDays']; // credit terms: a limit (empty = none) and days
+const customerJSON = (c) => ({
+  id: c.id, code: c.code, name: c.name, phone: c.phone, address: c.address, isActive: c.isActive, creditLimit: c.creditLimit == null ? null : Number(c.creditLimit), creditDays: c.creditDays ?? 0,
+  ...Object.fromEntries(CUSTOMER_FIELDS.map((f) => [f, c[f] ?? null])),
+});
 const qualityJSON = (q) => ({ id: q.id, name: q.name, isActive: q.isActive });
 
 const KINDS = {
-  customer: { Model: Customer, json: customerJSON, entity: 'Customer', label: 'Customer', fields: ['name', 'phone', 'address', 'isActive'] },
+  customer: { Model: Customer, json: customerJSON, entity: 'Customer', label: 'Customer', fields: ['name', 'phone', 'address', 'isActive', ...CUSTOMER_FIELDS, ...CREDIT_FIELDS] },
   quality: { Model: Quality, json: qualityJSON, entity: 'Quality', label: 'Quality', fields: ['name', 'isActive'] },
   colour: { Model: Colour, json: qualityJSON, entity: 'Colour', label: 'Colour', fields: ['name', 'isActive'] },
 };

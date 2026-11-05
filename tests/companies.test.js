@@ -72,6 +72,7 @@ test('client admins log in with company code + email + password; super admins wi
   expect(ok.body.services).toEqual([
     expect.objectContaining({ code: 'DYEING', name: 'Dyeing', kind: 'PROCESS', access: 'FULL' }),
     expect.objectContaining({ code: 'FOLDING', name: 'Folding', kind: 'FOLDING', access: 'FULL' }),
+    expect.objectContaining({ code: 'PACKING', kind: 'PACKING', access: 'FULL' }), // a process brings folding and packing
   ]);
 
   // with a wrong code or the super admins' code: refused with the same message
@@ -112,11 +113,11 @@ test('changing a company\'s services changes what its client admin sees at once'
   const res = await request(app).put(`/api/v1/companies/${company.id}/services`).set(auth).send({ serviceIds: await serviceIds('GREY_STORE', 'DYEING') });
   expect(res.status).toBe(200);
   const me = await request(app).get('/api/v1/auth/me').set(adminAuth);
-  expect(me.body.services.map((s) => s.code)).toEqual(['GREY_STORE', 'DYEING']);
+  expect(me.body.services.map((s) => s.code)).toEqual(['GREY_STORE', 'DYEING', 'FOLDING', 'PACKING']);
 
   const log = await AuditLog.findOne({ where: { action: 'COMPANY_SERVICES_CHANGED' }, order: [['id', 'DESC']] });
-  expect(log.before.services).toEqual(['DYEING', 'FOLDING']);
-  expect(log.after.services).toEqual(['DYEING', 'GREY_STORE']);
+  expect(log.before.services).toEqual(['DYEING', 'FOLDING', 'PACKING']);
+  expect(log.after.services).toEqual(['DYEING', 'FOLDING', 'GREY_STORE', 'PACKING']);
 
   const unknown = await request(app).put(`/api/v1/companies/${company.id}/services`).set(auth).send({ serviceIds: ['11111111-1111-4111-8111-111111111111'] });
   expect(unknown.status).toBe(422);
@@ -130,11 +131,11 @@ test('switching a service off removes it from every company menu', async () => {
 
   const company = (await register(auth, {}, ['DYEING', 'TEST_WASH'])).body;
   const admin = (await login({ companyCode: company.code, email: 'waqas@test.com', password: 'Waqas-Pass-123' })).body;
-  expect(admin.services.map((s) => s.code)).toEqual(['DYEING', 'TEST_WASH']);
+  expect(admin.services.map((s) => s.code)).toEqual(['DYEING', 'FOLDING', 'PACKING', 'TEST_WASH']);
 
   await request(app).patch(`/api/v1/services/${created.body.id}`).set(auth).send({ isActive: false }).expect(200);
   const me = await request(app).get('/api/v1/auth/me').set({ Authorization: `Bearer ${admin.accessToken}` });
-  expect(me.body.services.map((s) => s.code)).toEqual(['DYEING']);
+  expect(me.body.services.map((s) => s.code)).toEqual(['DYEING', 'FOLDING', 'PACKING']);
 });
 
 test('switching a company off logs all its people out at once', async () => {
@@ -182,7 +183,7 @@ test('company list and details', async () => {
   const company = (await register(auth)).body;
   const list = await request(app).get('/api/v1/companies?search=waqas').set(auth);
   expect(list.body.total).toBe(1);
-  expect(list.body.data[0]).toMatchObject({ code: company.code, serviceCount: 2, userCount: 1 }); // DYEING + FOLDING; the 5 modules are not counted;
+  expect(list.body.data[0]).toMatchObject({ code: company.code, serviceCount: 3, userCount: 1 }); // DYEING + FOLDING + PACKING; the 5 modules are not counted;
   // the super admin can also search by code
   expect((await request(app).get(`/api/v1/companies?search=${company.code}`).set(auth)).body.total).toBe(1);
   const one = await request(app).get(`/api/v1/companies/${company.id}`).set(auth);
@@ -200,12 +201,12 @@ test('one service can be given to many companies at once, and taken back', async
   expect(give.body.companies.map((c) => c.name)).toEqual(['Alpha Mills', 'Beta Mills']);
 
   const betaAdmin = (await login({ companyCode: b.code, email: 'b@test.com', password: 'Beta-Pass-1234' })).body;
-  expect(betaAdmin.services.map((s) => s.code)).toEqual(['DYEING', 'PRINTING']);
+  expect(betaAdmin.services.map((s) => s.code)).toEqual(['DYEING', 'PRINTING', 'FOLDING', 'PACKING']);
 
   const takeBack = await request(app).put(`/api/v1/services/${printing}/companies`).set(auth).send({ companyIds: [] });
   expect(takeBack.body.companies).toEqual([]);
   const me = await request(app).get('/api/v1/auth/me').set({ Authorization: `Bearer ${betaAdmin.accessToken}` });
-  expect(me.body.services.map((s) => s.code)).toEqual(['DYEING']);
+  expect(me.body.services.map((s) => s.code)).toEqual(['DYEING', 'FOLDING', 'PACKING']);
   expect((await request(app).get(`/api/v1/services/${printing}/companies`).set(auth)).body.companies).toEqual([]);
 
   // a switched-off service cannot be given

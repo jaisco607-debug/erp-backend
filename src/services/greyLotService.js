@@ -68,6 +68,9 @@ function json(l) {
     partyRef: l.partyRef,
     glm: l.glm,
     gsm: l.gsm,
+    // the width of the cloth: the lot's width, and every width its thaans have
+    width: l.width ?? null,
+    widths: [...new Set((l.thaans || []).map((t) => t.width ?? l.width).filter((w) => w != null))].sort((a, b) => a - b),
     vehicleNo: l.vehicleNo,
     remarks: l.remarks,
     isReprocess: l.isReprocess,
@@ -77,7 +80,7 @@ function json(l) {
     isActive: l.isActive,
     createdAt: l.createdAt,
     ...(l.thaans && {
-      thaans: [...l.thaans].sort((a, b) => a.thaanNo - b.thaanNo).map((t) => ({ id: t.id, thaanNo: t.thaanNo, meters: t.meters, yards: yd(t.yards), status: t.status, takenMeters: t.takenMeters, freeMeters: t.status === 'RETURNED' ? 0 : r2(t.meters - t.takenMeters) })),
+      thaans: [...l.thaans].sort((a, b) => a.thaanNo - b.thaanNo).map((t) => ({ id: t.id, thaanNo: t.thaanNo, meters: t.meters, yards: yd(t.yards), width: t.width ?? l.width ?? null, status: t.status, takenMeters: t.takenMeters, freeMeters: t.status === 'RETURNED' ? 0 : r2(t.meters - t.takenMeters) })),
     }),
     ...(l.returns && {
       returns: [...l.returns].sort((a, b) => a.returnNo - b.returnNo).map((r) => ({
@@ -127,7 +130,11 @@ const load = async (id, transaction) => (await attachFabricReturn([json(await Gr
 function quantities(data, current = {}) {
   const unit = data.unit || current.unit || 'METER';
   if (data.thaans) {
-    const thaans = data.thaans.map((len, i) => ({ thaanNo: i + 1, meters: toMeters(len, unit), yards: unit === 'YARD' ? r2(len) : toYards(len) }));
+    const thaans = data.thaans.map((item, i) => {
+      const len = typeof item === 'object' ? item.length : item;
+      const own = typeof item === 'object' ? item.width : undefined;
+      return { thaanNo: i + 1, meters: toMeters(len, unit), yards: unit === 'YARD' ? r2(len) : toYards(len), width: own !== undefined ? own : data.width !== undefined ? data.width : (current.width ?? null), ownWidth: own !== undefined };
+    });
     return {
       lot: { unit, pieces: thaans.length, inwardMeters: r2(thaans.reduce((t, x) => t + x.meters, 0)), inwardYards: r2(thaans.reduce((t, x) => t + x.yards, 0)) },
       thaans,
@@ -238,7 +245,7 @@ async function create(req, data) {
   });
 }
 
-const EDITABLE = ['typeNo', 'dcNo', 'inwardDate', 'customerId', 'qualityId', 'partyRef', 'glm', 'gsm', 'vehicleNo', 'remarks', 'isReprocess', 'reprocessOfLotId'];
+const EDITABLE = ['typeNo', 'dcNo', 'inwardDate', 'customerId', 'qualityId', 'partyRef', 'glm', 'gsm', 'width', 'vehicleNo', 'remarks', 'isReprocess', 'reprocessOfLotId'];
 
 async function update(req, id, changes) {
   return sequelize.transaction(async (transaction) => {
@@ -267,6 +274,7 @@ async function update(req, id, changes) {
       throw AppError.rule('LOT_HAS_THAANS', 'This lot is made of thaans: send the thaans list again instead of a total');
     }
     const before = await load(lot.id, transaction);
+    const oldWidth = lot.width ?? null;
     if (changes.lotNo !== undefined) lot.lotNo = changes.lotNo;
     for (const f of EDITABLE) if (changes[f] !== undefined) lot[f] = blank(changes[f]);
     if (q) {
@@ -274,6 +282,9 @@ async function update(req, id, changes) {
       if (q.thaans) {
         // thaans given back or put on an SO card must stay as they are (same number and length)
         const old = await GreyLotThaan.findAll({ where: { lotId: lot.id }, transaction });
+        const oldByNo = new Map(old.map((o) => [o.thaanNo, o]));
+        // a thaan sent without a width keeps the width it had, unless a new lot width was sent
+        for (const t of q.thaans) if (!t.ownWidth && changes.width === undefined && oldByNo.has(t.thaanNo)) t.width = oldByNo.get(t.thaanNo).width ?? oldWidth;
         const byNo = new Map(q.thaans.map((t) => [t.thaanNo, t]));
         for (const o of old.filter((x) => x.status !== 'IN_STOCK' || x.takenMeters > 0)) {
           const n = byNo.get(o.thaanNo);
@@ -294,6 +305,11 @@ async function update(req, id, changes) {
     if (changes.reprocessOfLotId) lot.isReprocess = true;
     if (changes.isReprocess === false) lot.reprocessOfLotId = null;
     await lot.save({ transaction });
+    // a new lot width, no thaans sent: the thaans that had no width of their own (or the old lot width) and are still free take it
+    if (changes.width !== undefined && !(q && q.thaans)) {
+      await sequelize.query(`UPDATE grey_lot_thaans SET width = :width WHERE "lotId" = :lotId AND status = 'IN_STOCK' AND "takenMeters" = 0 AND (width IS NULL OR width = :oldWidth)`,
+        { replacements: { width: lot.width, lotId: lot.id, oldWidth: oldWidth == null ? -1 : oldWidth }, transaction });
+    }
     const after = await load(lot.id, transaction);
     await audit.log(req, { action: 'GREY_LOT_UPDATED', entityType: 'GreyLot', entityId: id, before, after }, { transaction });
     return after;

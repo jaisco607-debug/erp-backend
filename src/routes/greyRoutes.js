@@ -33,6 +33,8 @@ function masterRouter(rules, ctl) {
 }
 
 const customers = masterRouter(v.customer, c.customer);
+// dropdown values of the customer form (same lists as the vendor form)
+customers.get('/options', view, (req, res) => res.json({ statuses: v.CUSTOMER_STATUS, types: v.CUSTOMER_TYPES, payments: v.CUSTOMER_PAYMENT, provinces: ['Sindh', 'Punjab', 'Khyber Pakhtunkhwa', 'Balochistan', 'Islamabad', 'Gilgit-Baltistan', 'Azad Kashmir'] }));
 
 const lots = express.Router();
 lots.use(authenticate);

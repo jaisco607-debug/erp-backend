@@ -9,6 +9,8 @@ function init(sequelize) {
       companyId: { type: DataTypes.UUID, primaryKey: true },
       serviceId: { type: DataTypes.UUID, primaryKey: true },
       givenById: { type: DataTypes.UUID, allowNull: true },
+      // a department the client admin allowed (true) or not (false) to request chemicals from the Chemical Store
+      chemicalRequests: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     },
     { sequelize, modelName: 'CompanyService', tableName: 'company_services', updatedAt: false },
   );

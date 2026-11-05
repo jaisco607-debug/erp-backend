@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { Service, Company, CompanyService, User, UserService, sequelize } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
+const { extrasFor } = require('./processBundle');
 
 const json = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, isBuiltIn: CORE_MODULES.includes(s.code), tracksColour: s.tracksColour, isActive: s.isActive, sortOrder: s.sortOrder });
 
@@ -19,6 +20,7 @@ async function create(req, data) {
       throw AppError.rule('SERVICE_CODE_TAKEN', `Service code "${data.code}" already exists`);
     }
     if (data.menuGroup === undefined && ['PROCESS', 'FOLDING', 'PACKING'].includes(data.kind)) data.menuGroup = 'PROCESS';
+    if (data.kind === 'PACKING') data.menuGroup = 'PRODUCTION'; // packing belongs to Production Management
     if (data.sortOrder === undefined) data.sortOrder = ((await Service.max('sortOrder', { transaction })) || 0) + 10;
     const service = await Service.create(data, { transaction });
     await audit.log(req, { action: 'SERVICE_CREATED', entityType: 'Service', entityId: service.id, after: json(service) }, { transaction });
@@ -31,13 +33,26 @@ async function update(req, id, changes) {
     const service = await Service.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
     if (!service) throw AppError.notFound('Service');
     const before = json(service);
-    for (const field of ['name', 'tracksColour', 'isActive', 'sortOrder', 'menuGroup']) {
+    if (CORE_MODULES.includes(service.code) && ['kind', 'menuGroup', 'tracksColour'].some((f) => changes[f] !== undefined && changes[f] !== service[f])) {
+      throw new AppError(403, 'CORE_MODULE', 'The kind, menu group and colour tracking of a built-in module cannot be changed');
+    }
+    if ((changes.kind || service.kind) === 'PACKING') changes.menuGroup = 'PRODUCTION'; // packing belongs to Production Management
+    for (const field of ['name', 'kind', 'tracksColour', 'isActive', 'sortOrder', 'menuGroup']) {
       if (changes[field] !== undefined) service[field] = changes[field];
     }
     await service.save({ transaction });
     await audit.log(req, { action: 'SERVICE_UPDATED', entityType: 'Service', entityId: id, before, after: json(service) }, { transaction });
     return json(service);
   });
+}
+
+/** A PROCESS service given to companies brings the active folding and packing services too (idempotent). */
+async function giveExtras(req, service, companyIds, transaction) {
+  if (!companyIds.length) return;
+  for (const extra of await extrasFor([service], transaction)) {
+    const have = new Set((await CompanyService.findAll({ where: { serviceId: extra.id, companyId: companyIds }, transaction })).map((r) => r.companyId));
+    await CompanyService.bulkCreate(companyIds.filter((c) => !have.has(c)).map((companyId) => ({ companyId, serviceId: extra.id, givenById: req.user.id })), { transaction });
+  }
 }
 
 const companyJSON = (c) => ({ id: c.id, name: c.name, code: c.code, isActive: c.isActive });
@@ -78,6 +93,7 @@ async function setCompanies(req, id, companyIds) {
 
     await CompanyService.destroy({ where: { serviceId: id, companyId: { [Op.notIn]: wanted } }, transaction });
     await CompanyService.bulkCreate(adding.map((companyId) => ({ companyId, serviceId: id, givenById: req.user.id })), { transaction });
+    await giveExtras(req, service, wanted, transaction);
 
     const removed = [...already].filter((c) => !wanted.includes(c));
     if (removed.length) {
@@ -125,6 +141,7 @@ async function addCompanies(req, id, companyIds) {
     }
     if (adding.length) {
       await CompanyService.bulkCreate(adding.map((companyId) => ({ companyId, serviceId: id, givenById: req.user.id })), { transaction });
+      await giveExtras(req, service, adding, transaction);
       await audit.log(req, {
         action: 'SERVICE_COMPANIES_CHANGED', entityType: 'Service', entityId: id, companyId: null,
         before: null, after: { added: adding },
@@ -136,7 +153,8 @@ async function addCompanies(req, id, companyIds) {
 
 // The built-in modules the system is built around; they can never be deleted.
 const CORE_MODULES = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'GENERAL_STORE', 'STORE_REPORTS', 'PACKING', 'GATE_PASS',
-  'REPORT_OVERVIEW', 'REPORT_GREY', 'REPORT_SO_CARDS', 'REPORT_DEPARTMENTS', 'REPORT_CHEMICAL_COST', 'REPORT_FOLDING', 'REPORT_ACTIVE_FABRIC', 'REPORT_PACKING', 'REPORT_GATE_PASSES'];
+  'REPORT_OVERVIEW', 'REPORT_GREY', 'REPORT_SO_CARDS', 'REPORT_DEPARTMENTS', 'REPORT_CHEMICAL_COST', 'REPORT_FOLDING', 'REPORT_ACTIVE_FABRIC', 'REPORT_PACKING', 'REPORT_GATE_PASSES', 'ACC_COA', 'ACC_SALES', 'ACC_PURCHASES', 'ACC_PAYMENTS', 'ACC_RECEIPTS', 'ACC_JOURNAL', 'ACC_REPORTS', 'ACC_BANK', 'ACC_CONTRA',
+  'PAYROLL_SALARY', 'PAYROLL_REPORTS', 'PAYROLL_APPLICATIONS', 'PAYROLL_EMPLOYEES'];
 
 // Deletes a service. Every company and user that had it loses it. Built-in modules cannot be deleted.
 async function remove(req, id) {

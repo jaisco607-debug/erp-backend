@@ -28,6 +28,9 @@ const schema = Joi.object({
   LOGIN_LOCK_MINUTES: Joi.number().integer().min(1).max(1440).default(15),
   LOGIN_IP_MAX: Joi.number().integer().min(1).max(1000).default(10),
   LOGIN_IP_WINDOW_MINUTES: Joi.number().integer().min(1).max(1440).default(15),
+  // Requests per minute: a signed-in person has a bucket of their own, everyone else (login, public) shares one per IP address.
+  RATE_LIMIT_USER_PER_MINUTE: Joi.number().integer().min(60).max(100000).default(1200),
+  RATE_LIMIT_IP_PER_MINUTE: Joi.number().integer().min(30).max(100000).default(300),
   LOG_LEVEL: Joi.string().valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent').default('info'),
 }).unknown(true);
 
@@ -61,5 +64,6 @@ module.exports = {
     ipMax: value.LOGIN_IP_MAX,
     ipWindowMinutes: value.LOGIN_IP_WINDOW_MINUTES,
   },
+  rateLimit: { userPerMinute: value.RATE_LIMIT_USER_PER_MINUTE, ipPerMinute: value.RATE_LIMIT_IP_PER_MINUTE },
   logLevel: value.LOG_LEVEL,
 };

@@ -10,10 +10,12 @@ const router = express.Router();
 router.use(authenticate, requireUserType('CLIENT_ADMIN'));
 
 router.get('/service-options', c.serviceOptions);
+router.get('/roles', c.roles);
 router.get('/', validate(v.list), c.list);
 router.post('/', validate(v.create), c.create);
 router.get('/:id', validate(v.get), c.get);
 router.patch('/:id', validate(v.update), c.update);
+router.post('/:id/open', validate(v.get), c.open);
 router.post('/:id/reset-password', validate(v.resetPassword), c.resetPassword);
 router.put('/:id/services', validate(v.setServices), c.setServices);
 

@@ -71,11 +71,14 @@ function respond(title, filters, sections, query = {}) {
 const LEFT_SQL = `(ji.meters - COALESCE((SELECT SUM(nx.meters) FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = ji.id AND nj.status <> 'REJECTED'), 0))`;
 
 /** Where all the cloth is right now: grey store, SO card desk (not sent), departments. One row per lot line. */
+// the widths of a lot (of its thaans, or the lot's own when it has no thaans), as "58, 60, 63": the Width column of the reports
+const LOT_WIDTHS = `(SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, gl.width)::float8 AS w FROM grey_lot_thaans t WHERE t."lotId" = gl.id UNION ALL SELECT gl.width::float8 WHERE NOT EXISTS (SELECT 1 FROM grey_lot_thaans t2 WHERE t2."lotId" = gl.id)) x WHERE w IS NOT NULL)`;
+
 async function clothNow(companyId) {
   const rows = [];
   // 1. still in the grey store: lot balance
   for (const r of await q(`
-    SELECT gl.id AS "lotId", gl."lotNo", gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
+    SELECT gl.id AS "lotId", gl."lotNo", ${LOT_WIDTHS} AS width, gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
            (gl."inwardMeters" - gl."outwardMeters")::float AS meters,
            (SELECT count(*)::int FROM grey_lot_thaans t WHERE t."lotId" = gl.id AND t.status = 'IN_STOCK') AS thaans
     FROM grey_lots gl JOIN customers cu ON cu.id = gl."customerId"
@@ -84,7 +87,7 @@ async function clothNow(companyId) {
   }
   // 2. on an SO card but not sent to a department yet
   for (const r of await q(`
-    SELECT sc.id AS "soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", gl.id AS "lotId", gl."lotNo", gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
+    SELECT sc.id AS "soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", gl.id AS "lotId", gl."lotNo", ${LOT_WIDTHS} AS width, gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
            (scl.meters - COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED'), 0))::float AS meters,
            scl.meters::float AS "lineMeters", (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = scl.id) AS thaans
     FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL JOIN grey_lots gl ON gl.id = scl."greyLotId" JOIN customers cu ON cu.id = gl."customerId"
@@ -94,7 +97,7 @@ async function clothNow(companyId) {
   }
   // 3. inside departments
   for (const r of await q(`
-    SELECT ji.id AS "itemId", ji."soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", gl.id AS "lotId", gl."lotNo", gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
+    SELECT ji.id AS "itemId", ji."soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", gl.id AS "lotId", gl."lotNo", ${LOT_WIDTHS} AS width, gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
            j.id AS "jobId", j."jobNo", j."departmentId", s.name AS department, s.kind, j.status, j."operatorName", ${LEFT_SQL}::float AS meters, ji.meters::float AS "itemMeters", scl.meters::float AS "lineMeters",
            (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = ji."soCardLotId") AS thaans
     FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId"
@@ -246,19 +249,20 @@ async function greyLots(req, f) {
            gl."outwardMeters"::float AS outward, gl."returnedMeters"::float AS "givenBack", gl."isReprocess",
            COALESCE((SELECT SUM(scl.meters) FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL WHERE scl."greyLotId" = gl.id AND NOT sc."isGreyReturn"), 0)::float AS "onSoCard",
            COALESCE((SELECT SUM(scl.meters) FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL WHERE scl."greyLotId" = gl.id AND sc."isGreyReturn"), 0)::float AS "fabricReturn",
+           (SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, gl.width)::float8 AS w FROM grey_lot_thaans t WHERE t."lotId" = gl.id UNION ALL SELECT gl.width::float8 WHERE NOT EXISTS (SELECT 1 FROM grey_lot_thaans t2 WHERE t2."lotId" = gl.id)) x WHERE w IS NOT NULL) AS width,
            (SELECT count(*)::int FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL WHERE scl."greyLotId" = gl.id) AS "soCards"
     FROM grey_lots gl JOIN customers cu ON cu.id = gl."customerId" LEFT JOIN qualities qu ON qu.id = gl."qualityId"
     WHERE ${where.join(' AND ')} ORDER BY gl."lotNo" DESC`, rep);
   const now = await clothNow(companyId);
   const by = (lotId, kind) => round(now.filter((n) => n.lotId === lotId && (kind === 'PROCESS' ? !['GREY_STORE', 'SO_CARD', 'PACKING'].includes(n.stageKind) : n.stageKind === kind)).reduce((t, n) => t + n.meters, 0));
   let rows = lots.map((l) => ({
-    lotNo: l.lotNo, typeNo: l.typeNo, dcNo: l.dcNo, inwardDate: l.inwardDate, party: l.party, quality: l.quality, thaans: l.pieces, inwardMeters: round(l.inward),
+    lotNo: l.lotNo, typeNo: l.typeNo, dcNo: l.dcNo, inwardDate: l.inwardDate, party: l.party, quality: l.quality, width: l.width || '', thaans: l.pieces, inwardMeters: round(l.inward),
     soCards: l.soCards, onSoCardMeters: round(l.onSoCard), fabricReturnMeters: round(l.fabricReturn), givenBackMeters: round(l.givenBack), inStoreMeters: round(l.inward - l.outward),
     notSentMeters: by(l.id, 'SO_CARD'), inProcessMeters: by(l.id, 'PROCESS'), atPackingMeters: by(l.id, 'PACKING'), isReprocess: l.isReprocess ? 'Re-process' : '',
   }));
   if (f.status === 'in_store' || /^in_?store$/i.test(f.stock || '')) rows = rows.filter((r) => r.inStoreMeters > 0);
   if (/^(empty|finished|nil)$/i.test(f.stock || '')) rows = rows.filter((r) => r.inStoreMeters <= 0);
-  const columns = [col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'), col('inwardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('thaans', 'Thaans', 'number'),
+  const columns = [col('lotNo', 'Lot#', 'number'), col('typeNo', 'Type#'), col('dcNo', 'DC#'), col('inwardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('width', 'Width (m)', 'list'), col('thaans', 'Thaans', 'number'),
     col('inwardMeters', 'Came (m)', 'number'), col('soCards', 'SO cards', 'number'), col('onSoCardMeters', 'On SO cards (m)', 'number'), col('fabricReturnMeters', 'Fabric return (m)', 'number'),
     col('givenBackMeters', 'Given back (m)', 'number'), col('inStoreMeters', 'In grey store (m)', 'number'), col('notSentMeters', 'SO card, not sent (m)', 'number'),
     col('inProcessMeters', 'In process (m)', 'number'), col('atPackingMeters', 'Reached Packing (m)', 'number'), col('isReprocess', 'Re-process', 'tag')];
@@ -373,12 +377,12 @@ async function soCardDetail(req, id) {
   const [c] = await q(`SELECT sc.*, cu.name AS party, cu.code AS "partyCode", qu.name AS quality, cd.name AS "currentDepartment" FROM so_cards sc JOIN customers cu ON cu.id = sc."customerId"
     LEFT JOIN qualities qu ON qu.id = sc."qualityId" LEFT JOIN services cd ON cd.id = sc."currentDepartmentId" WHERE sc.id = :id AND sc."companyId" = :companyId`, { id, companyId });
   if (!c) throw AppError.notFound('SO card');
-  const lotRows = await q(`SELECT g."lotNo", g."dcNo", g."typeNo", scl.meters::float AS meters, scl.id AS "lineId",
+  const lotRows = await q(`SELECT g."lotNo", g."dcNo", g."typeNo", scl.meters::float AS meters, scl.id AS "lineId", (SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, g.width)::float8 AS w FROM so_card_lot_thaans p JOIN grey_lot_thaans t ON t.id = p."thaanId" WHERE p."soCardLotId" = scl.id UNION ALL SELECT g.width::float8 WHERE NOT EXISTS (SELECT 1 FROM so_card_lot_thaans p2 WHERE p2."soCardLotId" = scl.id)) x WHERE w IS NOT NULL) AS width,
       (SELECT string_agg(t."thaanNo"::text, ', ' ORDER BY t."thaanNo") FROM so_card_lot_thaans p JOIN grey_lot_thaans t ON t.id = p."thaanId" WHERE p."soCardLotId" = scl.id) AS "thaanNos",
       (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = scl.id) AS thaans
     FROM so_card_lots scl JOIN grey_lots g ON g.id = scl."greyLotId" WHERE scl."soCardId" = :id ORDER BY g."lotNo"`, { id });
-  const lots = section('lots', 'Lots and thaans', [col('lotNo', 'Lot#', 'number'), col('dcNo', 'DC#'), col('typeNo', 'Type#'), col('thaans', 'Thaans', 'number'), col('thaanNos', 'Thaan numbers', 'list'), col('meters', 'Meters', 'number')],
-    lotRows.map((r) => ({ lotNo: r.lotNo, dcNo: r.dcNo, typeNo: r.typeNo, thaans: r.thaans, thaanNos: r.thaanNos || '', meters: round(r.meters) })), ['thaans', 'meters']);
+  const lots = section('lots', 'Lots and thaans', [col('lotNo', 'Lot#', 'number'), col('dcNo', 'DC#'), col('typeNo', 'Type#'), col('width', 'Width (m)', 'list'), col('thaans', 'Thaans', 'number'), col('thaanNos', 'Thaan numbers', 'list'), col('meters', 'Meters', 'number')],
+    lotRows.map((r) => ({ lotNo: r.lotNo, dcNo: r.dcNo, typeNo: r.typeNo, width: r.width || '', thaans: r.thaans, thaanNos: r.thaanNos || '', meters: round(r.meters) })), ['thaans', 'meters']);
   const jobs = await jobCards(companyId, { soCardId: id });
   const chem = await chemLines(companyId);
   const mineChem = chem.filter((l) => l.soCardId === id);
@@ -397,8 +401,8 @@ async function soCardDetail(req, id) {
   const chemicals = section('chemicals', 'Chemicals used', [col('department', 'Department'), col('chemical', 'Chemical'), col('qty', 'Qty', 'number'), col('unit', 'Unit'), col('rate', 'Avg rate', 'money'), col('amount', 'Amount', 'money')],
     [...chemRows.values()].map((r) => ({ ...r, rate: r.qty ? round(r.amount / r.qty) : 0 })).sort((a, b) => a.department.localeCompare(b.department) || b.amount - a.amount), ['amount']);
   const now = (await clothNow(companyId)).filter((n) => n.soCardId === id);
-  const where = section('now', 'Where the cloth is now', [col('stage', 'Place'), col('statusText', 'Status'), col('lotNo', 'Lot#', 'number'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number')],
-    now.map((n) => ({ stage: n.stage, statusText: n.statusText, lotNo: n.lotNo, thaans: n.thaans, meters: round(n.meters) })), ['meters']);
+  const where = section('now', 'Where the cloth is now', [col('stage', 'Place'), col('statusText', 'Status'), col('lotNo', 'Lot#', 'number'), col('width', 'Width (m)', 'list'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number')],
+    now.map((n) => ({ stage: n.stage, statusText: n.statusText, lotNo: n.lotNo, width: n.width || '', thaans: n.thaans, meters: round(n.meters) })), ['meters']);
   const lists = await q(`SELECT p."listNo", p."listDate", p.status, g."gatePassNo", g."driverName", g."vehicleNo", g.destination, g."passDate",
       (SELECT SUM(l.meters)::float FROM packing_list_lines l WHERE l."packingListId" = p.id) AS meters, (SELECT count(*)::int FROM packing_list_lines l WHERE l."packingListId" = p.id) AS lines
     FROM packing_lists p LEFT JOIN gate_passes g ON g."packingListId" = p.id WHERE p."soCardId" = :id ORDER BY p."listNo"`, { id });
@@ -580,14 +584,14 @@ async function folding(req, f) {
   const from = new Map((await q(`SELECT j.id, fs.name AS name FROM jobs j LEFT JOIN services fs ON fs.id = j."fromDepartmentId" WHERE j."companyId" = :companyId AND j."departmentId" = :dep`, { companyId: req.user.companyId, dep: fd.id })).map((r) => [r.id, r.name || 'SO Card']));
   let rows = list.data.map((r) => ({
     jobNo: r.jobNo, jobDate: r.jobDate, fromDepartment: from.get(r.jobId), soNo: r.soCard.cardNo, party: r.customer.name, quality: r.quality, colour: r.colour,
-    lots: r.lots.map((l) => l.lotNo).join(', '), thaans: r.lots.reduce((t, l) => t + (l.thaanCount || 0), 0), receivedMeters: r.totals.received, aMeters: r.totals.a, bMeters: r.totals.b, cpMeters: r.totals.cp,
+    lots: r.lots.map((l) => l.lotNo).join(', '), width: [...new Set(r.lots.flatMap((l) => l.widths || []))].sort((a, b) => a - b).join(', '), thaans: r.lots.reduce((t, l) => t + (l.thaanCount || 0), 0), receivedMeters: r.totals.received, aMeters: r.totals.a, bMeters: r.totals.b, cpMeters: r.totals.cp,
     diff: r.totals.diff, sentToPacking: r.totals.sent, leftInFolding: r.leftInFolding, sentForRework: r.sentBackTo || '', statusText: r.isClosed ? 'Closed' : (r.leftInFolding > 0 ? 'Open' : 'Done'),
     chemicalCost: r.cost.totalCost, costPerMeter: r.cost.costPerMeter, tag: r.isGreyReturn ? TAG : (r.isRework ? 'RE-WORK' : ''), customerId: r.customer.id,
   }));
   if (f.customerId) rows = rows.filter((r) => r.customerId === f.customerId);
   if (f.status === 'open') rows = rows.filter((r) => r.leftInFolding > 0);
   const columns = [col('jobNo', 'Job#', 'number'), col('jobDate', 'Date', 'date'), col('fromDepartment', 'Came from'), col('soNo', 'SO#', 'number'), col('party', 'Party'), col('quality', 'Quality'), col('colour', 'Colour'),
-    col('lots', 'Lot#s', 'list'), col('thaans', 'Thaans', 'number'), col('receivedMeters', 'Received (m)', 'number'), col('aMeters', 'A (m)', 'number'), col('bMeters', 'B (m)', 'number'), col('cpMeters', 'CP (m)', 'number'),
+    col('lots', 'Lot#s', 'list'), col('width', 'Width (m)', 'list'), col('thaans', 'Thaans', 'number'), col('receivedMeters', 'Received (m)', 'number'), col('aMeters', 'A (m)', 'number'), col('bMeters', 'B (m)', 'number'), col('cpMeters', 'CP (m)', 'number'),
     col('diff', 'Gain / loss (m)', 'number'), col('sentToPacking', 'Sent to Packing (m)', 'number'), col('leftInFolding', 'Left in Folding (m)', 'number'), col('sentForRework', 'Re-work sent to'),
     col('statusText', 'Status'), col('chemicalCost', 'Cost', 'money'), col('costPerMeter', 'Cost / m', 'money'), col('tag', 'Tag', 'tag')];
   return respond('Folding report', f, [section('folding', 'Folding', columns, rows.map(({ customerId, ...r }) => r), ['thaans', 'receivedMeters', 'aMeters', 'bMeters', 'cpMeters', 'diff', 'sentToPacking', 'leftInFolding', 'chemicalCost'])], f);
@@ -611,15 +615,16 @@ async function clothInProcess(req, f) {
   const g = new Map();
   for (const n of now) {
     const k = keyOf(n);
-    const r = g.get(k) || { party: n.customerName, stage: n.stage, statusText: n.statusText, soCards: new Set(), lots: new Set(), jobs: new Set(), thaans: 0, meters: 0, tag: false };
+    const r = g.get(k) || { party: n.customerName, stage: n.stage, statusText: n.statusText, soCards: new Set(), lots: new Set(), widths: new Set(), jobs: new Set(), thaans: 0, meters: 0, tag: false };
     if (n.soNo) r.soCards.add(n.soNo);
     r.lots.add(n.lotNo); if (n.jobNo) r.jobs.add(n.jobNo);
+    for (const w of String(n.width || '').split(', ')) if (w) r.widths.add(w);
     r.thaans += nz(n.thaans); r.meters += n.meters; r.tag = r.tag || n.isGreyReturn;
     g.set(k, r);
   }
-  const rows = [...g.values()].map((r) => ({ party: r.party, place: r.stage, statusText: r.statusText, soCards: [...r.soCards].sort((a, b) => a - b).join(', '), lots: [...r.lots].sort((a, b) => a - b).join(', '),
+  const rows = [...g.values()].map((r) => ({ party: r.party, place: r.stage, statusText: r.statusText, soCards: [...r.soCards].sort((a, b) => a - b).join(', '), lots: [...r.lots].sort((a, b) => a - b).join(', '), width: [...r.widths].sort((a, b) => a - b).join(', '),
     jobs: [...r.jobs].sort((a, b) => a - b).join(', '), thaans: r.thaans, meters: round(r.meters), tag: r.tag ? TAG : '' })).sort((a, b) => a.party.localeCompare(b.party) || a.place.localeCompare(b.place));
-  const columns = [col('party', 'Party'), col('place', 'Where'), col('statusText', 'Status'), col('soCards', 'SO#s', 'list'), col('lots', 'Lot#s', 'list'), col('jobs', 'Job#s', 'list'),
+  const columns = [col('party', 'Party'), col('place', 'Where'), col('statusText', 'Status'), col('soCards', 'SO#s', 'list'), col('lots', 'Lot#s', 'list'), col('width', 'Width (m)', 'list'), col('jobs', 'Job#s', 'list'),
     col('thaans', 'Thaans (whole lots only)', 'number'), col('meters', 'Meters', 'number'), col('tag', 'Tag', 'tag')];
   return respond('Cloth now: where every party\'s cloth is', f, [section('now', 'Cloth now', columns, rows, ['thaans', 'meters'])], f);
 }
@@ -644,10 +649,10 @@ async function packingLists(req, f) {
   if (f.search) { where.push('(p."listNo"::text = :search OR sc."cardNo"::text = :search OR cu.name ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
   const head = `FROM packing_lists p JOIN so_cards sc ON sc.id = p."soCardId" JOIN customers cu ON cu.id = sc."customerId" LEFT JOIN gate_passes g ON g."packingListId" = p.id`;
   if (f.view === 'lines') {
-    const rows = await q(`SELECT p."listNo", p."listDate", sc."cardNo" AS "soNo", cu.name AS party, gl."lotNo", l."thaanNo", l.grade, l.meters::float AS meters,
+    const rows = await q(`SELECT p."listNo", p."listDate", sc."cardNo" AS "soNo", cu.name AS party, gl."lotNo", l."thaanNo", COALESCE(tw.width, gl.width)::float8 AS width, l.grade, l.meters::float AS meters,
         (CASE l.grade WHEN 'A' THEN p."rateA" WHEN 'B' THEN p."rateB" ELSE p."rateCP" END)::float AS rate, sc."isGreyReturn"
-      ${head} JOIN packing_list_lines l ON l."packingListId" = p.id JOIN grey_lots gl ON gl.id = l."greyLotId" WHERE ${where.join(' AND ')} ORDER BY p."listNo" DESC, gl."lotNo", l."thaanNo", l.grade`, rep);
-    const columns = [col('listNo', 'List#', 'number'), col('listDate', 'Date', 'date'), col('soNo', 'SO#', 'number'), col('party', 'Party'), col('lotNo', 'Lot#', 'number'), col('thaanNo', 'Thaan#', 'number'),
+      ${head} JOIN packing_list_lines l ON l."packingListId" = p.id JOIN grey_lots gl ON gl.id = l."greyLotId" LEFT JOIN grey_lot_thaans tw ON tw.id = l."thaanId" WHERE ${where.join(' AND ')} ORDER BY p."listNo" DESC, gl."lotNo", l."thaanNo", l.grade`, rep);
+    const columns = [col('listNo', 'List#', 'number'), col('listDate', 'Date', 'date'), col('soNo', 'SO#', 'number'), col('party', 'Party'), col('lotNo', 'Lot#', 'number'), col('thaanNo', 'Thaan#', 'number'), col('width', 'Width (m)', 'number'),
       col('grade', 'Category'), col('meters', 'Meters', 'number'), col('rate', 'Rate', 'money'), col('amount', 'Amount', 'money'), col('tag', 'Tag', 'tag')];
     return respond('Packing lists: thaan wise', f, [section('lines', 'Thaans', columns, rows.map((r) => ({ ...r, grade: r.grade === 'CP' ? 'Cut Piece' : r.grade, meters: round(r.meters), amount: round(r.meters * r.rate), tag: r.isGreyReturn ? TAG : '' })), ['meters', 'amount'])], f);
   }

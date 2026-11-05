@@ -168,8 +168,8 @@ const include = [
       },
       {
         model: SoCardLot, as: 'soCardLot', attributes: ['id', 'greyLotId'],
-        include: [{ model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['id', 'thaanNo'] }] }, {
-          model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'isReprocess'], paranoid: false,
+        include: [{ model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['id', 'thaanNo', 'width'] }] }, {
+          model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'isReprocess', 'width'], paranoid: false,
           include: [{ model: Quality, as: 'quality', attributes: ['id', 'name'], paranoid: false }],
         }],
       },
@@ -187,10 +187,13 @@ function itemJSON(i) {
     customer: { id: i.soCard.customer.id, code: i.soCard.customer.code, name: i.soCard.customer.name },
     quality: i.soCard.quality?.name || lot?.quality?.name || null,
     lotNo: lot?.lotNo,
+    // the width of the cloth, from the grey inward: the lot's, and every width of the thaans of this line
+    width: lot?.width ?? null,
+    widths: [...new Set(((i.soCardLot?.thaanParts || []).length ? i.soCardLot.thaanParts.map((t) => t.thaan?.width ?? lot?.width) : [lot?.width]).filter((w) => w != null))].sort((a, b) => a - b),
     isReprocess: Boolean(lot?.isReprocess),
     meters: i.meters,
     // thaans of this SO card line (thaan no + meters)
-    thaans: (i.soCardLot?.thaanParts || []).map((t) => ({ thaanNo: t.thaan?.thaanNo, meters: t.meters })).sort((a, b) => a.thaanNo - b.thaanNo),
+    thaans: (i.soCardLot?.thaanParts || []).map((t) => ({ thaanNo: t.thaan?.thaanNo, width: t.thaan?.width ?? lot?.width ?? null, meters: t.meters })).sort((a, b) => a.thaanNo - b.thaanNo),
     colour: i.colour ? { id: i.colour.id, name: i.colour.name } : null,
     colourSetBy: i.colourSetBy ? { id: i.colourSetBy.id, name: i.colourSetBy.name } : null,
     colourSetAt: i.colourSetAt,
@@ -198,6 +201,7 @@ function itemJSON(i) {
 }
 
 const REJECTABLE = ['IN_WAY', 'QUEUE', 'PENDING'];
+const RETURNABLE = REJECTABLE;
 // departments that give the cloth its colour (owner: Dyeing)
 const COLOUR_DEPARTMENTS = require('../utils/colourDepartments');
 function sentTextOf(j) {
@@ -234,7 +238,14 @@ function json(j) {
     colour: jobColour(j, items),
     colours: [...new Set(items.map((i) => i.colour && i.colour.name).filter(Boolean))],
     status: j.status,
-    statusText: STATUS_TEXT[j.status],
+    statusText: j.returnedToSoCard ? 'Returned to SO Card' : STATUS_TEXT[j.status],
+    // cloth that came straight from an SO card can be sent back to the SO card desk while it is In-Way / Queue / Pending (before any processing)
+    canReturnToSoCard: RETURNABLE.includes(j.status) && !j.fromDepartmentId && j.department.kind !== 'PACKING',
+    returnedToSoCard: Boolean(j.returnedToSoCard),
+    returnReason: j.returnedToSoCard ? j.returnReason : null,
+    returnedAt: j.returnedToSoCard ? j.returnedAt : null,
+    returnedBy: j.returnedToSoCard && j.statusBy ? { id: j.statusBy.id, name: j.statusBy.name } : null,
+    returnedFromJobId: j.returnedFromJobId || null,
     // show "Reject" in the dropdown only when this is true
     canReject: REJECTABLE.includes(j.status) && Boolean(j.fromDepartmentId) && j.department.kind !== 'PACKING',
     // buttons of the receiving department
@@ -246,7 +257,7 @@ function json(j) {
     acceptedBy: j.acceptedBy ? { id: j.acceptedBy.id, name: j.acceptedBy.name } : null,
     acceptedAt: j.acceptedAt,
     // a rejected job can be taken back (PENDING / PROCESSING / COMPLETE) when the cloth arrives after all
-    canUndoReject: j.status === 'REJECTED',
+    canUndoReject: j.status === 'REJECTED' && !j.returnedToSoCard,
     // what the sending side shows
     sentText: sentTextOf(j),
     // typed by the receiving department
@@ -257,13 +268,13 @@ function json(j) {
     processDate: j.processDate,
     statusBy: j.statusBy ? { id: j.statusBy.id, name: j.statusBy.name } : null,
     statusAt: j.statusAt,
-    isRejected: j.status === 'REJECTED',
-    rejectReason: j.status === 'REJECTED' ? j.rejectReason : null,
-    rejectedAt: j.status === 'REJECTED' ? j.statusAt : null,
-    rejectedBy: j.status === 'REJECTED' && j.statusBy ? { id: j.statusBy.id, name: j.statusBy.name } : null,
+    isRejected: j.status === 'REJECTED' && !j.returnedToSoCard,
+    rejectReason: j.status === 'REJECTED' && !j.returnedToSoCard ? j.rejectReason : null,
+    rejectedAt: j.status === 'REJECTED' && !j.returnedToSoCard ? j.statusAt : null,
+    rejectedBy: j.status === 'REJECTED' && !j.returnedToSoCard && j.statusBy ? { id: j.statusBy.id, name: j.statusBy.name } : null,
     // the sender's answer to a rejection: ACCEPTED (valid) or DISPUTED (not valid, back to this department)
     rejectAnswer: j.rejectAnswer || null,
-    canAnswerReject: j.status === 'REJECTED' && !j.rejectAnswer,
+    canAnswerReject: j.status === 'REJECTED' && !j.returnedToSoCard && !j.rejectAnswer,
     // message for the department that rejected, when the sender did not accept its reason
     rejectionRejected: j.rejectAnswer === 'DISPUTED' ? {
       yourReason: j.disputedRejectReason, reason: j.rejectAnswerReason, at: j.rejectAnswerAt,
@@ -484,6 +495,8 @@ async function list(req, q) {
     AND NOT EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j2.id AND NOT EXISTS (
       SELECT 1 FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = a.id AND nj.status <> 'REJECTED'))
     UNION
+    SELECT j4.id FROM jobs j4 WHERE j4."departmentId" = ${sequelize.escape(dep2)} AND j4."returnedToSoCard"
+    UNION
     -- a job this department rejected, which the sender has since sent again (here or anywhere else)
     SELECT j3.id FROM jobs j3 WHERE j3."departmentId" = ${sequelize.escape(dep2)} AND j3.status = 'REJECTED'
       AND NOT EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j3.id AND (a."sourceJobItemId" IS NULL OR NOT EXISTS (
@@ -703,6 +716,7 @@ async function setStatus(req, id, status, reason) {
   return sequelize.transaction(async (transaction) => {
     const job = await findOr404(req, id, transaction);
     if ((await accessTo(req, job.departmentId, transaction)) !== 'FULL') throw AppError.forbidden('Only the receiving department can change this status');
+    if (job.returnedToSoCard) throw AppError.rule('JOB_RETURNED', 'This cloth was returned to the SO card: the SO card desk sends it again');
     if (job.status === 'REJECTED' && status === 'REJECTED') throw AppError.rule('JOB_REJECTED', 'This job is already rejected');
     if (job.status === 'REJECTED') {
       // The cloth turned up after all: the receiver takes the reject back, unless the sender
@@ -845,4 +859,125 @@ async function setColour(req, id, { colourId, soCardId }) {
   });
 }
 
-module.exports = { chemicalsOf, chemicalCols, previousCosts, answerReject, setColour, formData, available, list, get, create, setStatus, setOperator, update, soCardHistory };
+const OVERVIEW_KINDS = ['PROCESS', 'FOLDING', 'PACKING'];
+const OVERVIEW_STATUSES = ['IN_WAY', 'QUEUE', 'PENDING', 'PROCESSING', 'COMPLETE'];
+
+/**
+ * The Process Management overview: for every department the person may see, the number of jobs per status.
+ *  IN_WAY ... COMPLETE   the jobs that came to the department (the incoming list with show=active: jobs whose cloth has all gone on, and rejected
+ *                        jobs the sender sent again, are not counted), per status
+ *  REJECTED              the jobs the department SENT that the next department rejected (the "rejected" list of the department)
+ *  rejectedHere          the jobs this department itself rejected (the incoming list with status=REJECTED, show=active)
+ * One query for all departments instead of a request per department.
+ */
+async function overview(req) {
+  const { companyId } = req.user;
+  const all = (await companyServices(companyId)).filter((s) => OVERVIEW_KINDS.includes(s.kind));
+  const own = req.user.userType === 'CLIENT_ADMIN' ? null : new Set((await userServices(req.user)).map((g) => g.service.id));
+  const visible = own ? all.filter((s) => own.has(s.id)) : all;
+  const ids = visible.map((s) => s.id);
+  const counts = new Map(ids.map((id) => [id, { IN_WAY: 0, QUEUE: 0, PENDING: 0, PROCESSING: 0, COMPLETE: 0, REJECTED: 0, rejectedHere: 0 }]));
+  if (ids.length) {
+    const incoming = await sequelize.query(`
+      SELECT j."departmentId" AS id, j.status, count(*)::int AS n FROM jobs j
+      WHERE j."companyId" = :companyId AND j."departmentId" IN (:ids) AND j.id NOT IN (
+        -- the same "all sent" rule as the incoming list (show=active)
+        SELECT j2.id FROM jobs j2 WHERE j2."companyId" = :companyId AND EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j2.id)
+          AND NOT EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j2.id AND NOT EXISTS (
+            SELECT 1 FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = a.id AND nj.status <> 'REJECTED'))
+        UNION
+        SELECT j3.id FROM jobs j3 WHERE j3."companyId" = :companyId AND j3.status = 'REJECTED'
+          AND NOT EXISTS (SELECT 1 FROM job_items a WHERE a."jobId" = j3.id AND (a."sourceJobItemId" IS NULL OR NOT EXISTS (
+            SELECT 1 FROM job_items o JOIN jobs oj ON oj.id = o."jobId" WHERE o."sourceJobItemId" = a."sourceJobItemId" AND o.id <> a.id AND oj.status <> 'REJECTED'))))
+      GROUP BY j."departmentId", j.status`, { replacements: { companyId, ids }, type: QueryTypes.SELECT });
+    for (const r of incoming) {
+      if (OVERVIEW_STATUSES.includes(r.status)) counts.get(r.id)[r.status] = r.n;
+      else if (r.status === 'REJECTED') counts.get(r.id).rejectedHere = r.n;
+    }
+    const sentBack = await sequelize.query(`SELECT j."fromDepartmentId" AS id, count(*)::int AS n FROM jobs j WHERE j."companyId" = :companyId AND j."fromDepartmentId" IN (:ids) AND j.status = 'REJECTED' GROUP BY j."fromDepartmentId"`,
+      { replacements: { companyId, ids }, type: QueryTypes.SELECT });
+    for (const r of sentBack) counts.get(r.id).REJECTED = r.n;
+  }
+  return visible.map((s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, counts: counts.get(s.id) }));
+}
+
+/**
+ * Cloth that came straight from an SO card goes back to the SO card desk (owner 2026-11-13).
+ * The receiving department (FULL access) picks job items (jobItemIds: the rows of one job or of several jobs of the department; or soCardIds of ONE job; or all of one job):
+ *   - a job that is returned in full becomes REJECTED + "returnedToSoCard";
+ *   - when only some SO cards / rows of a job are returned they move to a NEW job of their own (new Job#, same department and header) which is the REJECTED + returned one,
+ *     and the rest stays in the original job (its total meters are worked out again).
+ * Only In-Way / Queue / Pending jobs can be returned (nothing processed, no chemicals asked for). The meters are free at the SO card desk at once (a rejected job is left out of what was sent);
+ * a card whose cloth is all back is "not sent" again and can be edited or sent anywhere.
+ */
+async function returnToSoCard(req, departmentId, { jobId, jobItemIds, soCardIds, all, reason }) {
+  return sequelize.transaction(async (transaction) => {
+    const companyId = req.user.companyId;
+    if ((await accessTo(req, departmentId, transaction)) !== 'FULL') throw AppError.forbidden('Only the receiving department (with FULL access) can return cloth to the SO card');
+    // which items
+    let items;
+    if (jobItemIds && jobItemIds.length) {
+      items = await JobItem.findAll({ where: { id: [...new Set(jobItemIds)] }, transaction });
+      if (items.length !== new Set(jobItemIds).size) throw AppError.rule('UNKNOWN_ROWS', 'Some rows were not found');
+    } else {
+      if (!jobId) throw AppError.rule('ROWS_REQUIRED', 'Say which rows (jobItemIds), or which SO cards (soCardIds) or all of the job');
+      const all_ = await JobItem.findAll({ where: { jobId }, transaction });
+      if (!all_.length) throw AppError.notFound('Job');
+      items = all ? all_ : all_.filter((i) => (soCardIds || []).includes(i.soCardId));
+      if (!items.length) throw AppError.rule('ROWS_REQUIRED', 'None of these SO cards is in this job');
+      if (!all && new Set(soCardIds).size !== new Set(items.map((i) => i.soCardId)).size) throw AppError.rule('NOT_IN_JOB', 'Some of these SO cards are not in this job');
+    }
+    const jobIds = [...new Set(items.map((i) => i.jobId))].sort();
+    if (jobId && jobIds.some((j) => j !== jobId)) throw AppError.rule('NOT_IN_JOB', 'Some rows are not in this job');
+    const jobs = await Job.findAll({ where: { id: jobIds, companyId }, order: [['id', 'ASC']], lock: transaction.LOCK.UPDATE, transaction });
+    if (jobs.length !== jobIds.length) throw AppError.notFound('Job');
+    const now = new Date();
+    const out = [];
+    const cardIds = new Set();
+    for (const job of jobs) {
+      if (job.departmentId !== departmentId) throw AppError.rule('JOB_WRONG_DEPARTMENT', `Job# ${job.jobNo} was not sent to this department`);
+      if (job.fromDepartmentId) throw AppError.rule('NOT_FROM_SO_CARD', `Job# ${job.jobNo} came from another department, not from an SO card: reject it instead`, { jobNo: job.jobNo });
+      if (!RETURNABLE.includes(job.status)) throw AppError.rule('CANNOT_RETURN', `Job# ${job.jobNo}: cloth already in processing cannot be returned to the SO card`, { jobNo: job.jobNo });
+      if ((await sequelize.query('SELECT 1 FROM chemical_requests WHERE "jobId" = :id LIMIT 1', { replacements: { id: job.id }, type: QueryTypes.SELECT, transaction })).length) {
+        throw AppError.rule('CANNOT_RETURN', `Job# ${job.jobNo}: chemicals were already requested for this job, so it cannot be returned`, { jobNo: job.jobNo });
+      }
+      const mine = items.filter((i) => i.jobId === job.id);
+      const every = await JobItem.findAll({ where: { jobId: job.id }, transaction });
+      const whole = mine.length === every.length;
+      const meters = round(mine.reduce((s, i) => s + Number(i.meters), 0));
+      const mark = { status: 'REJECTED', returnedToSoCard: true, returnReason: reason || null, returnedAt: now, returnedById: req.user.id, statusById: req.user.id, statusAt: now, rejectReason: null };
+      let returned = job;
+      if (whole) {
+        Object.assign(job, mark);
+        await job.save({ transaction });
+      } else {
+        // the returned rows move to a job of their own; the rest stays
+        const jobNo = await counters.take(companyId, JOB, async () => ((await Job.max('jobNo', { where: { companyId }, transaction })) || 0) + 1, transaction);
+        returned = await Job.create({
+          companyId, jobNo, jobDate: job.jobDate, departmentId: job.departmentId, fromDepartmentId: null, colourId: job.colourId, totalMeters: meters, isReprocess: job.isReprocess, isRework: job.isRework,
+          sentThrough: job.sentThrough, remarks: job.remarks, instructions: job.instructions, receivedById: job.receivedById, receivedAt: job.receivedAt, acceptedById: job.acceptedById, acceptedAt: job.acceptedAt,
+          createdById: job.createdById, returnedFromJobId: job.id, ...mark,
+        }, { transaction });
+        await JobItem.update({ jobId: returned.id }, { where: { id: mine.map((i) => i.id) }, transaction });
+        job.totalMeters = round(Number(job.totalMeters) - meters);
+        await job.save({ transaction });
+      }
+      mine.forEach((i) => cardIds.add(i.soCardId));
+      out.push({ jobId: job.id, jobNo: job.jobNo, returnedJobId: returned.id, returnedJobNo: returned.jobNo, whole, meters, rows: mine.length });
+      await audit.log(req, { action: 'JOB_RETURNED_TO_SO_CARD', entityType: 'Job', entityId: returned.id, after: { jobNo: job.jobNo, returnedJobNo: returned.jobNo, whole, meters, reason: reason || null, soCardIds: [...new Set(mine.map((i) => i.soCardId))] } }, { transaction });
+    }
+    // a card whose cloth is all back at the SO card desk is "not sent" again
+    for (const cardId of cardIds) {
+      const [still] = await sequelize.query(`SELECT 1 FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardId" = :cardId AND j.status <> 'REJECTED' LIMIT 1`, { replacements: { cardId }, type: QueryTypes.SELECT, transaction });
+      if (!still) await SoCard.update({ status: 'NEW', currentDepartmentId: null }, { where: { id: cardId, status: 'SENT' }, transaction });
+    }
+    const cards = await SoCard.findAll({ where: { id: [...cardIds] }, attributes: ['id', 'cardNo', 'isGreyReturn', 'status'], transaction });
+    return {
+      returned: out,
+      soCards: cards.map((c) => ({ id: c.id, cardNo: c.cardNo, cardLabel: soLabel(c.cardNo, c.isGreyReturn), status: c.status, backAtSoCard: c.status === 'NEW' })),
+      jobs: await Promise.all(out.flatMap((o) => (o.returnedJobId === o.jobId ? [o.jobId] : [o.jobId, o.returnedJobId])).map((id) => load(id, transaction))),
+    };
+  });
+}
+
+module.exports = { returnToSoCard, overview, chemicalsOf, chemicalCols, previousCosts, answerReject, setColour, formData, available, list, get, create, setStatus, setOperator, update, soCardHistory };

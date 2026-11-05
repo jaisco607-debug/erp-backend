@@ -23,7 +23,7 @@ test('In-Way -> Receive -> Queue -> Accept; colour by dyeing; sent-on hides; cos
   const fd = (await api('get', '/jobs/form-data')).body;
   const job = (await api('post', '/jobs', { departmentId: s.DYEING.id, items: [{ soCardLotId: fd.rows[0].soCardLotId }] })).body;
   expect(job).toMatchObject({ status: 'IN_WAY', canReceive: true, colour: null, thaanCount: 2 });
-  expect(job.items[0].thaans).toEqual([{ thaanNo: 1, meters: 100 }, { thaanNo: 2, meters: 120 }]);
+  expect(job.items[0].thaans).toEqual([{ thaanNo: 1, width: null, meters: 100 }, { thaanNo: 2, width: null, meters: 120 }]);
 
   // dyeing: receive -> queue, accept -> pending
   let j = (await api('post', `/departments/DYEING/jobs/${job.id}/receive`)).body;

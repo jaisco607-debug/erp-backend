@@ -25,11 +25,11 @@ const as = (token) => (url) => request(app).get(`/api/v1${url}`).set({ Authoriza
 test('client admin makes an employee with email + password + some services; the employee logs in and sees only those', async () => {
   const { company, ids, login, adm } = await setup();
 
-  // what the client admin can give: the company's services only, grouped by tab; reports are VIEW only
+  // what the client admin can give: the company's services only, grouped by tab; every service can be VIEW or FULL
   const options = (await adm('get', '/users/service-options')).body.data;
-  expect(options.map((s) => s.code).sort()).toEqual(['CHEMICAL_STORE', 'DYEING', 'GENERAL_STORE', 'GREY_STORE', 'REPORT_GREY', 'SO_CARD', 'STORE_REPORTS']);
+  expect(options.map((s) => s.code).sort()).toEqual(['CHEMICAL_STORE', 'DYEING', 'FOLDING', 'GENERAL_STORE', 'GREY_STORE', 'PACKING', 'REPORT_GREY', 'SO_CARD', 'STORE_REPORTS']);
   expect(options.find((s) => s.code === 'GREY_STORE')).toMatchObject({ menuGroup: 'PRODUCTION', accessLevels: ['VIEW', 'FULL'] });
-  expect(options.find((s) => s.code === 'REPORT_GREY')).toMatchObject({ kind: 'REPORT', accessLevels: ['VIEW'] });
+  expect(options.find((s) => s.code === 'REPORT_GREY')).toMatchObject({ kind: 'REPORT', accessLevels: ['VIEW', 'FULL'] });
 
   const made = await adm('post', '/users', {
     name: 'Aslam', email: 'Aslam@Test.com', phone: '0300-1234567', password: EMP_PASS,
@@ -38,8 +38,8 @@ test('client admin makes an employee with email + password + some services; the 
   expect(made.status).toBe(201);
   expect(made.body).toMatchObject({ name: 'Aslam', email: 'aslam@test.com', phone: '0300-1234567', userType: 'USER', isActive: true, serviceCount: 2 });
   expect(JSON.stringify(made.body)).not.toMatch(/passwordHash|\$2[aby]\$|Employee-Pass/);
-  // a report service is stored as VIEW even when FULL was asked
-  expect(made.body.services.map((s) => [s.code, s.access]).sort()).toEqual([['CHEMICAL_STORE', 'FULL'], ['REPORT_GREY', 'VIEW']]);
+  // a report service can be given as FULL too: the client admin decides
+  expect(made.body.services.map((s) => [s.code, s.access]).sort()).toEqual([['CHEMICAL_STORE', 'FULL'], ['REPORT_GREY', 'FULL']]);
 
   // the employee logs in with the COMPANY's code and their own email + password
   const emp = await login('aslam@test.com', EMP_PASS);
@@ -59,9 +59,9 @@ test('client admin makes an employee with email + password + some services; the 
   // an employee cannot manage employees
   expect((await get('/users')).status).toBe(403);
 
-  // the client admin changes the list: all the company's services at once (read-only ones as VIEW)
-  const all = await adm('put', `/users/${made.body.id}/services`, { services: options.map((s) => ({ serviceId: s.id, access: s.kind === 'REPORT' ? 'VIEW' : 'FULL' })) });
-  expect(all.body.serviceCount).toBe(7);
+  // the client admin changes the list: all the company's services at once (as VIEW or FULL)
+  const all = await adm('put', `/users/${made.body.id}/services`, { services: options.map((s) => ({ serviceId: s.id, access: 'FULL' })) });
+  expect(all.body.serviceCount).toBe(9);
   expect((await get('/stores/general/items')).status).toBe(200);
   expect((await get('/stores/chemical/cost/jobs')).status).toBe(200);
   // ... or part of one tab: only the general store
@@ -149,7 +149,7 @@ test('super admin only SEES the client admins, their employees and the services 
   // one client admin: with the company's employees and what each can use
   const bossRow = all.data.find((u) => u.email === 'boss@test.com');
   const boss = (await sup('get', `/admin/users/${bossRow.id}`)).body;
-  expect(boss.services).toHaveLength(7);
+  expect(boss.services).toHaveLength(9);
   expect(boss.employees.map((e) => [e.name, e.serviceCount]).sort()).toEqual([['Aslam', 2], ['Bilal', 0]]);
   expect(boss.employees.find((e) => e.name === 'Aslam').services.map((s) => s.code).sort()).toEqual(['GREY_STORE', 'REPORT_GREY']);
   expect((await sup('get', '/admin/users/00000000-0000-4000-8000-000000000000')).status).toBe(404);
@@ -215,4 +215,62 @@ test('switching off or deleting the client admin locks out all his employees at 
   // the company switched off or deleted locks everybody out too (as before)
   await sup('patch', `/companies/${company.id}`, { isActive: false });
   expect((await request(app).post('/api/v1/auth/login').send({ companyCode: company.code, email: 'boss@test.com', password: 'Boss-Pass-123' })).status).toBe(401);
+});
+
+test('job roles: a list for the form and the filter, a role on every employee (default Employee), changed by the client admin, filtered in the list; it gives no permission', async () => {
+  const { company, ids, login, adm, boss } = await setup();
+  const roles = (await adm('get', '/users/roles')).body;
+  expect(roles.default).toBe('EMPLOYEE');
+  const codes = roles.data.map((r) => r.code);
+  expect(codes.slice(0, 5)).toEqual(['EMPLOYEE', 'SUPERVISOR', 'ASSISTANT_MANAGER', 'MANAGER', 'DEPARTMENT_MANAGER']);
+  for (const wanted of ['ACCOUNTANT', 'FINANCE', 'ASSISTANT_ACCOUNTANT', 'STORE_MANAGER', 'STORE_INVENTORY_EMPLOYEE']) expect(codes).toContain(wanted);
+  expect(roles.data.find((r) => r.code === 'STORE_INVENTORY_EMPLOYEE')).toEqual({ code: 'STORE_INVENTORY_EMPLOYEE', label: 'Store Inventory Employee', count: 0 });
+  expect(roles.data.every((r) => r.count === 0)).toBe(true);
+
+  // no role sent = Employee; a role can be chosen; a wrong one is refused
+  const base = (n, extra = {}) => ({ name: `Person ${n}`, email: `p${n}@test.com`, password: EMP_PASS, services: [], ...extra });
+  const a = await adm('post', '/users', base(1));
+  expect(a.status).toBe(201);
+  expect(a.body).toMatchObject({ jobRole: 'EMPLOYEE', jobRoleText: 'Employee', userType: 'USER' });
+  const b = await adm('post', '/users', base(2, { jobRole: 'accountant' }));
+  expect(b.body).toMatchObject({ jobRole: 'ACCOUNTANT', jobRoleText: 'Accountant' });
+  const c = await adm('post', '/users', base(3, { jobRole: 'STORE_MANAGER' }));
+  const d = await adm('post', '/users', base(4, { jobRole: 'ACCOUNTANT' }));
+  expect((await adm('post', '/users', base(5, { jobRole: 'KING' }))).status).toBe(400);
+  expect((await adm('post', '/users', base(6, { jobRole: null }))).status).toBe(400);
+
+  // change it
+  expect((await adm('patch', `/users/${a.body.id}`, { jobRole: 'MANAGER' })).body).toMatchObject({ jobRole: 'MANAGER', jobRoleText: 'Manager' });
+  expect((await adm('patch', `/users/${a.body.id}`, { jobRole: 'KING' })).status).toBe(400);
+  expect((await adm('get', `/users/${a.body.id}`)).body.jobRole).toBe('MANAGER');
+
+  // the counts and the filter (one role, several as a list or as one comma text)
+  const counted = (await adm('get', '/users/roles')).body.data;
+  expect(Object.fromEntries(counted.filter((r) => r.count).map((r) => [r.code, r.count]))).toEqual({ MANAGER: 1, ACCOUNTANT: 2, STORE_MANAGER: 1 });
+  const names = async (q) => (await adm('get', `/users?${q}`)).body.data.map((u) => u.name).sort();
+  expect(await names('jobRole=ACCOUNTANT')).toEqual(['Person 2', 'Person 4']);
+  expect(await names('jobRole=ACCOUNTANT,STORE_MANAGER')).toEqual(['Person 2', 'Person 3', 'Person 4']);
+  expect(await names('jobRole=ACCOUNTANT&jobRole=MANAGER')).toEqual(['Person 1', 'Person 2', 'Person 4']);
+  expect(await names('jobRole=accountant&search=Person 4')).toEqual(['Person 4']);
+  expect(await names('')).toHaveLength(4);
+  expect((await adm('get', '/users?jobRole=KING')).status).toBe(400);
+  expect((await adm('get', '/users?jobRole=')).status).toBe(400);
+
+  // the role is a label only: the services decide what the person can do, and any role can get any service as VIEW or FULL
+  const options = (await adm('get', '/users/service-options')).body.data;
+  expect(options.every((o) => o.accessLevels.join() === 'VIEW,FULL')).toBe(true);
+  await adm('put', `/users/${b.body.id}/services`, { services: options.map((o) => ({ serviceId: o.id, access: 'FULL' })) });
+  const accountant = await login('p2@test.com', EMP_PASS);
+  expect(accountant.user).toMatchObject({ jobRole: 'ACCOUNTANT', jobRoleText: 'Accountant' });
+  expect(accountant.services).toHaveLength(options.length);
+  expect((await as(accountant.accessToken)('/auth/me')).body.user.jobRole).toBe('ACCOUNTANT');
+  expect((await as(accountant.accessToken)('/users')).status).toBe(403);
+  expect((await as(accountant.accessToken)('/users/roles')).status).toBe(403);
+
+  // another company sees its own counts only; admins have no job role
+  expect((await adm('get', '/auth/me')).body.user.jobRole).toBeNull();
+  expect(company.id).toBeTruthy();
+  expect(ids.GREY_STORE).toBeTruthy();
+  expect(c.body.jobRole).toBe('STORE_MANAGER');
+  expect(d.body.jobRole).toBe('ACCOUNTANT');
 });
