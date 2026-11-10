@@ -9,7 +9,7 @@ const { extrasFor } = require('./processBundle');
 const json = (s) => ({ id: s.id, code: s.code, name: s.name, kind: s.kind, menuGroup: s.menuGroup, isBuiltIn: CORE_MODULES.includes(s.code), tracksColour: s.tracksColour, isActive: s.isActive, sortOrder: s.sortOrder });
 
 async function list({ isActive, kind }) {
-  const where = isActive === undefined ? {} : { isActive };
+  const where = isActive === undefined ? { companyId: null } : { isActive, companyId: null };
   if (kind) where.kind = kind;
   return { data: (await Service.findAll({ where, order: [['sortOrder', 'ASC'], ['name', 'ASC']] })).map(json) };
 }

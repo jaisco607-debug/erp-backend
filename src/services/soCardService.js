@@ -15,7 +15,7 @@
 // - Several NEW cards can be sent to a department together: they go as ONE job (one Job#) that
 //   shows all their SO numbers.
 const { Op, QueryTypes } = require('sequelize');
-const { sequelize, SoCard, SoCardLot, SoCardLotThaan, SoCardMove, GreyLot, GreyLotThaan, Customer, Quality, Service, User } = require('../models');
+const { sequelize, SoCard, SoCardLot, SoCardLotThaan, SoCardGroup, SoCardMove, GreyLot, GreyLotThaan, Customer, Quality, Colour, Service, User } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 const counters = require('./counterService');
@@ -46,6 +46,7 @@ const include = [
     }, { model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['thaanNo', 'meters', 'yards', 'width'] }] }],
   },
   { model: User, as: 'createdBy', attributes: ['id', 'name'] },
+  { model: SoCardGroup, as: 'groups', include: [{ model: Colour, as: 'colour', attributes: ['id', 'name'], paranoid: false }] },
   {
     model: SoCardMove, as: 'moves',
     include: [
@@ -56,7 +57,7 @@ const include = [
     ],
   },
 ];
-const order = [[{ model: SoCardLot, as: 'lots' }, 'createdAt', 'ASC'], [{ model: SoCardMove, as: 'moves' }, 'sentAt', 'ASC']];
+const order = [[{ model: SoCardLot, as: 'lots' }, 'createdAt', 'ASC'], [{ model: SoCardGroup, as: 'groups' }, 'sortOrder', 'ASC'], [{ model: SoCardMove, as: 'moves' }, 'sentAt', 'ASC']];
 
 function moveJSON(m) {
   return {
@@ -87,9 +88,51 @@ async function positionsOf(cardIds, transaction) {
   for (const r of rows) out.set(r.id, { department: { id: r.deptId, code: r.code, name: r.name }, waiting: ['IN_WAY', 'QUEUE'].includes(r.status) });
   return out;
 }
-const jsonMany = async (cards) => { const pos = await positionsOf(cards.map((c) => c.id)); return cards.map((c) => json(c, pos.get(c.id))); };
+/**
+ * What each line of these cards has sent on from the SO card desk: Map(lineId -> { sent, left, dept }). A line is a lot (or a part of a lot: a sub-category) of the card; `dept` is the newest department it went to.
+ */
+async function lineInfoOf(cardIds, transaction) {
+  const out = new Map();
+  if (!cardIds.length) return out;
+  const rows = await sequelize.query(`
+    SELECT scl.id, scl.meters::float AS meters,
+      COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED'), 0)::float AS sent,
+      (SELECT row_to_json(x) FROM (SELECT s.id, s.code, s.name, j."jobNo" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
+        WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED' ORDER BY j."createdAt" DESC LIMIT 1) x) AS dept
+    FROM so_card_lots scl WHERE scl."soCardId" IN (:ids)`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
+  for (const r of rows) out.set(r.id, { sent: round(r.sent), left: Math.max(0, round(r.meters - r.sent)), dept: r.dept || null });
+  return out;
+}
 
-function json(c, position) {
+/** The sub-categories (groups) of a card: tag colour, the cloth in each (lots and thaans), and how much of it was sent on. */
+function groupsJSON(c, lineInfo) {
+  const cardLabel = soLabel(c.cardNo, c.isGreyReturn);
+  return [...(c.groups || [])].sort((a, b) => a.sortOrder - b.sortOrder).map((g) => {
+    const lines = (c.lots || []).filter((l) => l.groupId === g.id);
+    const info = lines.map((l) => lineInfo.get(l.id) || { sent: 0, left: l.meters, dept: null });
+    const total = round(lines.reduce((t, l) => t + l.meters, 0));
+    const sent = round(info.reduce((t, i) => t + i.sent, 0));
+    const left = Math.max(0, round(total - sent));
+    const thaans = lines.reduce((t, l) => t + (l.thaanParts || []).length, 0);
+    return {
+      id: g.id, code: g.code, label: g.label, title: g.label || `Part ${g.code}`, tag: `${cardLabel}-${g.code}`, colour: g.colour ? { id: g.colour.id, name: g.colour.name } : null, remarks: g.remarks,
+      totalMeters: total, totalThaans: thaans, sentMeters: sent, leftMeters: left, status: left <= 0.004 ? 'SENT' : sent > 0 ? 'PARTLY_SENT' : 'NOT_SENT', canSend: left > 0.004,
+      department: (info.map((i) => i.dept).find(Boolean)) || null,
+      lots: lines.map((l) => ({
+        lineId: l.id, greyLotId: l.greyLotId, lotNo: l.greyLot ? l.greyLot.lotNo : null, meters: l.meters,
+        thaans: [...(l.thaanParts || [])].sort((a, b) => a.thaan.thaanNo - b.thaan.thaanNo).map((p) => ({ thaanNo: p.thaan.thaanNo, meters: p.meters, thaanMeters: p.thaan.meters, width: p.thaan.width ?? (l.greyLot ? l.greyLot.width : null) ?? null })),
+      })),
+    };
+  });
+}
+
+const jsonMany = async (cards) => {
+  const ids = cards.map((c) => c.id);
+  const [pos, info] = await Promise.all([positionsOf(ids), lineInfoOf(ids)]);
+  return cards.map((c) => json(c, pos.get(c.id), info));
+};
+
+function json(c, position, lineInfo = new Map()) {
   const here = position ? position.department : dept(c.currentDepartment);
   const waiting = c.status === 'SENT' && (position ? position.waiting : true);
   const moves = (c.moves || []).map(moveJSON);
@@ -149,6 +192,11 @@ function json(c, position) {
         meters: l.meters,
         yards: showYards ? round(l.meters / YARD) : null,
         pieces: l.pieces,
+        // the sub-category (group) this line is the cloth of (empty on a card made without groups), and what of it was sent on
+        groupId: l.groupId || null,
+        groupCode: l.group ? l.group.code : ((c.groups || []).find((g) => g.id === l.groupId) || {}).code || null,
+        sentMeters: (lineInfo.get(l.id) || { sent: 0 }).sent,
+        leftMeters: (lineInfo.get(l.id) || { left: l.meters }).left,
         isThaanWise: thaans.length > 0,
         thaanNos: thaans.map((t) => t.thaanNo),
         // meters = taken on this card; thaanMeters = the thaan's full length; isPart when only part was taken
@@ -159,6 +207,9 @@ function json(c, position) {
       };
     }),
     totalYards: (c.lots || []).length && (c.lots || []).every((l) => l.greyLot?.unit === 'YARD') ? round(c.totalMeters / YARD) : null,
+    // sub-categories: one SO card, several parts each with its own colour tag; empty on a card made the old way
+    hasGroups: (c.groups || []).length > 0,
+    groups: groupsJSON(c, lineInfo),
     createdBy: person(c.createdBy),
     moves,
     remarks: c.remarks,
@@ -166,7 +217,7 @@ function json(c, position) {
   };
 }
 
-const load = async (id, transaction) => { const c = await SoCard.findByPk(id, { include, order, transaction }); return json(c, (await positionsOf([c.id], transaction)).get(c.id)); };
+const load = async (id, transaction) => { const c = await SoCard.findByPk(id, { include, order, transaction }); return json(c, (await positionsOf([c.id], transaction)).get(c.id), await lineInfoOf([c.id], transaction)); };
 
 async function findOr404(req, id, transaction, lock = false) {
   const card = await SoCard.findOne({ where: { id, companyId: req.user.companyId }, lock: lock ? transaction.LOCK.UPDATE : undefined, transaction });
@@ -315,8 +366,13 @@ async function get(req, id) {
  *   thaans: [{ thaanNo: 1, meters: 1000 }, ...]   part of a thaan (meters left out = all that is free)
  * -> line.parts [{ row, meters }], line.meters, line.pieces.  A lot without thaans gives meters as before.
  */
-async function pickThaans(line, lot, transaction) {
-  const rows = await GreyLotThaan.findAll({ where: { lotId: lot.id }, order: [['thaanNo', 'ASC']], lock: transaction.LOCK.UPDATE, transaction });
+async function pickThaans(line, lot, transaction, cache) {
+  // lines of the same lot (the sub-categories of a card) share the same thaan rows, so what one line asked is not free for the next
+  let rows = cache && cache.get(lot.id);
+  if (!rows) {
+    rows = await GreyLotThaan.findAll({ where: { lotId: lot.id }, order: [['thaanNo', 'ASC']], lock: transaction.LOCK.UPDATE, transaction });
+    if (cache) cache.set(lot.id, rows);
+  }
   const asked = line.thaans || (line.thaanNos && line.thaanNos.map((thaanNo) => ({ thaanNo })));
   if (!rows.length) {
     if (asked) throw AppError.rule('NO_THAANS', `Lot ${lot.lotNo} has no thaan list; send meters`);
@@ -329,10 +385,11 @@ async function pickThaans(line, lot, transaction) {
     const row = byNo.get(a.thaanNo);
     if (!row) throw AppError.rule('UNKNOWN_THAAN', `Thaan ${a.thaanNo} is not in lot ${lot.lotNo}`);
     if (row.status === 'RETURNED') throw AppError.rule('THAAN_NOT_IN_STOCK', `Lot ${lot.lotNo} thaan ${row.thaanNo} is given back to the party`);
-    const free = round(row.meters - row.takenMeters);
+    const free = round(row.meters - row.takenMeters - (row.askedMeters || 0));
     if (free <= 0) throw AppError.rule('THAAN_NOT_IN_STOCK', `Lot ${lot.lotNo} thaan ${row.thaanNo} is already on an SO card`);
     const meters = a.meters === undefined ? free : a.meters;
     if (meters > free) throw AppError.rule('THAAN_SHORT', `Lot ${lot.lotNo} thaan ${row.thaanNo} has only ${free} m free`, { thaanNo: row.thaanNo, freeMeters: free });
+    row.askedMeters = round((row.askedMeters || 0) + meters);
     return { row, meters };
   });
   line.meters = round(line.parts.reduce((t, p) => t + p.meters, 0));
@@ -340,10 +397,10 @@ async function pickThaans(line, lot, transaction) {
 }
 
 /** Save one lot line of a card, note the lot's figures before, take the meters and the thaan meters. */
-async function attachLine(card, line, lot, transaction) {
+async function attachLine(card, line, lot, transaction, groupIds = []) {
   const outBefore = lot.outwardMeters;
   const scl = await SoCardLot.create({
-    soCardId: card.id, greyLotId: line.greyLotId, meters: line.meters, pieces: line.pieces || 0,
+    soCardId: card.id, greyLotId: line.greyLotId, meters: line.meters, pieces: line.pieces || 0, groupId: line.groupIndex === undefined ? null : groupIds[line.groupIndex],
     outBefore, balanceBefore: round(lot.inwardMeters - outBefore),
   }, { transaction });
   lot.outwardMeters = round(outBefore + line.meters);
@@ -369,10 +426,47 @@ async function freeThaans(soCardLotIds, transaction) {
   await SoCardLotThaan.destroy({ where: { soCardLotId: soCardLotIds }, transaction });
 }
 
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/**
+ * Sub-categories: groups [{ label?, colourId?, remarks?, lots: [lines like `lots`] }] become one flat list of lines (each remembers its group) and the group definitions.
+ * A group gets the letter A, B, C ... A lot may be in several groups; its thaans (even one thaan, in parts by meters) are shared out between them.
+ */
+async function flattenGroups(companyId, groups, transaction) {
+  const lines = [];
+  const defs = [];
+  const labels = new Set();
+  for (const [i, g] of groups.entries()) {
+    if (g.label && g.label.trim()) {
+      const k = g.label.trim().toLowerCase();
+      if (labels.has(k)) throw AppError.rule('GROUP_LABEL_TAKEN', `Two parts are called "${g.label.trim()}"`);
+      labels.add(k);
+    }
+    if (g.colourId) {
+      const colour = await Colour.findOne({ where: { id: g.colourId, companyId }, transaction });
+      if (!colour) throw AppError.rule('UNKNOWN_COLOUR', 'Colour not found');
+      if (!colour.isActive) throw AppError.rule('COLOUR_INACTIVE', `Colour ${colour.name} is switched off`);
+    }
+    defs.push({ code: LETTERS[i], label: g.label && g.label.trim() ? g.label.trim() : null, colourId: g.colourId || null, remarks: g.remarks || null, sortOrder: i });
+    for (const l of g.lots) lines.push({ ...l, groupIndex: i });
+  }
+  return { lines, defs };
+}
+
+async function createGroups(card, defs, transaction) {
+  const ids = [];
+  for (const d of defs) ids.push((await SoCardGroup.create({ soCardId: card.id, ...d }, { transaction })).id);
+  return ids;
+}
+
 // desk: who makes the card when it is not the SO card desk ('GREY_STORE' for a fabric return); see jobService.need
-async function create(req, { cardDate, lots, remarks, description, qualityId, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions, isGreyReturn, desk }) {
+async function create(req, { cardDate, lots, groups, remarks, description, qualityId, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions, isGreyReturn, desk }) {
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
+    // the new way: sub-categories (groups) of one card; the old way: plain lots
+    let groupDefs = null;
+    if (groups) ({ lines: lots, defs: groupDefs } = await flattenGroups(companyId, groups, transaction));
+    const cache = new Map();
     // lock the lots in a fixed order so two cards saved together cannot deadlock or overdraw
     const ids = lots.map((l) => l.greyLotId).sort();
     const found = await GreyLot.findAll({ where: { id: ids, companyId }, order: [['id', 'ASC']], lock: transaction.LOCK.UPDATE, transaction });
@@ -391,9 +485,10 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
       const lot = byId.get(line.greyLotId);
       if (!lot.isActive) throw AppError.rule('LOT_INACTIVE', `Lot ${lot.lotNo} is switched off`);
       if (!lot.isApproved) throw AppError.rule('LOT_NOT_APPROVED', `Lot ${lot.lotNo} is not approved yet`);
-      await pickThaans(line, lot, transaction);
-      const balance = round(lot.inwardMeters - lot.outwardMeters);
+      await pickThaans(line, lot, transaction, cache);
+      const balance = round(lot.inwardMeters - lot.outwardMeters - (lot.askedMeters || 0));
       if (line.meters > balance) short.push({ lotNo: lot.lotNo, balanceMeters: balance, asked: line.meters });
+      lot.askedMeters = round((lot.askedMeters || 0) + line.meters);
     }
     if (short.length) {
       throw AppError.rule('NOT_ENOUGH_METERS', `Lot ${short[0].lotNo} has only ${short[0].balanceMeters} m left`, { lots: short });
@@ -433,9 +528,10 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
       createdById: req.user.id,
     }, { transaction });
 
+    const groupIds = groupDefs ? await createGroups(card, groupDefs, transaction) : [];
     for (const line of lots) {
       const lot = byId.get(line.greyLotId);
-      await attachLine(card, line, lot, transaction);
+      await attachLine(card, line, lot, transaction, groupIds);
       await lot.save({ transaction });
     }
 
@@ -446,10 +542,12 @@ async function create(req, { cardDate, lots, remarks, description, qualityId, de
   });
 }
 
-async function update(req, id, { cardDate, remarks, description, qualityId, lots, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions }) {
+async function update(req, id, { cardDate, remarks, description, qualityId, lots, groups, departmentId, sentThrough, deliveryDate, article, instructions, workInstructions }) {
   return sequelize.transaction(async (transaction) => {
     const card = await findOr404(req, id, transaction, true);
     const before = await load(card.id, transaction);
+    let groupDefs = null;
+    if (groups) ({ lines: lots, defs: groupDefs } = await flattenGroups(req.user.companyId, groups, transaction));
     const editsCard = [cardDate, remarks, description, qualityId, lots, deliveryDate, article, instructions].some((v) => v !== undefined);
     if (cardDate !== undefined) {
       const [late] = await sequelize.query('SELECT gl."lotNo", gl."inwardDate" FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId" WHERE l."soCardId" = :id AND gl."inwardDate" > :d LIMIT 1', { replacements: { id: card.id, d: cardDate }, type: QueryTypes.SELECT, transaction });
@@ -468,7 +566,7 @@ async function update(req, id, { cardDate, remarks, description, qualityId, lots
       }
       card.qualityId = qualityId;
     }
-    if (lots) await replaceLots(req, card, lots, qualityId !== undefined, transaction);
+    if (lots) await replaceLots(req, card, lots, qualityId !== undefined, transaction, groupDefs);
     await card.save({ transaction });
     // choosing the department from the edit screen sends the card there
     if (departmentId) await sendIn(req, card, { departmentId, sentThrough, workInstructions }, transaction);
@@ -482,7 +580,8 @@ async function update(req, id, { cardDate, remarks, description, qualityId, lots
  * Change a card's lots/meters (only while it is NEW and not confirmed): old meters go back to
  * their lots, then the new ones are taken, all in one transaction.
  */
-async function replaceLots(req, card, lots, qualityChosen, transaction) {
+async function replaceLots(req, card, lots, qualityChosen, transaction, groupDefs = null) {
+  const cache = new Map();
   if (card.status !== 'NEW') throw AppError.rule('CARD_SENT', 'Meters cannot change after the card is sent to a department');
   const companyId = req.user.companyId;
   const old = await SoCardLot.findAll({ where: { soCardId: card.id }, transaction });
@@ -505,13 +604,16 @@ async function replaceLots(req, card, lots, qualityChosen, transaction) {
       if (!lot.isActive) throw AppError.rule('LOT_INACTIVE', `Lot ${lot.lotNo} is switched off`);
       if (!lot.isApproved) throw AppError.rule('LOT_NOT_APPROVED', `Lot ${lot.lotNo} is not approved yet`);
     }
-    await pickThaans(line, lot, transaction);
-    const balance = round(lot.inwardMeters - lot.outwardMeters);
+    await pickThaans(line, lot, transaction, cache);
+    const balance = round(lot.inwardMeters - lot.outwardMeters - (lot.askedMeters || 0));
     if (line.meters > balance) short.push({ lotNo: lot.lotNo, balanceMeters: balance, asked: line.meters });
+    lot.askedMeters = round((lot.askedMeters || 0) + line.meters);
   }
   if (short.length) throw AppError.rule('NOT_ENOUGH_METERS', `Lot ${short[0].lotNo} has only ${short[0].balanceMeters} m left`, { lots: short });
   await SoCardLot.destroy({ where: { soCardId: card.id }, transaction });
-  for (const line of lots) await attachLine(card, line, byId.get(line.greyLotId), transaction);
+  await SoCardGroup.destroy({ where: { soCardId: card.id }, transaction });
+  const groupIds = groupDefs ? await createGroups(card, groupDefs, transaction) : [];
+  for (const line of lots) await attachLine(card, line, byId.get(line.greyLotId), transaction, groupIds);
   for (const lot of found) if (lot.changed()) await lot.save({ transaction });
   card.customerId = newLots[0].customerId;
   card.totalMeters = round(lots.reduce((t, l) => t + l.meters, 0));
@@ -562,7 +664,10 @@ async function sendIn(req, card, { departmentId, sentThrough, remarks, workInstr
       const jobService = require('./jobService');
       const rows = (await jobService.available(req, null, transaction)).filter((r) => r.soCard.id === id);
       if (rows.length) {
-        await jobService.create(req, { departmentId, sentThrough, remarks, instructions: workInstructions, desk, items: rows.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction);
+        // parts cut from the same thaan cannot be in one job: they go as separate jobs (a card without parts is one job as before)
+        for (const batch of await jobService.splitIntoBatches(rows, transaction)) {
+          await jobService.create(req, { departmentId, sentThrough, remarks, instructions: workInstructions, desk, items: batch.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction);
+        }
       }
     }
     if (card.status === 'SENT') throw AppError.rule('CARD_SENT', 'This card is already on its way to a department; it must be accepted first');

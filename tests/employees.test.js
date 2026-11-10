@@ -10,7 +10,7 @@ async function setup(services = ['GREY_STORE', 'SO_CARD', 'CHEMICAL_STORE', 'GEN
   const sa = await makeUser();
   const saAuth = { Authorization: `Bearer ${(await loginAs(sa)).accessToken}` };
   const sup = (m, url, body) => request(app)[m](`/api/v1${url}`).set(saAuth).send(body);
-  const company = (await sup('post', '/companies', { name: 'Mills', admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
+  const company = (await sup('post', '/companies', { name: 'Mills', processManagement: true, processLimit: 2, admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
   const ids = await idsOf(...services);
   await sup('put', `/companies/${company.id}/services`, { serviceIds: Object.values(ids) });
   const login = async (email, password) => (await request(app).post('/api/v1/auth/login').send({ companyCode: company.code, email, password })).body;
@@ -92,7 +92,7 @@ test('employee rules: email unique inside the company, client admins cannot be m
   // only the super admin makes client admins: a client admin cannot choose the type
   expect((await adm('post', '/users', { name: 'Sneaky', email: 's@test.com', password: EMP_PASS, userType: 'CLIENT_ADMIN' })).status).toBe(400);
   // the same email may exist in another company
-  const c2 = (await sup('post', '/companies', { name: 'Other Mills', admin: { name: 'Boss2', email: 'boss2@test.com', password: 'Boss-Pass-123' } })).body;
+  const c2 = (await sup('post', '/companies', { name: 'Other Mills', processManagement: true, processLimit: 2, admin: { name: 'Boss2', email: 'boss2@test.com', password: 'Boss-Pass-123' } })).body;
   const boss2 = (await request(app).post('/api/v1/auth/login').send({ companyCode: c2.code, email: 'boss2@test.com', password: 'Boss-Pass-123' })).body;
   expect((await request(app).post('/api/v1/users').set({ Authorization: `Bearer ${boss2.accessToken}` }).send({ name: 'Aslam', email: 'aslam@test.com', password: EMP_PASS })).status).toBe(201);
   // and another company's employee is "not found" for this client admin
@@ -125,7 +125,7 @@ test('super admin only SEES the client admins, their employees and the services 
   const { sa, sup, company, ids, adm } = await setup();
   await adm('post', '/users', { name: 'Aslam', email: 'aslam@test.com', phone: '0300-1', password: EMP_PASS, services: [{ serviceId: ids.GREY_STORE, access: 'FULL' }, { serviceId: ids.REPORT_GREY, access: 'VIEW' }] });
   await adm('post', '/users', { name: 'Bilal', email: 'bilal@test.com', password: EMP_PASS });
-  const c2 = (await sup('post', '/companies', { name: 'Other Mills', admin: { name: 'Boss2', email: 'boss2@test.com', password: 'Boss-Pass-123' } })).body;
+  const c2 = (await sup('post', '/companies', { name: 'Other Mills', processManagement: true, processLimit: 2, admin: { name: 'Boss2', email: 'boss2@test.com', password: 'Boss-Pass-123' } })).body;
 
   const all = (await sup('get', '/admin/users')).body;
   expect(all).toMatchObject({ page: 1, limit: 20, total: 5, summary: { total: 5, superAdmins: 1, clientAdmins: 2, users: 2, active: 5, inactive: 0 } });

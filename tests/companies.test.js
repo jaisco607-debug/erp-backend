@@ -17,6 +17,8 @@ const serviceIds = async (...codes) => (await Service.findAll({ where: { code: c
 async function register(auth, body = {}, services = ['DYEING', 'FOLDING']) {
   const res = await request(app).post('/api/v1/companies').set(auth).send({
     name: 'Waqas Textile',
+    processManagement: true,
+    processLimit: 2,
     admin: { name: 'Waqas', email: 'waqas@test.com', password: 'Waqas-Pass-123' },
     ...body,
   });

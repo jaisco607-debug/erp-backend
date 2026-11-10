@@ -10,7 +10,7 @@ async function setup() {
   const sa = await makeUser();
   const saAuth = { Authorization: `Bearer ${(await loginAs(sa)).accessToken}` };
   const sup = (m, url, body) => request(app)[m](`/api/v1${url}`).set(saAuth).send(body);
-  const company = (await sup('post', '/companies', { name: 'Mills', admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
+  const company = (await sup('post', '/companies', { name: 'Mills', processManagement: true, processLimit: 2, admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
   return { sup, company };
 }
 const codesOf = async (sup, company) => (await sup('get', `/companies/${company.id}`)).body.services.map((s) => s.code).sort();
@@ -65,7 +65,7 @@ test('a process brings folding and packing: for a company, for the companies a s
   await sup('put', `/companies/${company.id}/services`, { serviceIds: [await idOf('GREY_STORE')] });
   expect(await codesOf(sup, company)).toEqual(['GREY_STORE']);
   // from the service side
-  const other = (await sup('post', '/companies', { name: 'Looms', admin: { name: 'Boss2', email: 'b2@test.com', password: 'Boss-Pass-123' } })).body;
+  const other = (await sup('post', '/companies', { name: 'Looms', processManagement: true, processLimit: 2, admin: { name: 'Boss2', email: 'b2@test.com', password: 'Boss-Pass-123' } })).body;
   expect((await sup('post', `/services/${await idOf('DYEING')}/companies`, { companyIds: [other.id] })).status).toBeLessThan(300);
   expect(await codesOf(sup, other)).toEqual(['DYEING', 'FOLDING', 'PACKING']);
 

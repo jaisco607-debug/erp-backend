@@ -9,7 +9,7 @@ async function setup() {
   const sa = await makeUser();
   const saAuth = { Authorization: `Bearer ${(await loginAs(sa)).accessToken}` };
   const sup = (m, url, body) => request(app)[m](`/api/v1${url}`).set(saAuth).send(body);
-  const company = (await sup('post', '/companies', { name: 'Mills', admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
+  const company = (await sup('post', '/companies', { name: 'Mills', processManagement: true, processLimit: 2, admin: { name: 'Boss', email: 'boss@test.com', password: 'Boss-Pass-123' } })).body;
   return { sup, company };
 }
 

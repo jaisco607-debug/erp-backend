@@ -31,6 +31,8 @@ router.patch('/:id', full, validate(v.update), c.update);
 router.delete('/:id', full, validate(v.get), c.cancel);
 router.put('/:id/confirm', full, validate(v.confirm), c.setConfirmed);
 router.post('/:id/send', full, validate(v.send), c.send);
+// send the whole card, or only some of its parts (sub-categories), to a department: as jobs
+router.post('/:id/send-groups', full, validate(v.sendGroups), async (req, res) => res.json(await require('../services/jobService').sendCard(req, req.params.id, req.body)));
 router.post('/:id/accept', companyPerson, validate(v.get), c.accept);
 
 module.exports = router;

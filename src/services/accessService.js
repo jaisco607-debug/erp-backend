@@ -5,11 +5,15 @@ const { Company, Service, UserService } = require('../models');
 /** Active services a company has been given, in menu order. */
 async function companyServices(companyId, transaction) {
   const company = await Company.findByPk(companyId, {
-    include: [{ model: Service, as: 'services', where: { isActive: true }, required: false, through: { attributes: ['chemicalRequests'] } }],
+    include: [{ model: Service, as: 'services', where: { isActive: true }, required: false, through: { attributes: ['chemicalRequests', 'isActive'] } }],
     order: [[{ model: Service, as: 'services' }, 'sortOrder', 'ASC']],
     transaction,
   });
-  return company ? company.services : [];
+  if (!company) return [];
+  // Process Management off (the super admin's switch): no process, no Folding in the menu
+  const services = company.processManagement === false ? company.services.filter((s) => s.menuGroup !== 'PROCESS') : company.services;
+  // a process the client admin switched off for his company is hidden (menus, users, jobs); Folding and Packing are not processes and are not affected
+  return services.filter((s) => !(s.kind === 'PROCESS' && s.CompanyService && s.CompanyService.isActive === false));
 }
 
 const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING'];

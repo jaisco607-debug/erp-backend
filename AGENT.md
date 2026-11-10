@@ -206,3 +206,9 @@ Width is typed at grey inward (`width` on the lot, thaan items may be `{length, 
 
 ### 8.z Department chemical access
 Switch per department on `company_services.chemicalRequests` (client admin, `/v1/department-settings`); effective only with the Chemical Store given. Enforced in `needDept` (chemicalRequestService) and by the response filter at the top of `departmentRoutes.js`. `accessService.companyServices` carries the flag; `serviceJSON` shows `chemicalRequests` on PROCESS / FOLDING services. Test: `tests/departmentChemicalAccess.test.js`.
+
+### 8.z Process management
+Super admin switch + limit per company (`companies.processManagement/processLimit`); client admin adds own processes (`processService.js`, `/v1/processes`, `services.companyId`). Code lookups of platform codes (SO_CARD, GREY_STORE ...) stay global; a client process code is unique inside its company and never equals a non-process platform code. Test: `tests/processManagement.test.js`.
+
+### 8.z SO card groups
+A sub-category is a row of `so_card_groups`; its cloth is the `so_card_lots` rows with that `groupId` (one per lot). Parts of one thaan of one card are never in one job (`SPLIT_THAAN_IN_ONE_JOB`); `sendCard` / `sendIn` batch them. The colour tag is the default `job_items.colourId` of a part sent from the SO desk. Test: `tests/soCardGroups.test.js`.

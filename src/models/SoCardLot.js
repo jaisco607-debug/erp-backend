@@ -15,6 +15,8 @@ function init(sequelize) {
       // the lot just before this card took cloth: meters already gone out, and meters left
       outBefore: { ...num('outBefore'), allowNull: true },
       balanceBefore: { ...num('balanceBefore'), allowNull: true },
+      // the sub-category (group) of the card this line belongs to; empty = a card made without groups
+      groupId: { type: DataTypes.UUID, allowNull: true },
     },
     { sequelize, modelName: 'SoCardLot', tableName: 'so_card_lots' },
   );
@@ -37,4 +39,23 @@ function initThaans(sequelize) {
   return SoCardLotThaan;
 }
 
-module.exports = { SoCardLot, SoCardLotThaan, init, initThaans };
+// A sub-category of an SO card: a part of its cloth with its own colour tag (see migration 20261129000001).
+class SoCardGroup extends Model {}
+
+function initGroups(sequelize) {
+  SoCardGroup.init(
+    {
+      id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+      soCardId: { type: DataTypes.UUID, allowNull: false },
+      code: { type: DataTypes.STRING(3), allowNull: false },
+      label: { type: DataTypes.STRING(80), allowNull: true },
+      colourId: { type: DataTypes.UUID, allowNull: true },
+      remarks: { type: DataTypes.STRING(300), allowNull: true },
+      sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    },
+    { sequelize, modelName: 'SoCardGroup', tableName: 'so_card_groups' },
+  );
+  return SoCardGroup;
+}
+
+module.exports = { SoCardLot, SoCardLotThaan, SoCardGroup, init, initThaans, initGroups };

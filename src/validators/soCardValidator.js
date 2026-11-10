@@ -14,6 +14,13 @@ const lotLines = Joi.array().items(Joi.object({
   pieces: Joi.number().integer().min(0).max(1000000).default(0),
 }).xor('thaanNos', 'thaans', 'meters')).min(1).max(50).unique('greyLotId');
 const text = (max) => Joi.string().trim().max(max).allow('', null);
+// sub-categories (parts) of one card: each part has its own lines (like `lots`) and a colour tag; one lot can be in several parts, and one thaan can be cut into parts by meters
+const groupLines = Joi.array().items(Joi.object({
+  label: Joi.string().trim().max(80).allow('', null),
+  colourId: Joi.string().guid().allow(null),
+  remarks: text(300),
+  lots: lotLines.required(),
+})).min(1).max(26);
 
 module.exports = {
   availableLots: {
@@ -37,7 +44,8 @@ module.exports = {
   create: {
     body: Joi.object({
       cardDate: date.required(),
-      lots: lotLines.required(),
+      lots: lotLines,
+      groups: groupLines,
       remarks: text(500),
       description: text(500),
       deliveryDate: date.allow(null),
@@ -48,11 +56,11 @@ module.exports = {
       // send straight away from the same screen (optional)
       departmentId: Joi.string().guid(),
       sentThrough: text(120),
-    }),
+    }).xor('lots', 'groups'),
   },
   update: {
     params: uuidParam,
-    body: Joi.object({ cardDate: date, deliveryDate: date.allow(null), article: text(150), instructions: text(1000), workInstructions: text(1000), remarks: text(500), description: text(500), qualityId: Joi.string().guid().allow(null), departmentId: Joi.string().guid(), sentThrough: text(120), lots: lotLines }).min(1),
+    body: Joi.object({ cardDate: date, deliveryDate: date.allow(null), article: text(150), instructions: text(1000), workInstructions: text(1000), remarks: text(500), description: text(500), qualityId: Joi.string().guid().allow(null), departmentId: Joi.string().guid(), sentThrough: text(120), lots: lotLines, groups: groupLines }).oxor('lots', 'groups').min(1),
   },
   confirm: { params: uuidParam, body: Joi.object({ isConfirmed: Joi.boolean().required() }) },
   numbering: {
@@ -61,6 +69,19 @@ module.exports = {
   send: {
     params: uuidParam,
     body: Joi.object({ departmentId: Joi.string().guid().required(), sentThrough: text(120), remarks: text(500), workInstructions: text(1000) }),
+  },
+  // send the whole card (no groupIds) or only these parts to a department; parts cut from one thaan go as separate jobs
+  sendGroups: {
+    params: uuidParam,
+    body: Joi.object({
+      departmentId: Joi.string().guid().required(),
+      groupIds: Joi.array().items(Joi.string().guid()).min(1).max(26).unique(),
+      colourId: Joi.string().guid().allow(null),
+      jobDate: date,
+      sentThrough: text(120),
+      remarks: text(500),
+      instructions: text(1000),
+    }),
   },
   sendMany: {
     body: Joi.object({

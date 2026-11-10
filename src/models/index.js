@@ -40,6 +40,7 @@ const { GreyLotThaan, GreyReturn } = GreyLotModel.initThaans(sequelize);
 const SoCard = SoCardModel.init(sequelize);
 const SoCardLot = SoCardLotModel.init(sequelize);
 const SoCardLotThaan = SoCardLotModel.initThaans(sequelize);
+const SoCardGroup = SoCardLotModel.initGroups(sequelize);
 const SoCardMove = SoCardMoveModel.init(sequelize);
 const Colour = ColourModel.init(sequelize);
 const Account = AccountModel.init(sequelize);
@@ -105,6 +106,9 @@ SoCard.belongsTo(Quality, { foreignKey: 'qualityId', as: 'quality' });
 SoCard.belongsTo(Service, { foreignKey: 'currentDepartmentId', as: 'currentDepartment' });
 SoCard.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 SoCard.hasMany(SoCardLot, { foreignKey: 'soCardId', as: 'lots' });
+SoCard.hasMany(SoCardGroup, { foreignKey: 'soCardId', as: 'groups' });
+SoCardGroup.belongsTo(Colour, { foreignKey: 'colourId', as: 'colour' });
+SoCardLot.belongsTo(SoCardGroup, { foreignKey: 'groupId', as: 'group' });
 SoCard.hasMany(SoCardMove, { foreignKey: 'soCardId', as: 'moves' });
 SoCardLot.belongsTo(GreyLot, { foreignKey: 'greyLotId', as: 'greyLot' });
 SoCardLot.hasMany(SoCardLotThaan, { foreignKey: 'soCardLotId', as: 'thaanParts' });
@@ -151,6 +155,7 @@ module.exports = {
   SoCard,
   SoCardLot,
   SoCardLotThaan,
+  SoCardGroup,
   SoCardMove,
   Colour,
   Account,

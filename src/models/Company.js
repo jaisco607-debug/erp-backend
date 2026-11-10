@@ -12,6 +12,9 @@ class Company extends Model {
       phone: this.phone,
       address: this.address,
       isActive: this.isActive,
+      // Process Management: switched on by the super admin; the client admin may add this many processes himself
+      processManagement: this.processManagement,
+      processLimit: this.processLimit,
       createdAt: this.createdAt,
     };
   }
@@ -34,6 +37,8 @@ function init(sequelize) {
       address: { type: DataTypes.STRING(300), allowNull: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       // 1 = January ... 12 = December; Pakistan's usual fiscal year starts in July (accounting settings)
+      processManagement: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      processLimit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       fiscalYearStartMonth: { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 7 },
       createdById: { type: DataTypes.UUID, allowNull: true },
     },

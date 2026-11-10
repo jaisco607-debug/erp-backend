@@ -17,7 +17,7 @@ const { assertEmailFree } = require('./userEmail');
 /** Every id must be an existing, active service. */
 async function loadServices(serviceIds, transaction) {
   const unique = [...new Set(serviceIds)];
-  const services = await Service.findAll({ where: { id: unique, isActive: true }, order: [['sortOrder', 'ASC']], transaction });
+  const services = await Service.findAll({ where: { id: unique, isActive: true, companyId: null }, order: [['sortOrder', 'ASC']], transaction });
   if (services.length !== unique.length) {
     const found = new Set(services.map((s) => s.id));
     throw AppError.rule('UNKNOWN_SERVICE', 'Some services do not exist or are switched off', { serviceIds: unique.filter((id) => !found.has(id)) });
@@ -42,9 +42,13 @@ async function details(id, transaction) {
   if (!company) throw AppError.notFound('Company');
   const admins = await User.findAll({ where: { companyId: id, userType: 'CLIENT_ADMIN' }, order: [['createdAt', 'ASC']], transaction });
   const userCount = await User.count({ where: { companyId: id }, transaction });
+  // the ACTIVE processes of the company: its own and the ones the super admin gave (what the limit counts)
+  const processesUsed = await require('./processService').activeCount(id, transaction);
   return {
     ...company.toSafeJSON(),
-    services: company.services.map(serviceJSON),
+    processesUsed,
+    services: company.services.filter((s) => s.companyId === null || s.companyId === undefined).map(serviceJSON),
+    ownProcesses: company.services.filter((s) => s.companyId === id).map(serviceJSON),
     clientAdmins: admins.map((u) => u.toSafeJSON()),
     userCount,
   };
@@ -62,6 +66,7 @@ async function list({ page, limit, search, isActive }) {
         [sequelize.literal(`(SELECT count(*)::int FROM company_services cs JOIN services s ON s.id = cs."serviceId"
           WHERE cs."companyId" = "Company"."id")`), 'serviceCount'],
         [sequelize.literal('(SELECT count(*)::int FROM users u WHERE u."companyId" = "Company"."id" AND u."deletedAt" IS NULL)'), 'userCount'],
+        [sequelize.literal('(SELECT count(*)::int FROM company_services cs2 JOIN services s2 ON s2.id = cs2."serviceId" WHERE cs2."companyId" = "Company"."id" AND s2.kind = \'PROCESS\' AND s2."isActive" AND cs2."isActive")'), 'processesUsed'],
       ],
     },
     order: [['name', 'ASC']],
@@ -69,17 +74,17 @@ async function list({ page, limit, search, isActive }) {
     offset: (page - 1) * limit,
   });
   return {
-    data: rows.map((c) => ({ ...c.toSafeJSON(), serviceCount: c.get('serviceCount'), userCount: c.get('userCount') })),
+    data: rows.map((c) => ({ ...c.toSafeJSON(), serviceCount: c.get('serviceCount'), userCount: c.get('userCount'), processesUsed: c.get('processesUsed') })),
     page,
     limit,
     total: count,
   };
 }
 
-async function create(req, { name, contactPerson, phone, address, admin }) {
+async function create(req, { name, contactPerson, phone, address, admin, processManagement, processLimit }) {
   return sequelize.transaction(async (transaction) => {
     const company = await Company.create(
-      { name, code: await freeCode(transaction), contactPerson, phone, address, createdById: req.user.id },
+      { name, code: await freeCode(transaction), contactPerson, phone, address, processManagement: Boolean(processManagement), processLimit: processLimit || 0, createdById: req.user.id },
       { transaction },
     );
     // No service is given here: the super admin picks every module / department / report for this company.
@@ -115,10 +120,12 @@ async function update(req, id, changes) {
   return sequelize.transaction(async (transaction) => {
     const company = await findOr404(id, transaction, true);
     const before = company.toSafeJSON();
-    for (const field of ['name', 'contactPerson', 'phone', 'address', 'isActive']) {
+    for (const field of ['name', 'contactPerson', 'phone', 'address', 'isActive', 'processManagement', 'processLimit']) {
       if (changes[field] !== undefined) company[field] = changes[field];
     }
     await company.save({ transaction });
+    // switched ON: the company needs Folding and Packing for its processes to hand the cloth on to (idempotent)
+    if (changes.processManagement === true && !before.processManagement) await giveFoldingAndPacking(req, company.id, transaction);
 
     if (before.isActive && changes.isActive === false) {
       // Everyone in the company is logged out: their refresh tokens stop working now,
@@ -132,6 +139,13 @@ async function update(req, id, changes) {
     }, { transaction });
     return details(company.id, transaction);
   });
+}
+
+/** Gives the company the active Folding and Packing services it does not have yet (the end of every process). */
+async function giveFoldingAndPacking(req, companyId, transaction) {
+  const wanted = await Service.findAll({ where: { kind: ['FOLDING', 'PACKING'], isActive: true, companyId: null }, transaction });
+  const have = new Set((await CompanyService.findAll({ where: { companyId, serviceId: wanted.map((s) => s.id) }, transaction })).map((r) => r.serviceId));
+  await CompanyService.bulkCreate(wanted.filter((s) => !have.has(s.id)).map((s) => ({ companyId, serviceId: s.id, givenById: req.user.id })), { transaction });
 }
 
 /** Replaces the company's services with exactly this list. */
@@ -153,10 +167,15 @@ async function newCode(req, id) {
 async function setServices(req, id, serviceIds) {
   return sequelize.transaction(async (transaction) => {
     const company = await findOr404(id, transaction, true);
+    // the processes the client admin made himself are not in this list (and cannot be given by id)
+    const ownIds = new Set((await Service.findAll({ where: { companyId: id }, attributes: ['id'], transaction })).map((x) => x.id));
+    serviceIds = serviceIds.filter((x) => !ownIds.has(x));
     const services = await require('./processBundle').withBundle(await loadServices(serviceIds, transaction), transaction); // a process brings folding and packing
     const current = await company.getServices({ transaction, joinTableAttributes: [] });
 
-    const keep = services.map((s) => s.id);
+    // the processes the client admin made himself are not the super admin's to give or take
+    const own = current.filter((s) => s.companyId === id);
+    const keep = [...services.map((s) => s.id), ...own.map((s) => s.id)];
     await CompanyService.destroy({ where: { companyId: id, serviceId: { [Op.notIn]: keep } }, transaction });
     // The company's users lose what the company lost.
     const userIds = (await User.findAll({ attributes: ['id'], where: { companyId: id }, transaction })).map((u) => u.id);

@@ -12,6 +12,9 @@ module.exports = {
       contactPerson: optionalText(120),
       phone: optionalText(30),
       address: optionalText(300),
+      // Process Management: OFF unless the super admin switches it on; the limit is how many processes the client admin may add himself
+      processManagement: Joi.boolean().default(false),
+      processLimit: Joi.number().integer().min(0).max(1000).default(0),
       // The company's first client admin
       admin: Joi.object({
         name: Joi.string().trim().min(2).max(120).required(),
@@ -28,6 +31,8 @@ module.exports = {
       phone: optionalText(30),
       address: optionalText(300),
       isActive: Joi.boolean(),
+      processManagement: Joi.boolean(),
+      processLimit: Joi.number().integer().min(0).max(1000),
     }).min(1),
   },
   // The company code is made by the server only. If it leaks, the super admin asks for a new one.

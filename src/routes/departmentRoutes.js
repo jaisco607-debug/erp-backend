@@ -123,10 +123,10 @@ router.post('/:code/jobs/:jobId/accept', validate({ params: jobKey }), async (re
   await ownJob(req);
   res.json(await jobService.setStatus(req, req.params.jobId, 'PENDING'));
 });
-// colour (Dyeing): whole job, or one SO card of it
+// colour (Dyeing): the whole job, one SO card of it, or one row of it (a part / sub-category of the SO card: jobItemId)
 router.put('/:code/jobs/:jobId/colour', validate({
   params: jobKey,
-  body: Joi.object({ colourId: Joi.string().guid().allow(null).required(), soCardId: Joi.string().guid() }),
+  body: Joi.object({ colourId: Joi.string().guid().allow(null).required(), soCardId: Joi.string().guid(), jobItemId: Joi.string().guid() }).oxor('soCardId', 'jobItemId'),
 }), async (req, res) => {
   await ownJob(req);
   res.json(await jobService.setColour(req, req.params.jobId, req.body));

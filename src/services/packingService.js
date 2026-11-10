@@ -97,10 +97,11 @@ async function form(req, code, soCardId, exceptListId) {
   const lots = await q(`
     SELECT gl.id, gl."lotNo", gl.width::float AS width, SUM(l.meters)::float AS meters FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId"
     WHERE l."soCardId" = :id GROUP BY gl.id ORDER BY gl."lotNo"`, { id: soCardId });
+  // a thaan cut into parts (sub-categories of the card) is ONE thaan here: its parts are added up
   const thaans = await q(`
-    SELECT gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", COALESCE(t.width, gl.width)::float AS width, p.meters::float AS meters
+    SELECT gl.id AS "lotId", t.id AS "thaanId", t."thaanNo", COALESCE(t.width, gl.width)::float AS width, SUM(p.meters)::float AS meters
     FROM so_card_lots l JOIN grey_lots gl ON gl.id = l."greyLotId" JOIN so_card_lot_thaans p ON p."soCardLotId" = l.id JOIN grey_lot_thaans t ON t.id = p."thaanId"
-    WHERE l."soCardId" = :id ORDER BY t."thaanNo"`, { id: soCardId });
+    WHERE l."soCardId" = :id GROUP BY gl.id, t.id, t."thaanNo", t.width, gl.width ORDER BY t."thaanNo"`, { id: soCardId });
   // what Folding sent to Packing, per lot / thaan and category
   const fold = await q(`
     SELECT "greyLotId" AS "lotId", "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp

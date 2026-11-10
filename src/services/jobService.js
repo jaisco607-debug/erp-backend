@@ -15,7 +15,7 @@
 //   back exactly its own cloth at the end.
 // - Departments type nothing: they tick rows, pick a department, a colour and a status.
 const { Op, QueryTypes } = require('sequelize');
-const { sequelize, Job, JobItem, SoCard, SoCardLot, SoCardLotThaan, GreyLotThaan, GreyLot, Customer, Quality, Colour, Service, User } = require('../models');
+const { sequelize, Job, JobItem, SoCard, SoCardLot, SoCardLotThaan, SoCardGroup, GreyLotThaan, GreyLot, Customer, Quality, Colour, Service, User } = require('../models');
 const AppError = require('../utils/AppError');
 const { today } = require('../utils/dates');
 const audit = require('./auditService');
@@ -62,6 +62,15 @@ async function need(req, departmentId, level, transaction, desk = 'SO_CARD') {
 
 // ---------- what can be sent ----------
 
+/** The sub-category (part) of an SO card in a row: { id, code, label, title, tag, colour } or null. */
+function groupBrief(r) {
+  if (!r.groupId) return null;
+  return {
+    id: r.groupId, code: r.groupCode, label: r.groupLabel, title: r.groupLabel || `Part ${r.groupCode}`, tag: `${soLabel(r.cardNo, r.isGreyReturn)}-${r.groupCode}`,
+    colour: r.groupColourId ? { id: r.groupColourId, name: r.groupColour } : null,
+  };
+}
+
 /**
  * Rows that can be ticked and sent.
  *  from the SO card desk (fromDepartmentId empty): each SO card lot with meters not yet sent
@@ -74,15 +83,18 @@ async function available(req, fromDepartmentId, transaction) {
       SELECT scl.id AS "soCardLotId", sc.id AS "soCardId", sc."cardNo", sc."idNo", sc."isGreyReturn", sc."cardDate",
              cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName",
              q.name AS "quality", gl."lotNo", gl."isReprocess",
+             g.id AS "groupId", g.code AS "groupCode", g.label AS "groupLabel", gc.id AS "groupColourId", gc.name AS "groupColour",
              scl.meters - COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId"
                                     WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED'), 0) AS "meters"
       FROM so_card_lots scl
       JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL
       JOIN customers cu ON cu.id = sc."customerId"
       JOIN grey_lots gl ON gl.id = scl."greyLotId"
+      LEFT JOIN so_card_groups g ON g.id = scl."groupId"
+      LEFT JOIN colours gc ON gc.id = g."colourId"
       LEFT JOIN qualities q ON q.id = COALESCE(sc."qualityId", gl."qualityId")
       WHERE sc."companyId" = :companyId
-      ORDER BY sc."cardNo" DESC, gl."lotNo"`, { replacements: { companyId }, type: QueryTypes.SELECT, transaction });
+      ORDER BY sc."cardNo" DESC, g."sortOrder" NULLS FIRST, gl."lotNo"`, { replacements: { companyId }, type: QueryTypes.SELECT, transaction });
     return rows.filter((r) => Number(r.meters) > 0).map((r) => ({
       soCardLotId: r.soCardLotId,
       soCard: { id: r.soCardId, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), idNo: r.idNo, isGreyReturn: Boolean(r.isGreyReturn), cardDate: r.cardDate },
@@ -90,19 +102,23 @@ async function available(req, fromDepartmentId, transaction) {
       quality: r.quality,
       lotNo: r.lotNo,
       isReprocess: r.isReprocess,
+      // the sub-category (part) of the card and its colour tag; the colour goes with the cloth to the department
+      group: groupBrief(r),
+      colour: r.groupColourId ? { id: r.groupColourId, name: r.groupColour } : null,
       meters: round(Number(r.meters)),
     }));
   }
   const rows = await sequelize.query(`
     SELECT ji.id AS "jobItemId", j.id AS "jobId", j."jobNo", j."jobDate", COALESCE(ic.name, co.name) AS "colour",
            sc.id AS "soCardId", sc."cardNo", sc."idNo", sc."isGreyReturn", cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName",
-           q.name AS "quality", gl."lotNo", gl."isReprocess", ji.meters
+           q.name AS "quality", gl."lotNo", gl."isReprocess", ji.meters, g.id AS "groupId", g.code AS "groupCode", g.label AS "groupLabel"
     FROM job_items ji
     JOIN jobs j ON j.id = ji."jobId"
     JOIN so_cards sc ON sc.id = ji."soCardId"
     JOIN customers cu ON cu.id = sc."customerId"
     JOIN so_card_lots scl ON scl.id = ji."soCardLotId"
     JOIN grey_lots gl ON gl.id = scl."greyLotId"
+    LEFT JOIN so_card_groups g ON g.id = scl."groupId"
     LEFT JOIN qualities q ON q.id = COALESCE(sc."qualityId", gl."qualityId")
     LEFT JOIN colours co ON co.id = j."colourId"
     LEFT JOIN colours ic ON ic.id = ji."colourId"
@@ -119,6 +135,7 @@ async function available(req, fromDepartmentId, transaction) {
     quality: r.quality,
     lotNo: r.lotNo,
     isReprocess: r.isReprocess,
+    group: groupBrief({ ...r, cardNo: r.cardNo, isGreyReturn: r.isGreyReturn }),
     meters: round(Number(r.meters)),
   }));
 }
@@ -168,7 +185,7 @@ const include = [
       },
       {
         model: SoCardLot, as: 'soCardLot', attributes: ['id', 'greyLotId'],
-        include: [{ model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['id', 'thaanNo', 'width'] }] }, {
+        include: [{ model: SoCardGroup, as: 'group', include: [{ model: Colour, as: 'colour', attributes: ['id', 'name'], paranoid: false }] }, { model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['id', 'thaanNo', 'width'] }] }, {
           model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'isReprocess', 'width'], paranoid: false,
           include: [{ model: Quality, as: 'quality', attributes: ['id', 'name'], paranoid: false }],
         }],
@@ -194,6 +211,8 @@ function itemJSON(i) {
     meters: i.meters,
     // thaans of this SO card line (thaan no + meters)
     thaans: (i.soCardLot?.thaanParts || []).map((t) => ({ thaanNo: t.thaan?.thaanNo, width: t.thaan?.width ?? lot?.width ?? null, meters: t.meters })).sort((a, b) => a.thaanNo - b.thaanNo),
+    // the sub-category (part) of the SO card this cloth is: its code, label and colour tag (empty on a card made without parts)
+    group: i.soCardLot && i.soCardLot.group ? { id: i.soCardLot.group.id, code: i.soCardLot.group.code, label: i.soCardLot.group.label, title: i.soCardLot.group.label || `Part ${i.soCardLot.group.code}`, tag: `${soLabel(i.soCard.cardNo, i.soCard.isGreyReturn)}-${i.soCardLot.group.code}`, colour: i.soCardLot.group.colour ? { id: i.soCardLot.group.colour.id, name: i.soCardLot.group.colour.name } : null } : null,
     colour: i.colour ? { id: i.colour.id, name: i.colour.name } : null,
     colourSetBy: i.colourSetBy ? { id: i.colourSetBy.id, name: i.colourSetBy.name } : null,
     colourSetAt: i.colourSetAt,
@@ -642,7 +661,7 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
         if (!r) throw AppError.rule('NOTHING_LEFT', 'This SO card row has nothing left to send', { soCardLotId: i.soCardLotId });
         const meters = i.meters === undefined ? r.meters : i.meters;
         if (meters > r.meters) throw AppError.rule('NOT_ENOUGH_METERS', `SO# ${r.soCard.cardLabel} lot ${r.lotNo} has only ${r.meters} m left to send`, { soCardLotId: i.soCardLotId, meters: r.meters });
-        lines.push({ soCardId: r.soCard.id, soCardLotId: i.soCardLotId, meters, isReprocess: r.isReprocess });
+        lines.push({ soCardId: r.soCard.id, soCardLotId: i.soCardLotId, meters, isReprocess: r.isReprocess, colourId: r.colour ? r.colour.id : null });
       }
     } else if (partial) {
       // Folding -> Packing: given meters of items (the rest stays in Folding); checked by the caller
@@ -669,6 +688,8 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
         lines.push({ soCardId: src.soCardId, soCardLotId: src.soCardLotId, sourceJobItemId: src.id, meters: r.meters, isReprocess: r.isReprocess, colourId: src.colourId });
       }
     }
+
+    await assertNoSplitThaanInJob(lines, transaction);
 
     // a typed job date cannot be before the SO card it is cut from
     if (jobDate) {
@@ -705,6 +726,70 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
     const after = await load(job.id, transaction);
     await audit.log(req, { action: 'JOB_SENT', entityType: 'Job', entityId: job.id, after }, { transaction });
     return after;
+  });
+}
+
+/**
+ * A thaan of an SO card can be cut into parts (sub-categories). Folding and Packing work per thaan, so the parts of ONE thaan of ONE card must not be in the same job: send them in separate jobs
+ * (the "send card" call does that by itself).
+ */
+async function assertNoSplitThaanInJob(lines, transaction) {
+  const ids = [...new Set(lines.map((l) => l.soCardLotId))];
+  if (ids.length < 2) return;
+  const rows = await sequelize.query(`SELECT p."soCardLotId", p."thaanId", l."soCardId", t."thaanNo", gl."lotNo" FROM so_card_lot_thaans p JOIN so_card_lots l ON l.id = p."soCardLotId"
+    JOIN grey_lot_thaans t ON t.id = p."thaanId" JOIN grey_lots gl ON gl.id = t."lotId" WHERE p."soCardLotId" IN (:ids)`, { replacements: { ids }, type: QueryTypes.SELECT, transaction });
+  const seen = new Map();
+  const clash = [];
+  for (const r of rows) {
+    const key = `${r.soCardId}|${r.thaanId}`;
+    if (seen.has(key) && seen.get(key) !== r.soCardLotId) clash.push({ lotNo: r.lotNo, thaanNo: r.thaanNo });
+    else seen.set(key, r.soCardLotId);
+  }
+  if (clash.length) throw AppError.rule('SPLIT_THAAN_IN_ONE_JOB', `Lot ${clash[0].lotNo} thaan ${clash[0].thaanNo} is cut into parts: send its parts in separate jobs`, { thaans: clash });
+}
+
+/** Splits rows of the SO card desk into batches so that no batch holds two parts of the same thaan of the same card (usually everything is one batch). */
+async function splitIntoBatches(rows, transaction) {
+  if (rows.length < 2) return [rows];
+  const lotIds = rows.map((r) => r.soCardLotId);
+  const parts = await sequelize.query('SELECT "soCardLotId", "thaanId" FROM so_card_lot_thaans WHERE "soCardLotId" IN (:ids)', { replacements: { ids: lotIds }, type: QueryTypes.SELECT, transaction });
+  const thaansOf = new Map();
+  for (const p of parts) { if (!thaansOf.has(p.soCardLotId)) thaansOf.set(p.soCardLotId, []); thaansOf.get(p.soCardLotId).push(p.thaanId); }
+  const batches = [];
+  for (const r of rows) {
+    const keys = (thaansOf.get(r.soCardLotId) || []).map((t) => `${r.soCard.id}|${t}`);
+    let b = batches.find((x) => !keys.some((k) => x.keys.has(k)));
+    if (!b) { b = { keys: new Set(), rows: [] }; batches.push(b); }
+    keys.forEach((k) => b.keys.add(k));
+    b.rows.push(r);
+  }
+  return batches.map((b) => b.rows);
+}
+
+/**
+ * Send an SO card (all its parts, or only the chosen parts: groupIds) to a department from the SO card desk. Parts that are cut from the same thaan go as separate jobs, everything else together.
+ * Returns the jobs made.
+ */
+async function sendCard(req, soCardId, { departmentId, groupIds, colourId, jobDate, sentThrough, remarks, instructions }) {
+  return sequelize.transaction(async (transaction) => {
+    await need(req, null, 'FULL', transaction);
+    const card = await SoCard.findOne({ where: { id: soCardId, companyId: req.user.companyId }, lock: transaction.LOCK.UPDATE, transaction });
+    if (!card) throw AppError.notFound('SO card');
+    let rows = (await available(req, null, transaction)).filter((r) => r.soCard.id === soCardId);
+    if (groupIds && groupIds.length) {
+      const have = new Set(rows.map((r) => r.group && r.group.id).filter(Boolean));
+      const known = (await sequelize.query('SELECT id FROM so_card_groups WHERE "soCardId" = :soCardId AND id IN (:ids)', { replacements: { soCardId, ids: groupIds }, type: QueryTypes.SELECT, transaction })).map((g) => g.id);
+      if (known.length !== new Set(groupIds).size) throw AppError.rule('UNKNOWN_GROUP', 'Some parts are not parts of this SO card');
+      const gone = groupIds.filter((g) => !have.has(g));
+      if (gone.length) throw AppError.rule('NOTHING_LEFT', 'A part you chose has nothing left to send', { groupIds: gone });
+      rows = rows.filter((r) => r.group && groupIds.includes(r.group.id));
+    }
+    if (!rows.length) throw AppError.rule('NOTHING_LEFT', 'This SO card has nothing left to send');
+    const jobs = [];
+    for (const batch of await splitIntoBatches(rows, transaction)) {
+      jobs.push(await create(req, { departmentId, colourId, jobDate, sentThrough, remarks, instructions, items: batch.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction));
+    }
+    return { soCardId, jobs, jobCount: jobs.length, sentMeters: round(rows.reduce((t, r) => t + r.meters, 0)) };
   });
 }
 
@@ -832,7 +917,7 @@ async function update(req, id, { colourId, sentThrough, remarks, instructions })
  * A colour department (Dyeing: tracksColour) gives the cloth its colour, for the whole job or one
  * SO card of it. Cloth already sent on from here gets the same colour in the later departments.
  */
-async function setColour(req, id, { colourId, soCardId }) {
+async function setColour(req, id, { colourId, soCardId, jobItemId }) {
   return sequelize.transaction(async (transaction) => {
     const job = await findOr404(req, id, transaction);
     if ((await accessTo(req, job.departmentId, transaction)) !== 'FULL') throw AppError.forbidden('Only the department that has this cloth can give the colour');
@@ -840,8 +925,8 @@ async function setColour(req, id, { colourId, soCardId }) {
     if (!d || !COLOUR_DEPARTMENTS.includes(d.code)) throw AppError.rule('NO_COLOUR_HERE', `${d ? d.name : 'This department'} does not give colours; Dyeing does`);
     if (['IN_WAY', 'QUEUE', 'REJECTED'].includes(job.status)) throw AppError.rule('NOT_ACCEPTED', 'Accept the cloth first');
     if (colourId && !(await Colour.findOne({ where: { id: colourId, companyId: req.user.companyId }, transaction }))) throw AppError.rule('UNKNOWN_COLOUR', 'Colour not found');
-    const items = await JobItem.findAll({ where: { jobId: id, ...(soCardId && { soCardId }) }, transaction });
-    if (!items.length) throw AppError.rule('SO_NOT_IN_JOB', 'This SO card is not in this job');
+    const items = await JobItem.findAll({ where: { jobId: id, ...(soCardId && { soCardId }), ...(jobItemId && { id: jobItemId }) }, transaction });
+    if (!items.length) throw AppError.rule('SO_NOT_IN_JOB', jobItemId ? 'This row is not in this job' : 'This SO card is not in this job');
     const before = await load(id, transaction);
     await sequelize.query(`
       WITH RECURSIVE down AS (
@@ -980,4 +1065,4 @@ async function returnToSoCard(req, departmentId, { jobId, jobItemIds, soCardIds,
   });
 }
 
-module.exports = { returnToSoCard, overview, chemicalsOf, chemicalCols, previousCosts, answerReject, setColour, formData, available, list, get, create, setStatus, setOperator, update, soCardHistory };
+module.exports = { sendCard, splitIntoBatches, returnToSoCard, overview, chemicalsOf, chemicalCols, previousCosts, answerReject, setColour, formData, available, list, get, create, setStatus, setOperator, update, soCardHistory };

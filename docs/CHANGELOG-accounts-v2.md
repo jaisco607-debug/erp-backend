@@ -298,3 +298,13 @@ Earlier accounting migrations (already in the repo): `20261024000002-chart-of-ac
 
 ## Chemical requests per department
 - Migration `20261126000001-department-chemical-requests.js`: `company_services.chemicalRequests` (default true). `departmentSettingsService` (list, setMany, `chemicalEnabled`); `needDept` of `chemicalRequestService` and `departmentChemicalService.mine` refuse a department without it; `departmentRoutes` strips the chemical keys from every response of such a department (not for the client admin).
+
+## Process Management toggle and limit
+- Migration `20261127000001-process-management-toggle.js`: `companies.processManagement` (existing = true), `companies.processLimit` (0), `services.companyId` (no FK on purpose), service code unique per owner.
+- `accessService.companyServices` drops menu group PROCESS services while the company has it OFF. `processService` + `/v1/processes` for the client admin. `companyService.setServices` keeps the company own processes; switching ON gives Folding and Packing.
+
+## Process limit counts active own + assigned (2026-11-17)
+- Migration `20261128000001-company-process-active.js`: `company_services.isActive` (the company own switch; existing rows true) and the limit of existing companies = their number of processes. `PATCH /processes/:id` on an assigned process allows only `isActive` (422 `PROCESS_NOT_EDITABLE` otherwise); switching ON needs `used < limit` (422 `PROCESS_LIMIT_REACHED` with `{limit, used}`); `GET /processes` has `used` (active own + assigned), `overLimit`, `assigned[].isActive/userCount/usage`; `/auth/me` lists only active processes; option A when the limit is lowered (nothing is switched off). Guide: `docs/frontend/process-management-settings.md`.
+
+## SO card sub-categories
+- Migration `20261129000001-so-card-groups.js`: `so_card_groups` (code A.., label, colourId, remarks) and `so_card_lots.groupId`; the unique (card, lot) became (card, lot, group). A group = its own `so_card_lots` rows, so jobs, folding and packing work unchanged; `pickThaans` shares the thaan rows between lines (askedMeters); `jobService.assertNoSplitThaanInJob` / `splitIntoBatches` / `sendCard`; Packing adds up the parts of one thaan.

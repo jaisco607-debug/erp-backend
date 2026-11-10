@@ -43,6 +43,7 @@ router.use('/v1/accounts', require('./accountRoutes'));
 router.use('/v1/accounting', require('./accountingRoutes'));
 router.use('/v1/payroll', require('./payrollRoutes'));
 router.use('/v1/department-settings', require('./departmentSettingsRoutes'));
+router.use('/v1/processes', require('./processRoutes'));
 router.use('/v1/sales-invoices', require('./salesInvoiceRoutes'));
 router.use('/v1/purchase-invoices', require('./purchaseInvoiceRoutes'));
 const vouchers = require('./voucherRoutes');

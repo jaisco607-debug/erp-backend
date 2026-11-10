@@ -18,6 +18,8 @@ function init(sequelize) {
       tracksColour: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      // the company that made this process itself (empty = a service of the platform)
+      companyId: { type: DataTypes.UUID, allowNull: true },
     },
     { sequelize, modelName: 'Service', tableName: 'services' },
   );
