@@ -36,7 +36,7 @@ async function decorate(cards) {
     FROM packing_lists p LEFT JOIN packing_list_lines pl ON pl."packingListId" = p.id LEFT JOIN gate_passes g ON g."packingListId" = p.id
     WHERE p."soCardId" IN (:ids) GROUP BY p.id, g.id ORDER BY p."listNo"`, { ids });
   const latest = await q(`
-    SELECT DISTINCT ON (ji."soCardId") ji."soCardId", s.name AS department, s.kind, j.status
+    SELECT DISTINCT ON (ji."soCardId") ji."soCardId", svc_name(s.id, j."companyId", s.name) AS department, s.kind, j.status
     FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
     WHERE ji."soCardId" IN (:ids) AND j.status <> 'REJECTED' ORDER BY ji."soCardId", j."createdAt" DESC`, { ids });
   return cards.map((c) => {

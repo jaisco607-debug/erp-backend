@@ -162,9 +162,8 @@ test('the limit counts every active process (own + given by the super admin); th
   expect(s0.assigned[0]).toMatchObject({ isOwn: false, isActive: true, userCount: 1, usage: {} });
   expect((await sa('get', `/companies/${company.id}`)).body.processesUsed).toBe(10);
   err(await ca('post', '/processes', { name: 'Extra' }), 422, 'PROCESS_LIMIT_REACHED');
-  // only isActive can be changed on an assigned process
+  // on an assigned process only isActive and name (the company's own name) can be changed
   const first = ten[0].id;
-  err(await ca('patch', `/processes/${first}`, { name: 'Xyz' }), 422, 'PROCESS_NOT_EDITABLE');
   err(await ca('patch', `/processes/${first}`, { isActive: false, tracksColour: false }), 422, 'PROCESS_NOT_EDITABLE');
   expect((await ca('patch', `/processes/${first}`, { code: 'X' })).status).toBe(400);
   err(await ca('delete', `/processes/${first}`), 404, 'NOT_FOUND');
@@ -227,4 +226,52 @@ test('the limit counts every active process (own + given by the super admin); th
   expect(await processCodes(ca)).toEqual([]);
   await sa('patch', `/companies/${company.id}`, { processManagement: true });
   expect((await ca('get', '/processes')).body.assigned.map((p) => [p.id, p.isActive])).toEqual(before);
+});
+
+test('the client admin renames a process the super admin gave: per company only, shown everywhere, removed with the assignment', async () => {
+  const w = await setup();
+  await w.sa('patch', `/companies/${w.company.id}`, { processManagement: true, processLimit: 4 });
+  const dyeing = w.s.DYEING;
+  const other = await makeCompany({ processManagement: true, processLimit: 4 });
+  await CompanyService.create({ companyId: other.id, serviceId: dyeing.id });
+  const oa = call(await makeUser({ userType: 'CLIENT_ADMIN', companyId: other.id }));
+  const nameIn = async (api) => (await api('get', '/auth/me')).body.services.find((s) => s.code === 'DYEING').name;
+
+  const r = await w.ca('patch', `/processes/${dyeing.id}`, { name: '  Dyeing  Unit 1 ' });
+  expect(r.status).toBe(200);
+  expect(r.body).toMatchObject({ id: dyeing.id, code: 'DYEING', name: 'Dyeing Unit 1', isOwn: false, isActive: true });
+  expect((await w.ca('get', '/processes')).body.assigned.find((p) => p.id === dyeing.id)).toMatchObject({ name: 'Dyeing Unit 1', originalName: dyeing.name });
+  expect(await nameIn(w.ca)).toBe('Dyeing Unit 1');
+  // another company and the shared row keep the original name
+  expect(await nameIn(oa)).toBe(dyeing.name);
+  expect((await Service.findByPk(dyeing.id)).getDataValue('name')).toBe(dyeing.name);
+  // the SO card form (send-to-department list) uses it
+  const fd = (await w.ca('get', '/jobs/form-data')).body;
+  expect(JSON.stringify(fd)).toContain('Dyeing Unit 1');
+
+  // same name = no-op; a clash (own or assigned, any case) is refused; empty / 121 chars are a validation error
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { name: 'dyeing unit 1' })).status).toBe(200);
+  const own = (await w.ca('post', '/processes', { name: 'Washing' })).body;
+  err(await w.ca('patch', `/processes/${dyeing.id}`, { name: 'WASHING' }), 422, 'PROCESS_NAME_TAKEN');
+  err(await w.ca('patch', `/processes/${own.id}`, { name: 'dyeing unit 1' }), 422, 'PROCESS_NAME_TAKEN');
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { name: '   ' })).status).toBe(400);
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { name: 'x'.repeat(121) })).status).toBe(400);
+  // code / tracksColour accepted unchanged, refused changed
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { code: 'DYEING', tracksColour: dyeing.tracksColour, name: 'Dyeing Unit 1' })).status).toBe(200);
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { code: 'OTHER' })).status).toBe(400);
+  err(await w.ca('patch', `/processes/${dyeing.id}`, { tracksColour: !dyeing.tracksColour }), 422, 'PROCESS_NOT_EDITABLE');
+  // the switch still works, and keeps the name
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { isActive: false })).body).toMatchObject({ isActive: false, name: 'Dyeing Unit 1' });
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { isActive: true })).status).toBe(200);
+  // the original name written back removes the override
+  expect((await w.ca('patch', `/processes/${dyeing.id}`, { name: dyeing.name })).body.name).toBe(dyeing.name);
+  expect((await CompanyService.findOne({ where: { companyId: w.company.id, serviceId: dyeing.id } })).displayName).toBeNull();
+
+  // removed by the super admin: the override goes with the assignment
+  await w.ca('patch', `/processes/${dyeing.id}`, { name: 'Dyeing Two' });
+  const ids = (await w.sa('get', `/companies/${w.company.id}`)).body.services.map((x) => x.id).filter((id) => id !== dyeing.id);
+  await w.sa('put', `/companies/${w.company.id}/services`, { serviceIds: ids });
+  expect(await CompanyService.count({ where: { companyId: w.company.id, serviceId: dyeing.id } })).toBe(0);
+  await w.sa('put', `/companies/${w.company.id}/services`, { serviceIds: [...ids, dyeing.id] });
+  expect((await CompanyService.findOne({ where: { companyId: w.company.id, serviceId: dyeing.id } })).displayName).toBeNull();
 });

@@ -11,6 +11,7 @@ const { Op } = require('sequelize');
 const { sequelize, Company, Service, CompanyService, UserService, User } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
+const companyNames = require('../utils/companyNames');
 
 const q = (sql, replacements, transaction) => sequelize.query(sql, { replacements, type: sequelize.QueryTypes.SELECT, transaction });
 const clean = (s) => String(s).trim().replace(/\s+/g, ' ');
@@ -84,7 +85,7 @@ async function list(req) {
   return {
     enabled: company.processManagement, limit, used, remaining: Math.max(0, limit - used), canAdd: company.processManagement && used < limit, overLimit: used > limit,
     data: await Promise.all(own.map(async (s) => row(s, { isOwn: true, canDelete: Object.keys(await usageOf(s.id)).length === 0 }))),
-    assigned: await Promise.all(assigned.map((s) => row(s, { isOwn: false, isActive: on[s.id] !== false }))),
+    assigned: await Promise.all(assigned.map((s) => row(s, { isOwn: false, isActive: on[s.id] !== false, originalName: s.getDataValue('name') }))),
   };
 }
 
@@ -153,8 +154,13 @@ async function update(req, id, changes) {
     const company = await companyOf(req, transaction, true);
     assertOn(company);
     const { service: s, isOwn, link } = await processOr404(req, id, transaction);
-    if (!isOwn && Object.keys(changes).some((k) => k !== 'isActive')) {
-      throw AppError.rule('PROCESS_NOT_EDITABLE', 'This process was given by the super admin: you can only switch it on or off', { editable: ['isActive'] });
+    if (changes.code !== undefined && changes.code !== s.code) throw AppError.validation([{ field: 'code', message: 'the code of a process cannot be changed' }]);
+    // an assigned process: only its on/off switch and its NAME (the company's own name for it; the shared service is never touched). code / tracksColour / sortOrder are accepted only unchanged.
+    if (!isOwn) {
+      const same = { code: s.code, tracksColour: s.tracksColour, sortOrder: s.sortOrder };
+      if (Object.keys(changes).some((k) => !['isActive', 'name'].includes(k) && changes[k] !== same[k])) {
+        throw AppError.rule('PROCESS_NOT_EDITABLE', 'This process was given by the super admin: you can only switch it on or off and rename it', { editable: ['isActive', 'name'] });
+      }
     }
     const was = isOwn ? s.isActive : link.isActive;
     // switching ON needs room under the limit (the count is taken BEFORE the change); switching OFF is always allowed
@@ -167,8 +173,17 @@ async function update(req, id, changes) {
       if (changes.name !== undefined) { await assertNameFree(companyId, changes.name, id, transaction); s.name = clean(changes.name); }
       for (const f of ['isActive', 'tracksColour', 'sortOrder']) if (changes[f] !== undefined) s[f] = changes[f];
       await s.save({ transaction });
-    } else if (changes.isActive !== undefined) {
-      await CompanyService.update({ isActive: changes.isActive }, { where: { companyId, serviceId: id }, transaction });
+    } else {
+      const patchRow = {};
+      if (changes.isActive !== undefined) patchRow.isActive = changes.isActive;
+      if (changes.name !== undefined && clean(changes.name) !== s.name) {
+        await assertNameFree(companyId, changes.name, id, transaction);
+        // the original name back = no override
+        const original = s.getDataValue('name');
+        patchRow.displayName = clean(changes.name) === original ? null : clean(changes.name);
+      }
+      if (Object.keys(patchRow).length) await CompanyService.update(patchRow, { where: { companyId, serviceId: id }, transaction });
+      if ('displayName' in patchRow) companyNames.set(id, patchRow.displayName);
     }
     const now = isOwn ? s.isActive : (changes.isActive !== undefined ? changes.isActive : link.isActive);
     await audit.log(req, { action: isOwn ? 'PROCESS_UPDATED' : 'PROCESS_ACTIVE_CHANGED', entityType: 'Service', entityId: id, before, after: json(s, { isActive: now }) }, { transaction });

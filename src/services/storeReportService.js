@@ -65,7 +65,7 @@ async function movements(companyId, store, f) {
     WITH m AS (${MOVES})
     SELECT m.id, m."moveDate", m."createdAt", m.kind, m.qty::float AS qty, m.value::float AS value, m."balQty"::float AS "balQty", m."balValue"::float AS "balValue",
            it.id AS "itemId", it.name AS item, it.unit, c.name AS category, b.name AS brand,
-           inw."ipNo", inw."dcNo", COALESCE(v.name, vrv.name) AS vendor, vr."returnNo" AS "vrNo", vr.reason AS "vrReason", dep.name AS department,
+           inw."ipNo", inw."dcNo", COALESCE(v.name, vrv.name) AS vendor, vr."returnNo" AS "vrNo", vr.reason AS "vrReason", svc_name(dep.id, m."companyId", dep.name) AS department,
            r."reqNo", j."jobNo", j."operatorName" AS operator, ru.name AS "requestedBy", mu.name AS "doneBy",
            COALESCE(sc."cardNo"::text, (SELECT string_agg(DISTINCT s2."cardNo"::text, ', ') FROM job_items ji JOIN so_cards s2 ON s2.id = ji."soCardId" WHERE ji."jobId" = r."jobId")) AS "soNos",
            rt."returnNo", adj."adjNo", adj.reason AS "adjReason"
@@ -269,7 +269,7 @@ async function issueLines(req, f) {
   if (f.operator) { where.push('(ru.name ILIKE :op OR j."operatorName" ILIKE :op)'); rep.op = `%${f.operator}%`; }
   const rows = await q(`
     WITH m AS (${MOVES.replace(':store', "'CHEMICAL'")})
-    SELECT r.id AS "requestId", r."reqNo", r."sentAt", r."requestedAt", r."jobId", r."soCardId", dep.name AS department, j."jobNo", j."operatorName" AS operator, ru.name AS "requestedBy",
+    SELECT r.id AS "requestId", r."reqNo", r."sentAt", r."requestedAt", r."jobId", r."soCardId", svc_name(dep.id, r."companyId", dep.name) AS department, j."jobNo", j."operatorName" AS operator, ru.name AS "requestedBy",
            it.id AS "itemId", it.name AS item, it.unit, c.name AS category, l.qty::float AS requested, COALESCE(l."sentQty", 0)::float AS issued, l."returnedQty"::float AS returned,
            l.value::float AS value, l."returnedValue"::float AS "returnedValue",
            (SELECT (mv."balQty" - mv.qty)::float FROM m mv WHERE mv."requestId" = r.id AND mv."itemId" = l."itemId" AND mv.kind = 'ISSUE' LIMIT 1) AS "stockBefore",
@@ -340,7 +340,7 @@ async function returns(req, store, f) {
   if (f.dateTo) { where.push(`(x."createdAt" AT TIME ZONE 'Asia/Karachi')::date <= :dateTo`); rep.dateTo = f.dateTo; }
   if (f.departmentId) { where.push('x."departmentId" = :departmentId'); rep.departmentId = f.departmentId; }
   if (f.itemId) { where.push('l."itemId" = :itemId'); rep.itemId = f.itemId; }
-  const rows = (await q(`SELECT x."createdAt" AS date, x."returnNo", x.status, dep.name AS department, r."reqNo", j."jobNo", u.name AS "returnedBy", it.name AS item, it.unit, l.qty::float AS qty, l.rate::float AS rate, l.value::float AS value
+  const rows = (await q(`SELECT x."createdAt" AS date, x."returnNo", x.status, svc_name(dep.id, x."companyId", dep.name) AS department, r."reqNo", j."jobNo", u.name AS "returnedBy", it.name AS item, it.unit, l.qty::float AS qty, l.rate::float AS rate, l.value::float AS value
     FROM chemical_return_lines l JOIN chemical_returns x ON x.id = l."returnId" JOIN chemical_requests r ON r.id = x."requestId" JOIN jobs j ON j.id = r."jobId" JOIN services dep ON dep.id = x."departmentId"
     JOIN store_items it ON it.id = l."itemId" LEFT JOIN users u ON u.id = x."createdById" WHERE ${where.join(' AND ')} ORDER BY x."createdAt", x."returnNo"`, rep)).map((r) => ({ ...r, status: STATUS_TEXT[r.status] || r.status }));
   const columns = [col('date', 'Date', 'datetime'), col('returnNo', 'Return#', 'number'), col('department', 'Department'), col('reqNo', 'Req#', 'number'), col('jobNo', 'Job#', 'number'), col('returnedBy', 'Returned by'),

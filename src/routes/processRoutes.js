@@ -16,7 +16,7 @@ router.get('/', async (req, res) => res.json(await processes.list(req)));
 router.post('/', validate({ body: Joi.object({ name: name.required(), tracksColour: Joi.boolean() }) }), async (req, res) => res.status(201).json(await processes.create(req, req.body)));
 router.patch('/:id', validate({
   params: uuidParam,
-  body: Joi.object({ code: Joi.forbidden().messages({ 'any.unknown': 'the code of a process cannot be changed' }), name, isActive: Joi.boolean(), tracksColour: Joi.boolean(), sortOrder: Joi.number().integer().min(0).max(100000) }).min(1),
+  body: Joi.object({ code: Joi.string(), name: Joi.string().trim().min(1).max(120), isActive: Joi.boolean(), tracksColour: Joi.boolean(), sortOrder: Joi.number().integer().min(0).max(100000) }).min(1),
 }), async (req, res) => res.json(await processes.update(req, req.params.id, req.body)));
 router.delete('/:id', validate({ params: uuidParam }), async (req, res) => res.json(await processes.remove(req, req.params.id)));
 

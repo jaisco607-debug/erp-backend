@@ -1,5 +1,6 @@
 // A service the platform offers to companies: a screen (Grey Store, Gate Pass) or a department (Dyeing, Folding).
 const { DataTypes, Model } = require('sequelize');
+const { nameOf } = require('../utils/companyNames');
 
 const SERVICE_KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
 // the tab of the client's menu a service belongs to (shown grouped on the super admin screen)
@@ -12,7 +13,8 @@ function init(sequelize) {
     {
       id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
       code: { type: DataTypes.STRING(40), allowNull: false },
-      name: { type: DataTypes.STRING(120), allowNull: false },
+      // the company's own name for it, when the client admin renamed it (company_services.displayName); the stored name is the original
+      name: { type: DataTypes.STRING(120), allowNull: false, get() { return nameOf(this.getDataValue('id'), this.getDataValue('name')); } },
       kind: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'PROCESS' },
       menuGroup: { type: DataTypes.STRING(12), allowNull: true, validate: { isIn: [MENU_GROUPS] } },
       tracksColour: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },

@@ -30,12 +30,12 @@ async function events(companyId, f = {}) {
   }
   const cost = new Map();
   for (const l of await chemLines(companyId, {})) cost.set(`${l.jobId}:${l.soCardId}`, (cost.get(`${l.jobId}:${l.soCardId}`) || 0) + l.amount);
-  for (const r of await q(`SELECT j."jobDate" AS date, j."jobNo", j.id AS "jobId", j.status, j."operatorName", s.name AS department, sc.id AS "soCardId", sc."cardNo", sc."isGreyReturn",
+  for (const r of await q(`SELECT j."jobDate" AS date, j."jobNo", j.id AS "jobId", j.status, j."operatorName", svc_name(s.id, sc."companyId", s.name) AS department, sc.id AS "soCardId", sc."cardNo", sc."isGreyReturn",
       cu.id AS "customerId", cu.name AS party, SUM(ji.meters)::float AS meters, string_agg(DISTINCT gl."lotNo"::text, ', ') AS lots
       FROM jobs j JOIN services s ON s.id = j."departmentId" JOIN job_items ji ON ji."jobId" = j.id JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId"
       JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
       WHERE j."companyId" = :companyId AND j.status <> 'REJECTED'${cu.replace('gl."customerId"', 'sc."customerId"')}
-      GROUP BY j.id, s.name, sc.id, cu.id`, rep)) {
+      GROUP BY j.id, s.id, s.name, sc.id, cu.id`, rep)) {
     ev.push({ date: ymd(r.date), order: 4, type: 'Department', party: r.party, customerId: r.customerId, soCardId: r.soCardId, soNo: r.cardNo, lotNo: r.lots, department: r.department, ref: `Job# ${r.jobNo}`,
       deptMeters: r.meters, amount: round(cost.get(`${r.jobId}:${r.soCardId}`) || 0), detail: [r.operatorName ? `Operator ${r.operatorName}` : '', r.isGreyReturn ? TAG : ''].filter(Boolean).join(' | ') });
   }

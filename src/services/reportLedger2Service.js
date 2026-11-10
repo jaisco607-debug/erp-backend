@@ -54,9 +54,9 @@ async function lotLedger(req, f) {
       inMeters: 0, outMeters: r.meters, detail: r.isGreyReturn ? TAG : 'Taken from grey store' });
   }
   const mill = [];
-  for (const r of await q(`SELECT scl."greyLotId" AS "lotId", j."jobDate" AS date, j."jobNo", s.name AS department, sc."cardNo", SUM(ji.meters)::float AS meters
+  for (const r of await q(`SELECT scl."greyLotId" AS "lotId", j."jobDate" AS date, j."jobNo", svc_name(s.id, sc."companyId", s.name) AS department, sc."cardNo", SUM(ji.meters)::float AS meters
       FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId" JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN so_cards sc ON sc.id = ji."soCardId"
-      WHERE scl."greyLotId" IN (:ids) GROUP BY scl."greyLotId", j.id, s.name, sc.id`, { ids })) {
+      WHERE scl."greyLotId" IN (:ids) GROUP BY scl."greyLotId", j.id, s.id, s.name, sc.id`, { ids })) {
     const l = lotOf.get(r.lotId); mill.push({ date: ymd(r.date), order: 4, lotNo: l.lotNo, lotId: l.id, party: l.party, type: 'Department', ref: `Job# ${r.jobNo} (SO# ${r.cardNo})`, department: r.department, millMeters: r.meters, detail: 'Information, not in balance' });
   }
   for (const r of await q(`SELECT l."greyLotId" AS "lotId", p."listDate" AS date, p."listNo", sc."cardNo", l.grade, SUM(l.meters)::float AS meters, g."gatePassNo", g."passDate"
@@ -95,8 +95,8 @@ async function soCardLedger(req, f) {
   for (const r of await q(`SELECT scl."soCardId", gl."lotNo", scl.meters::float AS meters, sc."cardDate" AS date FROM so_card_lots scl JOIN so_cards sc ON sc.id = scl."soCardId" JOIN grey_lots gl ON gl.id = scl."greyLotId" WHERE scl."soCardId" IN (:ids)`, { ids })) {
     add(byId.get(r.soCardId), { date: ymd(r.date), order: 1, type: 'Cloth taken', ref: `Lot# ${r.lotNo}`, taken: r.meters });
   }
-  for (const r of await q(`SELECT ji."soCardId", ji."jobId", j."jobDate" AS date, j."jobNo", j.status, j."operatorName", s.name AS department, SUM(ji.meters)::float AS meters FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED'
-      JOIN services s ON s.id = j."departmentId" WHERE ji."soCardId" IN (:ids) GROUP BY ji."soCardId", ji."jobId", j.id, s.name`, { ids })) {
+  for (const r of await q(`SELECT ji."soCardId", ji."jobId", j."jobDate" AS date, j."jobNo", j.status, j."operatorName", svc_name(s.id, j."companyId", s.name) AS department, SUM(ji.meters)::float AS meters FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED'
+      JOIN services s ON s.id = j."departmentId" WHERE ji."soCardId" IN (:ids) GROUP BY ji."soCardId", ji."jobId", j.id, s.id, s.name`, { ids })) {
     add(byId.get(r.soCardId), { date: ymd(r.date), order: 2, type: 'Department', department: r.department, ref: `Job# ${r.jobNo}`, dept: r.meters, amount: round(cost.get(`${r.jobId}:${r.soCardId}`) || 0), detail: [r.operatorName ? `Operator ${r.operatorName}` : '', byId.get(r.soCardId).isGreyReturn ? TAG : ''].filter(Boolean).join(' | ') });
   }
   for (const r of await q(`SELECT p."soCardId", p."listDate" AS date, p."listNo", p.status, g."gatePassNo", g."passDate", g."vehicleNo",
@@ -124,15 +124,15 @@ async function departmentLedger(req, f) {
   const cond = (f.customerId ? ' AND sc."customerId" = :customerId' : '') + (f.soNo ? ' AND sc."cardNo" = :soNo' : '');
   const rep = { ids, customerId: f.customerId, soNo: f.soNo };
   const rows = [];
-  for (const r of await q(`SELECT j."departmentId", s.name AS department, j."jobDate" AS date, j."jobNo", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, fs.name AS "fromDepartment", SUM(ji.meters)::float AS meters
+  for (const r of await q(`SELECT j."departmentId", svc_name(s.id, sc."companyId", s.name) AS department, j."jobDate" AS date, j."jobNo", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, svc_name(fs.id, sc."companyId", fs.name) AS "fromDepartment", SUM(ji.meters)::float AS meters
       FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId" LEFT JOIN services fs ON fs.id = j."fromDepartmentId"
-      JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId" WHERE j."departmentId" IN (:ids)${cond} GROUP BY j.id, s.name, fs.name, sc.id, cu.id`, rep)) {
+      JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId" WHERE j."departmentId" IN (:ids)${cond} GROUP BY j.id, s.id, s.name, fs.id, fs.name, sc.id, cu.id`, rep)) {
     rows.push({ date: ymd(r.date), order: 1, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: 'Received', ref: `Job# ${r.jobNo}`, inMeters: r.meters, outMeters: 0, detail: `From ${r.fromDepartment || 'SO card'}` });
   }
-  for (const r of await q(`SELECT pj."departmentId", ps.name AS department, cj."jobDate" AS date, cj."jobNo", cs.name AS "toDepartment", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, SUM(ci.meters)::float AS meters
+  for (const r of await q(`SELECT pj."departmentId", svc_name(ps.id, sc."companyId", ps.name) AS department, cj."jobDate" AS date, cj."jobNo", svc_name(cs.id, sc."companyId", cs.name) AS "toDepartment", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, SUM(ci.meters)::float AS meters
       FROM job_items ci JOIN jobs cj ON cj.id = ci."jobId" AND cj.status <> 'REJECTED' JOIN job_items pi ON pi.id = ci."sourceJobItemId" JOIN jobs pj ON pj.id = pi."jobId" AND pj.status <> 'REJECTED'
       JOIN services ps ON ps.id = pj."departmentId" JOIN services cs ON cs.id = cj."departmentId" JOIN so_cards sc ON sc.id = ci."soCardId" JOIN customers cu ON cu.id = sc."customerId"
-      WHERE pj."departmentId" IN (:ids)${cond} GROUP BY pj."departmentId", ps.name, cj.id, cs.name, sc.id, cu.id`, rep)) {
+      WHERE pj."departmentId" IN (:ids)${cond} GROUP BY pj."departmentId", ps.id, ps.name, cj.id, cs.id, cs.name, sc.id, cu.id`, rep)) {
     rows.push({ date: ymd(r.date), order: 2, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: 'Sent on', ref: `Job# ${r.jobNo}`, inMeters: 0, outMeters: r.meters, detail: `To ${r.toDepartment}` });
   }
   const ledger = runLedger(rows, f, { group: (r) => r.departmentId, delta: (r) => r.inMeters - r.outMeters, label: (r) => ({ department: r.department }) })

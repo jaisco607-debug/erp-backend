@@ -3,7 +3,9 @@
 // or the user's sessions were ended after this token was made (password change, logout from all devices),
 // or the user's company has been switched off by the super admin,
 // or (for an employee) the company has no active client admin any more.
-const { User, Company } = require('../models');
+const { Op } = require('sequelize');
+const { User, Company, CompanyService } = require('../models');
+const companyNames = require('../utils/companyNames');
 const AppError = require('../utils/AppError');
 const { verifyAccessToken } = require('../utils/tokens');
 const { hasActiveClientAdmin } = require('../services/companyAccessService');
@@ -35,6 +37,11 @@ async function authenticate(req, res, next) {
     req.impersonator = boss;
   }
   req.user = user;
+  // the names this company gave its processes (the client admin renamed them): every service shown to it uses them
+  if (user.companyId) {
+    const rows = await CompanyService.findAll({ where: { companyId: user.companyId, displayName: { [Op.ne]: null } }, attributes: ['serviceId', 'displayName'] });
+    companyNames.enter(user.companyId, new Map(rows.map((r) => [r.serviceId, r.displayName])));
+  }
   next();
 }
 

@@ -158,7 +158,7 @@ async function returnLine(transaction, requestLineId, qty) {
 async function usage(where, replacements, transaction) {
   const rows = await q(`
     SELECT x.id, x."batchId", x.qty::float AS qty, x.rate::float AS rate, x.value::float AS value, x."returnedQty"::float AS "returnedQty",
-           r.id AS "requestId", r."reqNo", r."sentAt", r."jobId", r."soCardId", s.name AS department, s.code AS "departmentCode",
+           r.id AS "requestId", r."reqNo", r."sentAt", r."jobId", r."soCardId", svc_name(s.id, r."companyId", s.name) AS department, s.code AS "departmentCode",
            j."jobNo", it.unit, b."inDate", b.rate::float AS "batchRate"
     FROM chemical_issue_batches x
     JOIN chemical_requests r ON r.id = x."requestId"

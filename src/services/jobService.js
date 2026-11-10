@@ -408,9 +408,9 @@ async function trailsOf(jobs) {
       SELECT ji."jobId" AS start, ji."sourceJobItemId" AS anc, 1 AS depth FROM job_items ji WHERE ji."jobId" = ANY($1::uuid[]) AND ji."sourceJobItemId" IS NOT NULL
       UNION -- UNION (not ALL): a repeated row ends the walk, so a damaged chain can never loop forever
       SELECT up.start, p."sourceJobItemId", up.depth + 1 FROM up JOIN job_items p ON p.id = up.anc WHERE p."sourceJobItemId" IS NOT NULL)
-    SELECT up.start, j.id, j."jobNo", s.name AS department, j."operatorName", j."processDate", j."createdAt" AS "sentAt", MIN(up.depth) AS depth
+    SELECT up.start, j.id, j."jobNo", svc_name(s.id, j."companyId", s.name) AS department, j."operatorName", j."processDate", j."createdAt" AS "sentAt", MIN(up.depth) AS depth
     FROM up JOIN job_items a ON a.id = up.anc JOIN jobs j ON j.id = a."jobId" JOIN services s ON s.id = j."departmentId"
-    GROUP BY up.start, j.id, s.name ORDER BY j."createdAt"`, { bind: [jobs.map((j) => j.id)], type: QueryTypes.SELECT });
+    GROUP BY up.start, j.id, s.id, s.name ORDER BY j."createdAt"`, { bind: [jobs.map((j) => j.id)], type: QueryTypes.SELECT });
   for (const r of rows) out.get(r.start).push({ jobId: r.id, department: r.department, jobNo: r.jobNo, operatorName: r.operatorName, processDate: r.processDate, sentAt: r.sentAt, depth: r.depth });
   return out;
 }
@@ -434,7 +434,7 @@ async function nextOf(jobIds) {
   const out = new Map();
   if (!jobIds.length) return out;
   const rows = await sequelize.query(`
-    SELECT ji.id AS "itemId", nj.id AS "jobId", nj."jobNo", nj.status, nj."rejectReason", nj."rejectAnswer", nj."statusAt", s.name AS department, u.name AS "rejectedBy"
+    SELECT ji.id AS "itemId", nj.id AS "jobId", nj."jobNo", nj.status, nj."rejectReason", nj."rejectAnswer", nj."statusAt", svc_name(s.id, nj."companyId", s.name) AS department, u.name AS "rejectedBy"
     FROM job_items ji JOIN job_items nx ON nx."sourceJobItemId" = ji.id JOIN jobs nj ON nj.id = nx."jobId"
     JOIN services s ON s.id = nj."departmentId" LEFT JOIN users u ON u.id = nj."statusById"
     WHERE ji."jobId" = ANY($1::uuid[]) ORDER BY nj."createdAt"`, { bind: [jobIds], type: QueryTypes.SELECT });

@@ -13,6 +13,8 @@ function init(sequelize) {
       chemicalRequests: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       // the company's own switch for a service it has (a process the client admin switched off is hidden from his menus and users; nothing is deleted)
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      // the company's own name for the service (a process the client admin renamed); null = the original name
+      displayName: { type: DataTypes.STRING(120), allowNull: true },
     },
     { sequelize, modelName: 'CompanyService', tableName: 'company_services', updatedAt: false },
   );

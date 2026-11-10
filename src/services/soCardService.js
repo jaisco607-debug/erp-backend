@@ -81,7 +81,7 @@ async function positionsOf(cardIds, transaction) {
   const out = new Map();
   if (!cardIds.length) return out;
   const rows = await sequelize.query(`
-    SELECT DISTINCT ON (ji."soCardId") ji."soCardId" AS id, s.id AS "deptId", s.code, s.name, j.status
+    SELECT DISTINCT ON (ji."soCardId") ji."soCardId" AS id, s.id AS "deptId", s.code, svc_name(s.id, j."companyId", s.name) AS name, j.status
     FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
     WHERE ji."soCardId" IN (:ids) AND j.status <> 'REJECTED'
     ORDER BY ji."soCardId", j."createdAt" DESC, j."jobNo" DESC`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
@@ -97,7 +97,7 @@ async function lineInfoOf(cardIds, transaction) {
   const rows = await sequelize.query(`
     SELECT scl.id, scl.meters::float AS meters,
       COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED'), 0)::float AS sent,
-      (SELECT row_to_json(x) FROM (SELECT s.id, s.code, s.name, j."jobNo" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
+      (SELECT row_to_json(x) FROM (SELECT s.id, s.code, svc_name(s.id, j."companyId", s.name) AS name, j."jobNo" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
         WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED' ORDER BY j."createdAt" DESC LIMIT 1) x) AS dept
     FROM so_card_lots scl WHERE scl."soCardId" IN (:ids)`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
   for (const r of rows) out.set(r.id, { sent: round(r.sent), left: Math.max(0, round(r.meters - r.sent)), dept: r.dept || null });

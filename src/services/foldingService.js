@@ -43,7 +43,7 @@ const ROWS_SQL = `
          MAX(q.name) AS quality, BOOL_OR(gl."isReprocess") AS "isReprocess",
          SUM(ji.meters)::float AS "soQnty",
          -- sent back to a department for RE-WORK (not Packing)
-         (SELECT string_agg(DISTINCT s.name, ', ') FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN services s ON s.id = nj."departmentId"
+         (SELECT string_agg(DISTINCT svc_name(s.id, nj."companyId", s.name), ', ') FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN services s ON s.id = nj."departmentId"
            WHERE nj.status <> 'REJECTED' AND s.kind <> 'PACKING' AND nx."sourceJobItemId" IN (SELECT x.id FROM job_items x WHERE x."jobId" = j.id AND x."soCardId" = sc.id)) AS "sentBackTo",
          fe.id AS "entryId", fe."pageNo", fe."isConfirmed", fe."isClosed", fe."closeNote", fe."closedAt", cb.name AS "closedByName", fe."closedById"
   FROM jobs j

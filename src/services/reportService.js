@@ -98,7 +98,7 @@ async function clothNow(companyId) {
   // 3. inside departments
   for (const r of await q(`
     SELECT ji.id AS "itemId", ji."soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", gl.id AS "lotId", gl."lotNo", ${LOT_WIDTHS} AS width, gl."customerId", cu.code AS "customerCode", cu.name AS "customerName", gl."inwardDate",
-           j.id AS "jobId", j."jobNo", j."departmentId", s.name AS department, s.kind, j.status, j."operatorName", ${LEFT_SQL}::float AS meters, ji.meters::float AS "itemMeters", scl.meters::float AS "lineMeters",
+           j.id AS "jobId", j."jobNo", j."departmentId", svc_name(s.id, j."companyId", s.name) AS department, s.kind, j.status, j."operatorName", ${LEFT_SQL}::float AS meters, ji.meters::float AS "itemMeters", scl.meters::float AS "lineMeters",
            (SELECT count(*)::int FROM so_card_lot_thaans p WHERE p."soCardLotId" = ji."soCardLotId") AS thaans
     FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId"
     JOIN so_cards sc ON sc.id = ji."soCardId" JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId" JOIN customers cu ON cu.id = gl."customerId"
@@ -120,7 +120,7 @@ async function chemLines(companyId, f = {}) {
   return q(`
     WITH jm AS (SELECT "jobId", SUM(meters) AS tot FROM job_items GROUP BY "jobId"),
          cm AS (SELECT "jobId", "soCardId", SUM(meters) AS m FROM job_items GROUP BY "jobId", "soCardId")
-    SELECT r.id AS "requestId", r."reqNo", r."sentAt", r."departmentId", s.name AS department, r."jobId", j."jobNo", cm."soCardId", l."itemId", it.name AS chemical, it.unit,
+    SELECT r.id AS "requestId", r."reqNo", r."sentAt", r."departmentId", svc_name(s.id, r."companyId", s.name) AS department, r."jobId", j."jobNo", cm."soCardId", l."itemId", it.name AS chemical, it.unit,
            ((l."sentQty" - l."returnedQty") * x.f)::float AS qty, ((l.value - l."returnedValue") * x.f)::float AS amount
     FROM chemical_requests r
     JOIN chemical_request_lines l ON l."requestId" = r.id AND l."sentQty" > 0
@@ -152,12 +152,12 @@ async function jobCards(companyId, f = {}) {
   if (f.status) { where.push('j.status = :status'); rep.status = f.status; }
   if (f.operator) { where.push('j."operatorName" ILIKE :operator'); rep.operator = `%${f.operator}%`; }
   return q(`
-    SELECT j.id AS "jobId", j."jobNo", j."jobDate", j."createdAt" AS "sentAt", j.status, j."operatorName", j."processDate", j."isRework", j."departmentId", s.name AS department, s.kind AS "departmentKind",
-           fs.name AS "fromDepartment", sc.id AS "soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", cu.id AS "customerId", cu.name AS customer,
+    SELECT j.id AS "jobId", j."jobNo", j."jobDate", j."createdAt" AS "sentAt", j.status, j."operatorName", j."processDate", j."isRework", j."departmentId", svc_name(s.id, j."companyId", s.name) AS department, s.kind AS "departmentKind",
+           svc_name(fs.id, j."companyId", fs.name) AS "fromDepartment", sc.id AS "soCardId", sc."cardNo" AS "soNo", sc."isGreyReturn", cu.id AS "customerId", cu.name AS customer,
            MAX(q.name) AS quality, string_agg(DISTINCT COALESCE(ic.name, jc.name), ', ') AS colour,
            SUM(ji.meters)::float AS meters, array_agg(DISTINCT gl."lotNo" ORDER BY gl."lotNo") AS lots,
            (SELECT count(DISTINCT p."thaanId")::int FROM so_card_lot_thaans p WHERE p."soCardLotId" IN (SELECT i2."soCardLotId" FROM job_items i2 WHERE i2."jobId" = j.id AND i2."soCardId" = sc.id)) AS thaans,
-           (SELECT string_agg(DISTINCT s2.name, ', ') FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN services s2 ON s2.id = nj."departmentId"
+           (SELECT string_agg(DISTINCT svc_name(s2.id, nj."companyId", s2.name), ', ') FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN services s2 ON s2.id = nj."departmentId"
              WHERE nj.status <> 'REJECTED' AND nx."sourceJobItemId" IN (SELECT x.id FROM job_items x WHERE x."jobId" = j.id AND x."soCardId" = sc.id)) AS "sentTo",
            (SELECT COALESCE(SUM(nx.meters), 0)::float FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId"
              WHERE nj.status <> 'REJECTED' AND nx."sourceJobItemId" IN (SELECT x.id FROM job_items x WHERE x."jobId" = j.id AND x."soCardId" = sc.id)) AS "sentOnMeters"
@@ -166,7 +166,7 @@ async function jobCards(companyId, f = {}) {
     JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
     LEFT JOIN qualities q ON q.id = COALESCE(sc."qualityId", gl."qualityId") LEFT JOIN colours ic ON ic.id = ji."colourId" LEFT JOIN colours jc ON jc.id = j."colourId"
     WHERE ${where.join(' AND ')}
-    GROUP BY j.id, s.name, s.kind, fs.name, sc.id, cu.id ORDER BY j."jobNo" DESC, sc."cardNo"`, rep);
+    GROUP BY j.id, s.id, s.name, s.kind, fs.id, fs.name, sc.id, cu.id ORDER BY j."jobNo" DESC, sc."cardNo"`, rep);
 }
 
 const lotsText = (a) => (a || []).join(', ');
@@ -327,11 +327,11 @@ async function soCards(req, f) {
   if (f.departmentId) { where.push('EXISTS (SELECT 1 FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardId" = sc.id AND j."departmentId" = :dep)'); rep.dep = f.departmentId; }
   const cards = await q(`
     SELECT sc.id, sc."cardNo", sc."idNo", sc."cardDate", sc.status, sc."isGreyReturn", sc."deliveryDate", sc.article, cu.name AS party, qu.name AS quality,
-           COALESCE((SELECT s2.name FROM job_items ji2 JOIN jobs j2 ON j2.id = ji2."jobId" AND j2.status <> 'REJECTED' JOIN services s2 ON s2.id = j2."departmentId" WHERE ji2."soCardId" = sc.id ORDER BY j2."createdAt" DESC, j2."jobNo" DESC LIMIT 1), cd.name) AS "currentDepartment",
+           COALESCE((SELECT svc_name(s2.id, j2."companyId", s2.name) FROM job_items ji2 JOIN jobs j2 ON j2.id = ji2."jobId" AND j2.status <> 'REJECTED' JOIN services s2 ON s2.id = j2."departmentId" WHERE ji2."soCardId" = sc.id ORDER BY j2."createdAt" DESC, j2."jobNo" DESC LIMIT 1), svc_name(cd.id, sc."companyId", cd.name)) AS "currentDepartment",
            sc."totalMeters"::float AS meters, (SELECT count(*)::int FROM so_card_lots l WHERE l."soCardId" = sc.id) AS "lotCount",
            (SELECT array_agg(DISTINCT g."lotNo" ORDER BY g."lotNo") FROM so_card_lots l JOIN grey_lots g ON g.id = l."greyLotId" WHERE l."soCardId" = sc.id) AS lots,
            (SELECT count(*)::int FROM so_card_lot_thaans p JOIN so_card_lots l ON l.id = p."soCardLotId" WHERE l."soCardId" = sc.id) AS thaans,
-           (SELECT string_agg(DISTINCT s.name, ', ') FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId" WHERE ji."soCardId" = sc.id) AS "wentTo"
+           (SELECT string_agg(DISTINCT svc_name(s.id, j."companyId", s.name), ', ') FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId" WHERE ji."soCardId" = sc.id) AS "wentTo"
     FROM so_cards sc JOIN customers cu ON cu.id = sc."customerId" LEFT JOIN qualities qu ON qu.id = sc."qualityId" LEFT JOIN services cd ON cd.id = sc."currentDepartmentId"
     WHERE ${where.join(' AND ')} ORDER BY sc."cardNo" DESC`, rep);
   const now = await clothNow(companyId);
@@ -374,7 +374,7 @@ async function soCardMovement(req, f) {
 async function soCardDetail(req, id) {
   await needAnyService(req, ['SO_CARD']);
   const companyId = req.user.companyId;
-  const [c] = await q(`SELECT sc.*, cu.name AS party, cu.code AS "partyCode", qu.name AS quality, cd.name AS "currentDepartment" FROM so_cards sc JOIN customers cu ON cu.id = sc."customerId"
+  const [c] = await q(`SELECT sc.*, cu.name AS party, cu.code AS "partyCode", qu.name AS quality, svc_name(cd.id, sc."companyId", cd.name) AS "currentDepartment" FROM so_cards sc JOIN customers cu ON cu.id = sc."customerId"
     LEFT JOIN qualities qu ON qu.id = sc."qualityId" LEFT JOIN services cd ON cd.id = sc."currentDepartmentId" WHERE sc.id = :id AND sc."companyId" = :companyId`, { id, companyId });
   if (!c) throw AppError.notFound('SO card');
   const lotRows = await q(`SELECT g."lotNo", g."dcNo", g."typeNo", scl.meters::float AS meters, scl.id AS "lineId", (SELECT string_agg(DISTINCT w::text, ', ' ORDER BY w::text) FROM (SELECT COALESCE(t.width, g.width)::float8 AS w FROM so_card_lot_thaans p JOIN grey_lot_thaans t ON t.id = p."thaanId" WHERE p."soCardLotId" = scl.id UNION ALL SELECT g.width::float8 WHERE NOT EXISTS (SELECT 1 FROM so_card_lot_thaans p2 WHERE p2."soCardLotId" = scl.id)) x WHERE w IS NOT NULL) AS width,
@@ -581,7 +581,7 @@ async function folding(req, f) {
   const fd = (await companyServices(req.user.companyId)).find((s) => s.kind === 'FOLDING');
   if (!fd) throw AppError.rule('NO_FOLDING', 'Your company does not have the Folding department');
   const list = await foldingService.list(req, fd.code, { tab: 'all', page: 1, limit: 100000, dateFrom: f.dateFrom, dateTo: f.dateTo });
-  const from = new Map((await q(`SELECT j.id, fs.name AS name FROM jobs j LEFT JOIN services fs ON fs.id = j."fromDepartmentId" WHERE j."companyId" = :companyId AND j."departmentId" = :dep`, { companyId: req.user.companyId, dep: fd.id })).map((r) => [r.id, r.name || 'SO Card']));
+  const from = new Map((await q(`SELECT j.id, svc_name(fs.id, j."companyId", fs.name) AS name FROM jobs j LEFT JOIN services fs ON fs.id = j."fromDepartmentId" WHERE j."companyId" = :companyId AND j."departmentId" = :dep`, { companyId: req.user.companyId, dep: fd.id })).map((r) => [r.id, r.name || 'SO Card']));
   let rows = list.data.map((r) => ({
     jobNo: r.jobNo, jobDate: r.jobDate, fromDepartment: from.get(r.jobId), soNo: r.soCard.cardNo, party: r.customer.name, quality: r.quality, colour: r.colour,
     lots: r.lots.map((l) => l.lotNo).join(', '), width: [...new Set(r.lots.flatMap((l) => l.widths || []))].sort((a, b) => a - b).join(', '), thaans: r.lots.reduce((t, l) => t + (l.thaanCount || 0), 0), receivedMeters: r.totals.received, aMeters: r.totals.a, bMeters: r.totals.b, cpMeters: r.totals.cp,
