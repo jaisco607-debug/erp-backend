@@ -18,7 +18,7 @@ const vendorFields = {
   creditLimit: Joi.number().strict().precision(2).min(0).max(9999999999999).allow(null), // empty = no limit
   creditDays: Joi.number().strict().integer().min(0).max(3650), // 0 = due the same day
 };
-const listQuery = Joi.object({ ...paging, export: Joi.boolean(), limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean(), categoryId: id, brandId: id });
+const listQuery = Joi.object({ ...paging, export: Joi.boolean(), limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean(), categoryId: id, brandId: id, module: Joi.string().uppercase().valid('MAIN', 'WEAVING', 'ALL') });
 const params = Joi.object({ id: id.required(), store: Joi.string() });
 
 const name = (max) => Joi.string().trim().min(1).max(max);

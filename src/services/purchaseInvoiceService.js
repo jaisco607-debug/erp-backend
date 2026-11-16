@@ -66,6 +66,167 @@ async function buildLines(req, vendorId, inwardIds, invoiceId, transaction) {
   return rows.sort((a, b) => (a.inwardDate < b.inwardDate ? -1 : a.inwardDate > b.inwardDate ? 1 : a.idNo - b.idNo));
 }
 
+/** The weaving yarn inward entries bought from a vendor (PURCHASE yarn) with what they cost; `invoiceId` is the purchase invoice an entry is already on. */
+const YARN_SQL = `
+  SELECT y.id AS "inwardId", y.code, to_char(y."inwardDate", 'YYYY-MM-DD') AS "inwardDate", y."vendorId", y."dcNo", y.remarks, y.bags, y."lbsPerBag"::float AS "lbsPerBag", y."totalLbs"::float AS lbs,
+    y."ratePerLb"::float AS rate, COALESCE(y.amount, 0)::float AS amount, yc.name || ' - ' || yb.name || ' - ' || it.packing || ' - ' || it.bags AS item,
+    (SELECT pl."invoiceId" FROM purchase_invoice_yarn_inwards pl WHERE pl."inwardId" = y.id) AS "invoiceId",
+    (SELECT p."voucherNo" FROM purchase_invoice_yarn_inwards pl JOIN purchase_invoices p ON p.id = pl."invoiceId" WHERE pl."inwardId" = y.id) AS "invoiceVoucherNo"
+  FROM yarn_inwards y JOIN yarn_items it ON it.id = y."itemId" JOIN yarn_counts yc ON yc.id = it."yarnCountId" JOIN yarn_brands yb ON yb.id = it."brandId"
+  WHERE y."companyId" = :companyId AND y."deletedAt" IS NULL AND y."vendorId" IS NOT NULL`;
+const yarnLine = (r) => ({
+  inwardId: r.inwardId, inwardCode: r.code, inwardLabel: label(r.code), inwardDate: r.inwardDate, dcNo: r.dcNo, remarks: r.remarks, item: r.item,
+  bags: r.bags, lbsPerBag: r.lbsPerBag, lbs: r.lbs, ratePerLb: r.rate, amount: r.amount, salesTax: r.salesTax || 0, net: round(r.amount + (r.salesTax || 0), 2),
+});
+
+/** GET /purchase-invoices/yarn-inwards?vendorId= : the yarn bought from this vendor (weaving yarn inward) that can still be put on an invoice. */
+async function yarnInwards(req, { vendorId, search, invoiceId, limit }) {
+  const rows = await q(`${YARN_SQL} AND y."vendorId" = :vendorId ORDER BY y."inwardDate" DESC, y.code DESC`, { companyId: req.user.companyId, vendorId });
+  let data = rows.filter((r) => !r.invoiceId || r.invoiceId === invoiceId);
+  if (search) {
+    const s = search.trim().toLowerCase();
+    data = data.filter((r) => String(r.code) === s || [r.dcNo, r.remarks, r.item].some((t) => (t || '').toLowerCase().includes(s)));
+  }
+  return { data: data.slice(0, limit).map((r) => ({ ...yarnLine(r), canBill: r.amount > 0, blockedReason: r.amount > 0 ? null : 'The purchase has no amount' })), total: data.length };
+}
+
+/** The lines of a YARN invoice from the chosen yarn inward entries; every rule about an entry is checked here. */
+async function buildYarn(req, vendorId, inwardIds, invoiceId, transaction) {
+  const ids = [...new Set(inwardIds)];
+  const rows = await q(`${YARN_SQL} AND y.id IN (:ids)`, { companyId: req.user.companyId, ids }, transaction);
+  if (rows.length !== ids.length) throw AppError.notFound('Yarn inward entry');
+  for (const r of rows) {
+    const name = `Yarn inward ${label(r.code)}`;
+    if (r.vendorId !== vendorId) throw AppError.rule('INWARD_OTHER_VENDOR', `${name} belongs to another vendor; one invoice is for one vendor`);
+    if (r.invoiceId && r.invoiceId !== invoiceId) throw AppError.rule('INWARD_TAKEN', `${name} is already on purchase invoice ${label(r.invoiceVoucherNo)}`);
+    if (!(r.amount > 0)) throw AppError.rule('NO_AMOUNT', `${name} has no amount, so there is nothing to bill`);
+  }
+  return rows.sort((a, b) => a.code - b.code).map((r) => ({ ...r, salesTax: 0 }));
+}
+
+async function writeYarnLines(invoiceId, companyId, lines, transaction) {
+  await sequelize.query('DELETE FROM purchase_invoice_yarn_inwards WHERE "invoiceId" = :invoiceId', { replacements: { invoiceId }, transaction });
+  let lineNo = 0;
+  for (const l of lines) {
+    lineNo += 1;
+    await sequelize.query('INSERT INTO purchase_invoice_yarn_inwards ("invoiceId", "companyId", "lineNo", "inwardId", amount, "salesTax") VALUES (:invoiceId, :companyId, :lineNo, :inwardId, :amount, :salesTax)',
+      { replacements: { invoiceId, companyId, lineNo, inwardId: l.inwardId, amount: l.amount, salesTax: l.salesTax }, transaction });
+  }
+}
+
+/** The SIZING receipts (weaving sizing inward) of a vendor with what the sizing costs; `invoiceId` is the purchase invoice a receipt is already on. */
+const SIZING_SQL = `
+  SELECT s.id AS "inwardId", s."inwardNo", to_char(s."inwardDate", 'YYYY-MM-DD') AS "inwardDate", s."vendorId", s."dcNo", s.description, o."challanNo",
+    s."lbsUsed"::float AS "lbsUsed", s."cutConeKg"::float AS "cutConeKg", s."ratePerLb"::float AS rate, s.amount::float AS amount,
+    (SELECT COUNT(*)::int FROM yarn_sizing_inward_beams b WHERE b."inwardId" = s.id) AS beams, (SELECT COALESCE(SUM(b.meters), 0)::float FROM yarn_sizing_inward_beams b WHERE b."inwardId" = s.id) AS meters,
+    (SELECT pl."invoiceId" FROM purchase_invoice_sizing_inwards pl WHERE pl."inwardId" = s.id) AS "invoiceId",
+    (SELECT p."voucherNo" FROM purchase_invoice_sizing_inwards pl JOIN purchase_invoices p ON p.id = pl."invoiceId" WHERE pl."inwardId" = s.id) AS "invoiceVoucherNo"
+  FROM yarn_sizing_inwards s JOIN yarn_outwards o ON o.id = s."outwardId"
+  WHERE s."companyId" = :companyId AND s."deletedAt" IS NULL`;
+const sizingLine = (r) => ({
+  inwardId: r.inwardId, inwardNo: r.inwardNo, inwardLabel: label(r.inwardNo), inwardDate: r.inwardDate, dcNo: r.dcNo, description: r.description, challanNo: r.challanNo, challanText: r.challanNo ? label(r.challanNo) : null,
+  beams: r.beams, meters: r.meters, lbsUsed: r.lbsUsed, cutConeKg: r.cutConeKg, ratePerLb: r.rate, amount: r.amount, salesTax: r.salesTax || 0, net: round(r.amount + (r.salesTax || 0), 2),
+});
+
+/** GET /purchase-invoices/sizing-inwards?vendorId= : the sizing receipts of this vendor (the sizing party) that can still be put on an invoice. */
+async function sizingInwards(req, { vendorId, search, invoiceId, limit }) {
+  const rows = await q(`${SIZING_SQL} AND s."vendorId" = :vendorId ORDER BY s."inwardDate" DESC, s."inwardNo" DESC`, { companyId: req.user.companyId, vendorId });
+  let data = rows.filter((r) => !r.invoiceId || r.invoiceId === invoiceId);
+  if (search) {
+    const s = search.trim().toLowerCase();
+    data = data.filter((r) => String(r.inwardNo) === s || String(r.challanNo) === s || [r.dcNo, r.description].some((t) => (t || '').toLowerCase().includes(s)));
+  }
+  return { data: data.slice(0, limit).map((r) => ({ ...sizingLine(r), canBill: r.amount > 0, blockedReason: r.amount > 0 ? null : 'The sizing receipt has no amount' })), total: data.length };
+}
+
+/** The lines of a SIZING invoice from the chosen receipts; every rule about a receipt is checked here. */
+async function buildSizing(req, vendorId, inwardIds, invoiceId, transaction) {
+  const ids = [...new Set(inwardIds)];
+  const rows = await q(`${SIZING_SQL} AND s.id IN (:ids)`, { companyId: req.user.companyId, ids }, transaction);
+  if (rows.length !== ids.length) throw AppError.notFound('Sizing receipt');
+  for (const r of rows) {
+    const name = `Sizing receipt ${label(r.inwardNo)}`;
+    if (r.vendorId !== vendorId) throw AppError.rule('INWARD_OTHER_VENDOR', `${name} belongs to another vendor; one invoice is for one vendor`);
+    if (r.invoiceId && r.invoiceId !== invoiceId) throw AppError.rule('INWARD_TAKEN', `${name} is already on purchase invoice ${label(r.invoiceVoucherNo)}`);
+    if (!(r.amount > 0)) throw AppError.rule('NO_AMOUNT', `${name} has no amount, so there is nothing to bill`);
+  }
+  return rows.sort((a, b) => a.inwardNo - b.inwardNo).map((r) => ({ ...r, salesTax: 0 }));
+}
+
+async function writeSizingLines(invoiceId, companyId, lines, transaction) {
+  await sequelize.query('DELETE FROM purchase_invoice_sizing_inwards WHERE "invoiceId" = :invoiceId', { replacements: { invoiceId }, transaction });
+  let lineNo = 0;
+  for (const l of lines) {
+    lineNo += 1;
+    await sequelize.query('INSERT INTO purchase_invoice_sizing_inwards ("invoiceId", "companyId", "lineNo", "inwardId", amount, "salesTax") VALUES (:invoiceId, :companyId, :lineNo, :inwardId, :amount, :salesTax)',
+      { replacements: { invoiceId, companyId, lineNo, inwardId: l.inwardId, amount: l.amount, salesTax: l.salesTax }, transaction });
+  }
+}
+
+/** The FABRIC inward entries (store cloth bought from a vendor) with what they cost; `invoiceId` is the purchase invoice an entry is already on. */
+const FABRIC_SQL = `
+  SELECT f.id AS "inwardId", f."inwardNo", f."typeNo", to_char(f."inwardDate", 'YYYY-MM-DD') AS "inwardDate", f."vendorId", f."dcNo", f."isApproved", f.unit, f.pieces,
+    f."inwardMeters"::float AS meters, f."inwardYards"::float AS yards, f.rate::float AS rate, f."rateUnit", COALESCE(f.amount, 0)::float AS amount, ql.name AS quality,
+    (SELECT pl."invoiceId" FROM purchase_invoice_fabric_inwards pl WHERE pl."inwardId" = f.id) AS "invoiceId",
+    (SELECT p."voucherNo" FROM purchase_invoice_fabric_inwards pl JOIN purchase_invoices p ON p.id = pl."invoiceId" WHERE pl."inwardId" = f.id) AS "invoiceVoucherNo"
+  FROM fabric_inwards f JOIN qualities ql ON ql.id = f."qualityId" WHERE f."companyId" = :companyId AND f."deletedAt" IS NULL`;
+const fabricLine = (r) => ({
+  inwardId: r.inwardId, inwardNo: r.inwardNo, inwardLabel: label(r.inwardNo), typeNo: r.typeNo, inwardDate: r.inwardDate, dcNo: r.dcNo, quality: r.quality, pieces: r.pieces,
+  meters: r.meters, yards: r.unit === 'YARD' ? r.yards : null, unit: r.unit, rate: r.rate, rateUnit: r.rate == null ? null : r.rateUnit || r.unit, rateText: r.rate == null ? null : `per ${(r.rateUnit || r.unit) === 'YARD' ? 'yard' : 'meter'}`,
+  amount: r.amount, salesTax: r.salesTax || 0, net: round(r.amount + (r.salesTax || 0), 2),
+});
+
+/** GET /purchase-invoices/fabric-inwards?vendorId= : the approved fabric inwards of this vendor that can still be put on a fabric invoice. */
+async function fabricInwards(req, { vendorId, search, invoiceId, limit }) {
+  const rows = await q(`${FABRIC_SQL} AND f."vendorId" = :vendorId AND f."isApproved" ORDER BY f."inwardDate" DESC, f."inwardNo" DESC`, { companyId: req.user.companyId, vendorId });
+  let data = rows.filter((r) => !r.invoiceId || r.invoiceId === invoiceId);
+  if (search) {
+    const s = search.trim().toLowerCase();
+    data = data.filter((r) => String(r.inwardNo) === s || [r.dcNo, r.quality, r.typeNo].some((t) => (t || '').toLowerCase().includes(s)));
+  }
+  return { data: data.slice(0, limit).map((r) => ({ ...fabricLine(r), canBill: r.amount > 0, blockedReason: r.amount > 0 ? null : 'The fabric inward has no rate: give its rate in the store first' })), total: data.length };
+}
+
+/** The lines of a FABRIC invoice from the chosen fabric inwards; every rule about an entry is checked here. */
+async function buildFabric(req, vendorId, inwardIds, invoiceId, transaction) {
+  const ids = [...new Set(inwardIds)];
+  const rows = await q(`${FABRIC_SQL} AND f.id IN (:ids)`, { companyId: req.user.companyId, ids }, transaction);
+  if (rows.length !== ids.length) throw AppError.notFound('Fabric inward');
+  for (const r of rows) {
+    const name = `Fabric inward ${label(r.inwardNo)}`;
+    if (!r.isApproved) throw AppError.rule('INWARD_NOT_APPROVED', `${name} is not approved in the store yet`);
+    if (r.vendorId !== vendorId) throw AppError.rule('INWARD_OTHER_VENDOR', `${name} belongs to another vendor; one invoice is for one vendor`);
+    if (r.invoiceId && r.invoiceId !== invoiceId) throw AppError.rule('INWARD_TAKEN', `${name} is already on purchase invoice ${label(r.invoiceVoucherNo)}`);
+    if (!(r.amount > 0)) throw AppError.rule('NO_AMOUNT', `${name} has no amount (no rate), so there is nothing to bill`);
+  }
+  return rows.sort((a, b) => a.inwardNo - b.inwardNo).map((r) => ({ ...r, salesTax: 0 }));
+}
+
+async function writeFabricLines(invoiceId, companyId, lines, transaction) {
+  await sequelize.query('DELETE FROM purchase_invoice_fabric_inwards WHERE "invoiceId" = :invoiceId', { replacements: { invoiceId }, transaction });
+  let lineNo = 0;
+  for (const l of lines) {
+    lineNo += 1;
+    await sequelize.query('INSERT INTO purchase_invoice_fabric_inwards ("invoiceId", "companyId", "lineNo", "inwardId", amount, "salesTax") VALUES (:invoiceId, :companyId, :lineNo, :inwardId, :amount, :salesTax)',
+      { replacements: { invoiceId, companyId, lineNo, inwardId: l.inwardId, amount: l.amount, salesTax: l.salesTax }, transaction });
+  }
+}
+
+// the four kinds of purchase invoice: STORE (store inwards), YARN (weaving yarn inward entries), SIZING (weaving sizing receipts), FABRIC (store fabric inwards: cloth bought from a vendor)
+const KIND_OF = (d) => (d.yarnInwardIds ? 'YARN' : d.sizingInwardIds ? 'SIZING' : d.fabricInwardIds ? 'FABRIC' : 'STORE');
+const IDS_KEY = { STORE: 'inwardIds', YARN: 'yarnInwardIds', SIZING: 'sizingInwardIds', FABRIC: 'fabricInwardIds' };
+const KIND_TEXT = { STORE: 'Store', YARN: 'Yarn', SIZING: 'Sizing', FABRIC: 'Fabric' };
+const NARRATION = { STORE: 'Purchase invoice', YARN: 'Yarn purchase invoice', SIZING: 'Sizing purchase invoice', FABRIC: 'Fabric purchase invoice' };
+const EXPENSE_ROLE = { STORE: 'PURCHASES', YARN: 'PURCHASES', SIZING: 'SIZING_CHARGES', FABRIC: 'PURCHASES' }; // the account the invoice debits
+const STORED_IDS_SQL = {
+  STORE: 'SELECT "inwardId" FROM purchase_invoice_lines WHERE "invoiceId" = :id',
+  YARN: 'SELECT "inwardId" FROM purchase_invoice_yarn_inwards WHERE "invoiceId" = :id',
+  SIZING: 'SELECT "inwardId" FROM purchase_invoice_sizing_inwards WHERE "invoiceId" = :id',
+  FABRIC: 'SELECT "inwardId" FROM purchase_invoice_fabric_inwards WHERE "invoiceId" = :id',
+};
+const buildFor = (kind, ...a) => ({ STORE: buildLines, YARN: buildYarn, SIZING: buildSizing, FABRIC: buildFabric })[kind](...a);
+const writeFor = (kind, ...a) => ({ STORE: writeLines, YARN: writeYarnLines, SIZING: writeSizingLines, FABRIC: writeFabricLines })[kind](...a);
+
 /**
  * The tax of the lines (owner 2026-10-28): the sales tax is chosen on the invoice (taxRate %). It is worked out on every purchase that carries no tax of its own
  * (every new store inward); an older inward that still has its own GST keeps it, so a purchase is never taxed twice.
@@ -95,16 +256,16 @@ async function writeLines(invoiceId, companyId, lines, transaction) {
   }
 }
 
-const COLS = `p.id, p."voucherNo", p."billNo", to_char(p."invoiceDate", 'YYYY-MM-DD') AS "invoiceDate", to_char(p."dueDate", 'YYYY-MM-DD') AS "storedDue",
+const COLS = `p.id, p.kind, p."voucherNo", p."billNo", to_char(p."invoiceDate", 'YYYY-MM-DD') AS "invoiceDate", to_char(p."dueDate", 'YYYY-MM-DD') AS "storedDue",
   to_char(COALESCE(p."dueDate", p."invoiceDate" + v."creditDays"), 'YYYY-MM-DD') AS "dueDate", p.notes, p."billDetails",
   p."taxRate"::float AS "taxRate", p."othersAmount"::float AS others, p."othersNote", p."grossAmount"::float AS gross, p."taxAmount"::float AS tax, p."netAmount"::float AS net, p."paidAmount"::float AS paid, p.status, p."approvedAt", p."createdAt", p."updatedAt",
   v.id AS "vendorId", v.code AS "vendorCode", v.name AS "vendorName", v.ntn AS "vendorNtn", v.address AS "vendorAddress", v.city AS "vendorCity",
-  (SELECT count(*)::int FROM purchase_invoice_lines l WHERE l."invoiceId" = p.id) AS "inwardCount", ab.name AS "approvedByName"`;
+  ((SELECT count(*) FROM purchase_invoice_lines l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_fabric_inwards l WHERE l."invoiceId" = p.id))::int AS "inwardCount", ab.name AS "approvedByName"`;
 const FROM = `FROM purchase_invoices p JOIN vendors v ON v.id = p."vendorId" LEFT JOIN users ab ON ab.id = p."approvedById"`;
 
 function invoiceJson(r) {
   return {
-    id: r.id, voucherNo: r.voucherNo, voucherLabel: label(r.voucherNo), billNo: r.billNo, invoiceDate: r.invoiceDate, dueDate: r.dueDate,
+    id: r.id, kind: r.kind, kindText: KIND_TEXT[r.kind], voucherNo: r.voucherNo, voucherLabel: label(r.voucherNo), billNo: r.billNo, invoiceDate: r.invoiceDate, dueDate: r.dueDate,
     isOverdue: r.status === 'APPROVED' && r.net - r.paid > 0 && r.dueDate < today(),
     vendor: { id: r.vendorId, code: r.vendorCode, name: r.vendorName, ntn: r.vendorNtn, address: r.vendorAddress, city: r.vendorCity },
     notes: r.notes, billDetails: r.billDetails, inwardCount: r.inwardCount,
@@ -125,13 +286,30 @@ async function load(req, id, transaction, lock = false) {
 async function get(req, id, transaction) {
   const inv = invoiceJson(await load(req, id, transaction));
   inv.creditWarning = await credit.warning(req, 'VENDOR', inv.vendor.id, { status: inv.status, net: inv.net }, transaction); // we owe the vendor more than his credit limit, or null
-  const stored = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_lines WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
-  const live = stored.length ? await q(`${INWARD_SQL} AND i.id IN (:ids)`, { companyId: req.user.companyId, ids: stored.map((s) => s.inwardId) }, transaction) : [];
-  inv.lines = stored.map((s) => {
-    const r = live.find((x) => x.inwardId === s.inwardId) || {};
-    // the amounts are the ones saved on the invoice; the descriptions come from the store entry
-    return { lineNo: s.lineNo, ...inwardLine({ ...r, amount: s.amount, salesTax: s.salesTax }) };
-  });
+  if (inv.kind === 'YARN') {
+    // the lines of a yarn invoice are yarn inward entries: the amounts are the ones saved on the invoice, the descriptions come from the entry
+    const yarn = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_yarn_inwards WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    const live = yarn.length ? await q(`${YARN_SQL} AND y.id IN (:ids)`, { companyId: req.user.companyId, ids: yarn.map((s) => s.inwardId) }, transaction) : [];
+    inv.lines = yarn.map((s) => ({ lineNo: s.lineNo, ...yarnLine({ ...(live.find((x) => x.inwardId === s.inwardId) || {}), amount: s.amount, salesTax: s.salesTax }) }));
+  } else if (inv.kind === 'FABRIC') {
+    // the lines of a fabric invoice are store fabric inwards: the amounts are the ones saved on the invoice
+    const fb = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_fabric_inwards WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    const live = fb.length ? await q(`${FABRIC_SQL} AND f.id IN (:ids)`, { companyId: req.user.companyId, ids: fb.map((s) => s.inwardId) }, transaction) : [];
+    inv.lines = fb.map((s) => ({ lineNo: s.lineNo, ...fabricLine({ ...(live.find((x) => x.inwardId === s.inwardId) || {}), amount: s.amount, salesTax: s.salesTax }) }));
+  } else if (inv.kind === 'SIZING') {
+    // the lines of a sizing invoice are sizing receipts: the amounts are the ones saved on the invoice
+    const sz = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_sizing_inwards WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    const live = sz.length ? await q(`${SIZING_SQL} AND s.id IN (:ids)`, { companyId: req.user.companyId, ids: sz.map((s) => s.inwardId) }, transaction) : [];
+    inv.lines = sz.map((s) => ({ lineNo: s.lineNo, ...sizingLine({ ...(live.find((x) => x.inwardId === s.inwardId) || {}), amount: s.amount, salesTax: s.salesTax }) }));
+  } else {
+    const stored = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_lines WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    const live = stored.length ? await q(`${INWARD_SQL} AND i.id IN (:ids)`, { companyId: req.user.companyId, ids: stored.map((s) => s.inwardId) }, transaction) : [];
+    inv.lines = stored.map((s) => {
+      const r = live.find((x) => x.inwardId === s.inwardId) || {};
+      // the amounts are the ones saved on the invoice; the descriptions come from the store entry
+      return { lineNo: s.lineNo, ...inwardLine({ ...r, amount: s.amount, salesTax: s.salesTax }) };
+    });
+  }
   // the money paid against the invoice: the confirmed payment vouchers (the "Payments" tab)
   inv.payments = (await q(`SELECT pv.id AS "voucherId", pv."voucherNo", to_char(pv."voucherDate", 'YYYY-MM-DD') AS "voucherDate", pv."paymentMode", pv."chequeNo", l.amount::float AS amount
     FROM payment_voucher_lines l JOIN payment_vouchers pv ON pv.id = l."voucherId" WHERE l."purchaseInvoiceId" = :id AND pv.status = 'CONFIRMED' ORDER BY pv."voucherDate", pv."voucherNo"`, { id }, transaction))
@@ -148,10 +326,11 @@ function options() {
   return { statuses: Object.entries(STATUS_TEXT).map(([code, text]) => ({ code, text })), stores: Object.entries(STORE_TEXT).map(([code, text]) => ({ code, text })), taxRates: [0, 5, 10, 15, 17, 18], defaultTaxRate: 0 };
 }
 
-async function list(req, { page, limit, status, dateFrom, dateTo, vendorId, search }) {
+async function list(req, { page, limit, status, kind, dateFrom, dateTo, vendorId, search }) {
   const where = ['p."companyId" = :companyId'];
   const r = { companyId: req.user.companyId };
   if (status) { where.push('p.status = :status'); r.status = status; }
+  if (kind) { where.push('p.kind = :kind'); r.kind = kind; }
   if (dateFrom) { where.push('p."invoiceDate" >= :dateFrom'); r.dateFrom = dateFrom; }
   if (dateTo) { where.push('p."invoiceDate" <= :dateTo'); r.dateTo = dateTo; }
   if (vendorId) { where.push('p."vendorId" = :vendorId'); r.vendorId = vendorId; }
@@ -192,7 +371,8 @@ async function create(req, data) {
     await lockPurchases(companyId, transaction);
     await vendorOr404(req, data.vendorId, transaction);
     const taxRate = data.taxRate ?? 0;
-    const lines = priced(await buildLines(req, data.vendorId, data.inwardIds, null, transaction), taxRate);
+    const kind = KIND_OF(data); // STORE: store inwards, YARN: weaving yarn inward entries, SIZING: weaving sizing receipts
+    const lines = priced(await buildFor(kind, req, data.vendorId, data[IDS_KEY[kind]], null, transaction), taxRate);
     const totals = totalsOf(lines, data.othersAmount);
     const billNo = data.billNo ? data.billNo.trim() : null;
     await checkBillNo(companyId, data.vendorId, billNo, null, transaction);
@@ -201,13 +381,13 @@ async function create(req, data) {
     if (dueDate && dueDate < invoiceDate) throw AppError.rule('DUE_BEFORE_DATE', 'The due date cannot be before the invoice date');
     const voucherNo = await nextVoucherNo(companyId, transaction);
     // the three default accounts exist from the first invoice on (found if the company has them, made if not); a draft posts nothing to them
-    await accounts.ensureDefault(req, 'PURCHASES', transaction);
+    await accounts.ensureDefault(req, EXPENSE_ROLE[kind], transaction);
     await accounts.ensureDefault(req, 'INPUT_TAX', transaction);
     await accounts.ensureDefault(req, 'SUPPLIERS', transaction);
-    const [{ id: newId }] = await q(`INSERT INTO purchase_invoices ("companyId", "voucherNo", "invoiceDate", "dueDate", "vendorId", "billNo", notes, "billDetails", "taxRate", "othersAmount", "othersNote", "grossAmount", "taxAmount", "netAmount", "createdById", "updatedById")
-      VALUES (:companyId, :voucherNo, :invoiceDate, :dueDate, :vendorId, :billNo, :notes, :billDetails, :taxRate, :others, :othersNote, :gross, :tax, :net, :userId, :userId) RETURNING id`,
-    { companyId, voucherNo, invoiceDate, dueDate, vendorId: data.vendorId, billNo, notes: data.notes || null, billDetails: data.billDetails || null, taxRate, othersNote: data.othersNote || null, ...totals, userId: req.user.id }, transaction);
-    await writeLines(newId, companyId, lines, transaction);
+    const [{ id: newId }] = await q(`INSERT INTO purchase_invoices ("companyId", kind, "voucherNo", "invoiceDate", "dueDate", "vendorId", "billNo", notes, "billDetails", "taxRate", "othersAmount", "othersNote", "grossAmount", "taxAmount", "netAmount", "createdById", "updatedById")
+      VALUES (:companyId, :kind, :voucherNo, :invoiceDate, :dueDate, :vendorId, :billNo, :notes, :billDetails, :taxRate, :others, :othersNote, :gross, :tax, :net, :userId, :userId) RETURNING id`,
+    { companyId, kind, voucherNo, invoiceDate, dueDate, vendorId: data.vendorId, billNo, notes: data.notes || null, billDetails: data.billDetails || null, taxRate, othersNote: data.othersNote || null, ...totals, userId: req.user.id }, transaction);
+    await writeFor(kind, newId, companyId, lines, transaction);
     await audit.log(req, { action: 'PURCHASE_INVOICE_CREATED', entityType: 'PurchaseInvoice', entityId: newId, after: { voucherNo, billNo, vendorId: data.vendorId, inwards: lines.length, ...totals } }, { transaction });
     return newId;
   });
@@ -220,14 +400,17 @@ async function update(req, id, changes) {
     await lockPurchases(companyId, transaction);
     const cur = await load(req, id, transaction, true);
     if (cur.status === 'APPROVED') throw AppError.rule('INVOICE_APPROVED', 'An approved invoice cannot be changed. Un-approve it first');
+    const kind = cur.kind;
+    if (['STORE', 'YARN', 'SIZING', 'FABRIC'].some((k) => k !== kind && changes[IDS_KEY[k]])) throw AppError.rule('WRONG_INVOICE_KIND', `This is a ${KIND_TEXT[kind].toLowerCase()} invoice: it is made of ${{ STORE: 'store purchases', YARN: 'yarn inward entries', SIZING: 'sizing receipts', FABRIC: 'fabric inwards' }[kind]}, not of the other kind`);
     const vendorId = changes.vendorId ?? cur.vendorId;
+    const newIds = changes[IDS_KEY[kind]];
     if (changes.vendorId && changes.vendorId !== cur.vendorId) {
       await vendorOr404(req, vendorId, transaction);
-      if (!changes.inwardIds) throw AppError.rule('INWARDS_REQUIRED', 'The vendor changed: choose the purchases of the new vendor');
+      if (!newIds) throw AppError.rule('INWARDS_REQUIRED', 'The vendor changed: choose the purchases of the new vendor');
     }
-    const ids = changes.inwardIds || (await q('SELECT "inwardId" FROM purchase_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.inwardId);
+    const ids = newIds || (await q(STORED_IDS_SQL[kind], { id }, transaction)).map((l) => l.inwardId);
     const taxRate = changes.taxRate ?? cur.taxRate;
-    const lines = priced(await buildLines(req, vendorId, ids, id, transaction), taxRate);
+    const lines = priced(await buildFor(kind, req, vendorId, ids, id, transaction), taxRate);
     const totals = totalsOf(lines, changes.othersAmount ?? cur.others);
     const pick = (k, old) => (changes[k] === undefined ? old : changes[k] || null);
     const billNo = changes.billNo === undefined ? cur.billNo : (changes.billNo ? changes.billNo.trim() : null);
@@ -237,7 +420,7 @@ async function update(req, id, changes) {
     const redo = changes.dueDate === undefined ? Boolean(changes.invoiceDate || changes.vendorId) : !changes.dueDate;
     const dueDate = changes.dueDate || (redo ? await credit.defaultDueDate(companyId, 'VENDOR', vendorId, invoiceDate, transaction) : cur.storedDue);
     if (dueDate && dueDate < invoiceDate) throw AppError.rule('DUE_BEFORE_DATE', 'The due date cannot be before the invoice date');
-    await writeLines(id, companyId, lines, transaction);
+    await writeFor(kind, id, companyId, lines, transaction);
     await sequelize.query(`UPDATE purchase_invoices SET "vendorId" = :vendorId, "billNo" = :billNo, "invoiceDate" = :invoiceDate, "dueDate" = :dueDate, notes = :notes, "billDetails" = :billDetails, "taxRate" = :taxRate, "othersAmount" = :others, "othersNote" = :othersNote,
         "grossAmount" = :gross, "taxAmount" = :tax, "netAmount" = :net, "updatedById" = :userId, "updatedAt" = now() WHERE id = :id`,
     { replacements: { id, vendorId, billNo, invoiceDate, dueDate, notes: pick('notes', cur.notes), billDetails: pick('billDetails', cur.billDetails), taxRate, othersNote: pick('othersNote', cur.othersNote), ...totals, userId: req.user.id }, transaction });
@@ -263,17 +446,18 @@ async function approve(req, id) {
     await lockPurchases(companyId, transaction);
     const cur = await load(req, id, transaction, true);
     if (cur.status === 'APPROVED') throw AppError.rule('ALREADY_APPROVED', 'This invoice is already approved');
-    const ids = (await q('SELECT "inwardId" FROM purchase_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.inwardId);
+    const kind = cur.kind;
+    const ids = (await q(STORED_IDS_SQL[kind], { id }, transaction)).map((l) => l.inwardId);
     if (!ids.length) throw AppError.rule('NO_LINES', 'The invoice has no purchases');
-    const lines = priced(await buildLines(req, cur.vendorId, ids, id, transaction), cur.taxRate);
+    const lines = priced(await buildFor(kind, req, cur.vendorId, ids, id, transaction), cur.taxRate);
     const totals = totalsOf(lines, cur.others);
     if (!(totals.net > 0)) throw AppError.rule('NOTHING_TO_BILL', 'The invoice amount is zero');
-    await writeLines(id, companyId, lines, transaction);
+    await writeFor(kind, id, companyId, lines, transaction);
 
-    const purchases = await accounts.ensureDefault(req, 'PURCHASES', transaction);
+    const purchases = await accounts.ensureDefault(req, EXPENSE_ROLE[kind], transaction);
     const payable = await accounts.ensureDefault(req, 'SUPPLIERS', transaction);
     const taxAccount = totals.tax > 0 ? await accounts.ensureDefault(req, 'INPUT_TAX', transaction) : null;
-    const narration = `Purchase invoice ${label(cur.voucherNo)} - ${cur.vendorName}${cur.billNo ? ` (bill ${cur.billNo})` : ''}`;
+    const narration = `${NARRATION[kind]} ${label(cur.voucherNo)} - ${cur.vendorName}${cur.billNo ? ` (bill ${cur.billNo})` : ''}`;
     const entry = await journal.post(req, {
       entryDate: cur.invoiceDate, sourceType: SOURCE, sourceId: id, narration,
       lines: [
@@ -318,4 +502,4 @@ async function accountsEntry(req, id) {
 
 const creditOf = (req, vendorId) => credit.publicStatus(req, 'VENDOR', vendorId);
 
-module.exports = { creditOf, options, inwards, list, get, create, update, remove, approve, unapprove, accountsEntry };
+module.exports = { creditOf, options, inwards, yarnInwards, sizingInwards, fabricInwards, list, get, create, update, remove, approve, unapprove, accountsEntry };

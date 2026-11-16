@@ -34,7 +34,7 @@ const full = storeAccess('FULL');
 /** Vendors: anyone with either store. */
 const eitherStore = (level) => async (req, res, next) => {
   const tryOne = (code) => new Promise((resolve) => requireService(code, level)(req, res, (err) => resolve(!err)));
-  if ((await tryOne('CHEMICAL_STORE')) || (await tryOne('GENERAL_STORE'))) return next();
+  if ((await tryOne('CHEMICAL_STORE')) || (await tryOne('GENERAL_STORE')) || (await tryOne('FABRIC_STORE'))) return next(); // the Fabric Store buys cloth from the same vendors
   return next(AppError.forbidden('You do not have a store service'));
 };
 

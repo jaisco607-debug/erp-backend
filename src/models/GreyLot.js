@@ -38,6 +38,9 @@ function init(sequelize) {
       partyRef: { type: DataTypes.STRING(80), allowNull: true },
       vehicleNo: { type: DataTypes.STRING(30), allowNull: true },
       remarks: { type: DataTypes.STRING(500), allowNull: true },
+      // CUSTOMER: cloth the customer gave (grey inward); STORE: cloth from the Fabric Store (made by a fabric issue, see migration 20261216000001)
+      source: { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'CUSTOMER' },
+      fabricIssueId: { type: DataTypes.UUID, allowNull: true },
       isReprocess: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       reprocessOfLotId: { type: DataTypes.UUID, allowNull: true },
       isApproved: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },

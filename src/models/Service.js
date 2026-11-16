@@ -4,7 +4,7 @@ const { nameOf } = require('../utils/companyNames');
 
 const SERVICE_KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
 // the tab of the client's menu a service belongs to (shown grouped on the super admin screen)
-const MENU_GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL'];
+const MENU_GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL', 'WEAVING'];
 
 class Service extends Model {}
 

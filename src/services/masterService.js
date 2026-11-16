@@ -8,10 +8,19 @@ const audit = require('./auditService');
 const CUSTOMER_FIELDS = ['legalName', 'status', 'type', 'payment', 'cnic', 'ntn', 'gstNo', 'email', 'city', 'province', 'bankName', 'bankBranch', 'accountTitle', 'accountNo', 'iban'];
 const CREDIT_FIELDS = ['creditLimit', 'creditDays']; // credit terms: a limit (empty = none) and days
 const customerJSON = (c) => ({
-  id: c.id, code: c.code, name: c.name, phone: c.phone, address: c.address, isActive: c.isActive, creditLimit: c.creditLimit == null ? null : Number(c.creditLimit), creditDays: c.creditDays ?? 0,
+  id: c.id, code: c.code, module: c.module, moduleText: c.module === 'WEAVING' ? 'Weaving' : 'Processing', name: c.name, phone: c.phone, address: c.address, isActive: c.isActive, creditLimit: c.creditLimit == null ? null : Number(c.creditLimit), creditDays: c.creditDays ?? 0,
   ...Object.fromEntries(CUSTOMER_FIELDS.map((f) => [f, c[f] ?? null])),
 });
 const qualityJSON = (q) => ({ id: q.id, name: q.name, isActive: q.isActive });
+
+// Customers (and vendors) belong to a module list: the main modules (Grey Store, stores, accounts) use MAIN, the Weaving module keeps its own WEAVING list in the same tables.
+// The weaving routes set req.partyModule = 'WEAVING'; everything else is MAIN. Quality and Colour have no such split.
+// A read of the old route may ask for ?module=ALL (both lists: the accounts screens) or ?module=WEAVING; the default is MAIN. Only a read: nothing is written to a list it did not choose.
+const moduleOf = (kind, req) => {
+  if (kind !== 'customer') return {};
+  const m = req.partyModule || (req.method === 'GET' && req.query && ['ALL', 'WEAVING'].includes(String(req.query.module).toUpperCase()) ? String(req.query.module).toUpperCase() : 'MAIN');
+  return m === 'ALL' ? {} : { module: m };
+};
 
 const KINDS = {
   customer: { Model: Customer, json: customerJSON, entity: 'Customer', label: 'Customer', fields: ['name', 'phone', 'address', 'isActive', ...CUSTOMER_FIELDS, ...CREDIT_FIELDS] },
@@ -21,21 +30,21 @@ const KINDS = {
 
 async function findOr404(kind, req, id, transaction) {
   const { Model, label } = KINDS[kind];
-  const row = await Model.findOne({ where: { id, companyId: req.user.companyId }, transaction, lock: transaction ? transaction.LOCK.UPDATE : undefined });
+  const row = await Model.findOne({ where: { id, companyId: req.user.companyId, ...moduleOf(kind, req) }, transaction, lock: transaction ? transaction.LOCK.UPDATE : undefined });
   if (!row) throw AppError.notFound(label);
   return row;
 }
 
 async function nameTaken(kind, req, name, exceptId, transaction) {
   const { Model } = KINDS[kind];
-  const where = { companyId: req.user.companyId, [Op.and]: [sequelize.where(sequelize.fn('lower', sequelize.col('name')), name.toLowerCase())] };
+  const where = { companyId: req.user.companyId, ...moduleOf(kind, req), [Op.and]: [sequelize.where(sequelize.fn('lower', sequelize.col('name')), name.toLowerCase())] };
   if (exceptId) where.id = { [Op.ne]: exceptId };
   return Boolean(await Model.findOne({ where, transaction }));
 }
 
 async function list(kind, req, { page, limit, search, isActive }) {
   const { Model, json } = KINDS[kind];
-  const where = { companyId: req.user.companyId };
+  const where = { companyId: req.user.companyId, ...moduleOf(kind, req) };
   if (isActive !== undefined) where.isActive = isActive;
   if (search) {
     const or = [{ name: { [Op.iLike]: `%${search}%` } }];
@@ -57,16 +66,16 @@ async function create(kind, req, data) {
     if (await nameTaken(kind, req, data.name, null, transaction)) {
       throw AppError.rule('NAME_TAKEN', `"${data.name}" already exists`);
     }
-    const fields = { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === '' ? null : v])), companyId: req.user.companyId, createdById: req.user.id };
+    const fields = { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === '' ? null : v])), companyId: req.user.companyId, ...moduleOf(kind, req), createdById: req.user.id };
     if (kind === 'customer') {
       // Code: typed (to keep the numbers of the old system) or the next free one.
       await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`customer-code:${req.user.companyId}`], transaction });
       if (fields.code) {
-        if (await Customer.findOne({ where: { companyId: req.user.companyId, code: fields.code }, transaction })) {
+        if (await Customer.findOne({ where: { companyId: req.user.companyId, ...moduleOf(kind, req), code: fields.code }, transaction })) {
           throw AppError.rule('CODE_TAKEN', `Customer code ${fields.code} already exists`);
         }
       } else {
-        fields.code = ((await Customer.max('code', { where: { companyId: req.user.companyId }, paranoid: false, transaction })) || 0) + 1;
+        fields.code = ((await Customer.max('code', { where: { companyId: req.user.companyId, ...moduleOf(kind, req) }, paranoid: false, transaction })) || 0) + 1;
       }
     }
     const row = await Model.create(fields, { transaction });

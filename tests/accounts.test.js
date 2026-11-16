@@ -183,7 +183,7 @@ test('list, search and tree come out in code order', async () => {
   // one definition of the expense ranges
   expect(opts.topCodes).toEqual({ ASSET: 1000, LIABILITY: 2000, EQUITY: 3000, INCOME: 4000, COST_OF_SALES: 5000, OPERATING_EXPENSE: 6000 });
   expect(opts.expenseRanges).toMatchObject({ costOfGoodsSold: { code: '5000', accountType: 'EXPENSE', subType: 'COST_OF_SALES' }, operatingExpenses: { code: '6000', accountType: 'EXPENSE', subType: 'OPERATING_EXPENSE' } });
-  expect(opts.systemKeys.map((k) => k.key).sort()).toEqual(['AP_CONTROL', 'AR_CONTROL', 'CURRENT_YEAR_EARNINGS', 'CUSTOMER_ADVANCES', 'DEFAULT_PURCHASES', 'DEFAULT_SALES', 'EMPLOYEE_ADVANCES', 'EMPLOYEE_DEDUCTIONS', 'EMPLOYEE_LOANS', 'EOBI_EMPLOYER_EXPENSE', 'EOBI_PAYABLE', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'INPUT_TAX', 'OPENING_BALANCE_EQUITY', 'OUTPUT_TAX', 'RETAINED_EARNINGS', 'ROUNDING', 'SALARIES_PAYABLE', 'SALARY_EXPENSE', 'SALARY_TAX_PAYABLE', 'SUPPLIER_ADVANCES']);
+  expect(opts.systemKeys.map((k) => k.key).sort()).toEqual(['AP_CONTROL', 'AR_CONTROL', 'CURRENT_YEAR_EARNINGS', 'CUSTOMER_ADVANCES', 'DEFAULT_PURCHASES', 'DEFAULT_SALES', 'EMPLOYEE_ADVANCES', 'EMPLOYEE_DEDUCTIONS', 'EMPLOYEE_LOANS', 'EOBI_EMPLOYER_EXPENSE', 'EOBI_PAYABLE', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'INPUT_TAX', 'OPENING_BALANCE_EQUITY', 'OUTPUT_TAX', 'RETAINED_EARNINGS', 'ROUNDING', 'SALARIES_PAYABLE', 'SALARY_EXPENSE', 'SALARY_TAX_PAYABLE', 'SIZING_CHARGES', 'SUPPLIER_ADVANCES']);
 });
 
 test('access: needs the service; VIEW only reads; another company sees nothing and may use the same codes', async () => {

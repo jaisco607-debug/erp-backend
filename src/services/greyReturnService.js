@@ -76,7 +76,7 @@ async function get(req, id) {
 
 /** The lot / thaan picker for a new fabric return (the same lots an SO card can take from), and the number it will get (FR-n). */
 async function availableLots(req, query) {
-  return { ...(await soCards.availableLots(req, query)), ...(await soCards.nextFabricReturnNo(req)) };
+  return { ...(await soCards.availableLots(req, { ...query, source: 'CUSTOMER' })), ...(await soCards.nextFabricReturnNo(req)) };
 }
 
 module.exports = { fabricReturn, list, get, availableLots };

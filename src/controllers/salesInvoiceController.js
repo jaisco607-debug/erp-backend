@@ -3,6 +3,7 @@ const salesInvoiceService = require('../services/salesInvoiceService');
 exports.options = async (req, res) => res.json(salesInvoiceService.options());
 exports.credit = async (req, res) => res.json(await salesInvoiceService.creditOf(req, req.params.id));
 exports.gatePasses = async (req, res) => res.json(await salesInvoiceService.gatePasses(req, req.validatedQuery));
+exports.yarnSales = async (req, res) => res.json(await salesInvoiceService.yarnSales(req, req.validatedQuery));
 exports.list = async (req, res) => res.json(await salesInvoiceService.list(req, req.validatedQuery));
 exports.get = async (req, res) => res.json(await salesInvoiceService.get(req, req.params.id));
 exports.create = async (req, res) => res.status(201).json(await salesInvoiceService.create(req, req.body));

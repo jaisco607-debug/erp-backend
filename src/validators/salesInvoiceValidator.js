@@ -23,12 +23,13 @@ const fields = {
   othersNote: text(300), // what the others amount is for
 };
 const gatePassIds = Joi.array().items(id).min(1).max(200);
+const yarnSaleIds = Joi.array().items(id).min(1).max(200); // a YARN invoice is made of yarn sales (weaving) instead of gate passes
 
 module.exports = {
   list: {
     query: Joi.object({
       ...paging, limit: Joi.number().integer().min(1).max(500).default(50),
-      status: Joi.string().valid('APPROVED', 'UNAPPROVED'), dateFrom: date, dateTo: date, customerId: id, search: Joi.string().trim().max(100),
+      status: Joi.string().valid('APPROVED', 'UNAPPROVED'), kind: Joi.string().uppercase().valid('CLOTH', 'YARN'), dateFrom: date, dateTo: date, customerId: id, search: Joi.string().trim().max(100),
     }),
   },
   gatePasses: {
@@ -37,8 +38,11 @@ module.exports = {
       limit: Joi.number().integer().min(1).max(500).default(200),
     }),
   },
+  yarnSales: {
+    query: Joi.object({ customerId: id.required(), search: Joi.string().trim().max(100), invoiceId: id, limit: Joi.number().integer().min(1).max(500).default(200) }),
+  },
   get: { params: uuidParam },
-  create: { body: Joi.object({ customerId: id.required(), gatePassIds: gatePassIds.required(), ...fields }) },
-  update: { params: uuidParam, body: Joi.object({ customerId: id, gatePassIds, ...fields }).min(1) },
+  create: { body: Joi.object({ customerId: id.required(), gatePassIds, yarnSaleIds, ...fields }).xor('gatePassIds', 'yarnSaleIds') },
+  update: { params: uuidParam, body: Joi.object({ customerId: id, gatePassIds, yarnSaleIds, ...fields }).oxor('gatePassIds', 'yarnSaleIds').min(1) },
   unapprove: { params: uuidParam, body: Joi.object({ reason: Joi.string().trim().max(200) }) },
 };

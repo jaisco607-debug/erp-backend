@@ -1054,7 +1054,11 @@ async function returnToSoCard(req, departmentId, { jobId, jobItemIds, soCardIds,
     // a card whose cloth is all back at the SO card desk is "not sent" again
     for (const cardId of cardIds) {
       const [still] = await sequelize.query(`SELECT 1 FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardId" = :cardId AND j.status <> 'REJECTED' LIMIT 1`, { replacements: { cardId }, type: QueryTypes.SELECT, transaction });
-      if (!still) await SoCard.update({ status: 'NEW', currentDepartmentId: null }, { where: { id: cardId, status: 'SENT' }, transaction });
+      if (!still) {
+        await SoCard.update({ status: 'NEW', currentDepartmentId: null }, { where: { id: cardId, status: 'SENT' }, transaction });
+        // the card is back at the SO card desk: the move that took it to the department is cancelled (kept in the history), or the card could never be sent again
+        await sequelize.query('UPDATE so_card_moves SET "cancelledAt" = now() WHERE "soCardId" = :cardId AND "acceptedAt" IS NULL AND "cancelledAt" IS NULL', { replacements: { cardId }, transaction });
+      }
     }
     const cards = await SoCard.findAll({ where: { id: [...cardIds] }, attributes: ['id', 'cardNo', 'isGreyReturn', 'status'], transaction });
     return {

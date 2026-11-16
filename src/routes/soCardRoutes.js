@@ -28,7 +28,7 @@ router.post('/', full, validate(v.create), c.create);
 router.get('/:id/edit-data', view, validate(v.get), c.editData);
 router.get('/:id', view, validate(v.get), c.get);
 router.patch('/:id', full, validate(v.update), c.update);
-router.delete('/:id', full, validate(v.get), c.cancel);
+router.delete('/:id', full, validate(v.cancel), c.cancel);
 router.put('/:id/confirm', full, validate(v.confirm), c.setConfirmed);
 router.post('/:id/send', full, validate(v.send), c.send);
 // send the whole card, or only some of its parts (sub-categories), to a department: as jobs

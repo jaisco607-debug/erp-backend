@@ -15,6 +15,7 @@ router.use(authenticate);
 router.get('/options', view, c.options);
 router.get('/credit/:id', view, validate(v.get), c.credit);
 router.get('/gate-passes', view, validate(v.gatePasses), c.gatePasses);
+router.get('/yarn-sales', view, validate(v.yarnSales), c.yarnSales); // the weaving yarn sales of a customer that can go on a yarn invoice
 router.get('/', view, validate(v.list), c.list);
 router.post('/', full, validate(v.create), c.create);
 router.get('/:id', view, validate(v.get), c.get);

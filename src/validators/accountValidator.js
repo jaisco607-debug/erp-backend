@@ -2,7 +2,7 @@ const { Joi, uuidParam, paging } = require('./common');
 const { ACCOUNT_TYPES, SUB_TYPES, CONTROL_TYPES } = require('../models/Account');
 const { PRESETS, TEMPLATES } = require('../services/accountCatalog');
 
-const DEFAULT_KEYS = ['SALES', 'OUTPUT_TAX', 'CUSTOMERS', 'PURCHASES', 'INPUT_TAX', 'SUPPLIERS', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'CUSTOMER_ADVANCES', 'SUPPLIER_ADVANCES', 'EMPLOYEE_LOANS', 'EMPLOYEE_ADVANCES', 'SALARY_EXPENSE', 'SALARIES_PAYABLE', 'EOBI_PAYABLE', 'SALARY_TAX_PAYABLE', 'EMPLOYEE_DEDUCTIONS', 'EOBI_EMPLOYER_EXPENSE'];
+const DEFAULT_KEYS = ['SALES', 'OUTPUT_TAX', 'CUSTOMERS', 'PURCHASES', 'SIZING_CHARGES', 'INPUT_TAX', 'SUPPLIERS', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'CUSTOMER_ADVANCES', 'SUPPLIER_ADVANCES', 'EMPLOYEE_LOANS', 'EMPLOYEE_ADVANCES', 'SALARY_EXPENSE', 'SALARIES_PAYABLE', 'EOBI_PAYABLE', 'SALARY_TAX_PAYABLE', 'EMPLOYEE_DEDUCTIONS', 'EOBI_EMPLOYER_EXPENSE'];
 const ALL_SUB_TYPES = [...new Set(Object.values(SUB_TYPES).flat())];
 // a code is letters, digits and . _ - (for example 1100 or 1100-01); stored in capitals
 const code = Joi.string().trim().min(1).max(20).pattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/).messages({ 'string.pattern.base': 'code may contain letters, digits and . _ - only' });

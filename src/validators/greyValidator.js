@@ -14,7 +14,7 @@ const CUSTOMER_TYPES = ['CUSTOMERS'];
 const customerFields = { ...vendorFields, type: Joi.string().valid(...CUSTOMER_TYPES) };
 
 const master = {
-  list: { query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean() }) },
+  list: { query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(100), isActive: Joi.boolean(), module: Joi.string().uppercase().valid('MAIN', 'WEAVING', 'ALL') }) },
   get: { params: uuidParam },
 };
 
@@ -78,6 +78,7 @@ module.exports = {
         isActive: Joi.boolean(),
         isApproved: Joi.boolean(),
         isReprocess: Joi.boolean(),
+        source: Joi.string().uppercase().valid('CUSTOMER', 'STORE'),
         dateFrom: date,
         dateTo: date,
       }),

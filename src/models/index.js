@@ -10,8 +10,16 @@ const PlatformModel = require('./Platform');
 const UserServiceModel = require('./UserService');
 const CustomerModel = require('./Customer');
 const QualityModel = require('./Quality');
+const YarnCountModel = require('./YarnCount');
+const YarnBrandModel = require('./YarnBrand');
+const YarnItemModel = require('./YarnItem');
+const YarnInwardModel = require('./YarnInward');
+const YarnOutwardModel = require('./YarnOutward');
+const YarnBeamModel = require('./YarnBeam');
+const YarnSizingInwardModel = require('./YarnSizingInward');
 const CompanyCounterModel = require('./CompanyCounter');
 const GreyLotModel = require('./GreyLot');
+const FabricInwardModel = require('./FabricInward');
 const SoCardModel = require('./SoCard');
 const SoCardLotModel = require('./SoCardLot');
 const SoCardMoveModel = require('./SoCardMove');
@@ -34,6 +42,25 @@ const Platform = PlatformModel.init(sequelize);
 const UserService = UserServiceModel.init(sequelize);
 const Customer = CustomerModel.init(sequelize);
 const Quality = QualityModel.init(sequelize);
+const YarnCount = YarnCountModel.init(sequelize);
+const YarnBrand = YarnBrandModel.init(sequelize);
+const YarnItem = YarnItemModel.init(sequelize);
+YarnItem.belongsTo(YarnCount, { foreignKey: 'yarnCountId', as: 'yarnCount' });
+YarnItem.belongsTo(YarnBrand, { foreignKey: 'brandId', as: 'brand' });
+const YarnInward = YarnInwardModel.init(sequelize);
+YarnInward.belongsTo(YarnItem, { foreignKey: 'itemId', as: 'item' });
+const { YarnOutward, YarnOutwardLine, YarnOutwardBeam } = YarnOutwardModel.init(sequelize);
+const YarnBeam = YarnBeamModel.init(sequelize);
+const { YarnSizingInward, YarnSizingInwardBeam } = YarnSizingInwardModel.init(sequelize);
+YarnSizingInward.hasMany(YarnSizingInwardBeam, { foreignKey: 'inwardId', as: 'beamRows' });
+YarnSizingInwardBeam.belongsTo(YarnBeam, { foreignKey: 'beamId', as: 'beam' });
+YarnSizingInward.belongsTo(YarnOutward, { foreignKey: 'outwardId', as: 'outward' });
+YarnOutward.hasMany(YarnOutwardLine, { foreignKey: 'outwardId', as: 'lines' });
+YarnOutwardLine.belongsTo(YarnOutward, { foreignKey: 'outwardId', as: 'outward' });
+YarnOutward.hasMany(YarnOutwardBeam, { foreignKey: 'outwardId', as: 'beamRows' });
+YarnOutwardBeam.belongsTo(YarnBeam, { foreignKey: 'beamId', as: 'beam' });
+YarnOutwardLine.belongsTo(YarnInward, { foreignKey: 'inwardId', as: 'inward' });
+YarnInward.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 const CompanyCounter = CompanyCounterModel.init(sequelize);
 const GreyLot = GreyLotModel.init(sequelize);
 const { GreyLotThaan, GreyReturn } = GreyLotModel.initThaans(sequelize);
@@ -48,6 +75,19 @@ const Job = JobModel.init(sequelize);
 const JobItem = JobItemModel.init(sequelize);
 const FoldingEntry = FoldingEntryModel.init(sequelize);
 const storeModels = StoreModels.init(sequelize);
+YarnInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
+YarnSizingInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
+YarnInward.belongsTo(storeModels.Vendor, { foreignKey: 'directVendorId', as: 'directVendor' });
+const { FabricInward, FabricInwardThaan, FabricIssue } = FabricInwardModel.init(sequelize);
+FabricIssue.belongsTo(FabricInward, { foreignKey: 'fabricInwardId', as: 'fabricInward' });
+FabricIssue.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
+FabricIssue.belongsTo(SoCard, { foreignKey: 'linkedSoCardId', as: 'linkedSoCard' });
+FabricIssue.belongsTo(GreyLot, { foreignKey: 'greyLotId', as: 'greyLot' });
+FabricInward.hasMany(FabricInwardThaan, { foreignKey: 'inwardId', as: 'thaans' });
+FabricInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
+FabricInward.belongsTo(Quality, { foreignKey: 'qualityId', as: 'quality' });
+YarnOutward.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
+YarnOutward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
 storeModels.StoreMove.belongsTo(Service, { foreignKey: 'departmentId', as: 'department' });
 const requestModels = ChemicalRequestModels.init(sequelize);
 const returnModels = ChemicalReturnModels.init(sequelize);
@@ -148,10 +188,23 @@ module.exports = {
   UserService,
   Customer,
   Quality,
+  YarnCount,
+  YarnBrand,
+  YarnItem,
+  YarnInward,
+  YarnOutward,
+  YarnBeam,
+  YarnSizingInward,
+  YarnSizingInwardBeam,
+  YarnOutwardLine,
+  YarnOutwardBeam,
   CompanyCounter,
   GreyLot,
   GreyLotThaan,
   GreyReturn,
+  FabricInward,
+  FabricInwardThaan,
+  FabricIssue,
   SoCard,
   SoCardLot,
   SoCardLotThaan,

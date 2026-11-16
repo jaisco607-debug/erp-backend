@@ -73,6 +73,10 @@ function json(l) {
     widths: [...new Set((l.thaans || []).map((t) => t.width ?? l.width).filter((w) => w != null))].sort((a, b) => a - b),
     vehicleNo: l.vehicleNo,
     remarks: l.remarks,
+    // CUSTOMER = the customer's own cloth (grey inward); STORE = cloth from the Fabric Store (bought from a vendor, made by a fabric issue)
+    source: l.source,
+    fromStore: l.source === 'STORE',
+    fabricIssueId: l.fabricIssueId || null,
     isReprocess: l.isReprocess,
     reprocessOf: l.reprocessOf ? { id: l.reprocessOf.id, lotNo: l.reprocessOf.lotNo } : null,
     isApproved: l.isApproved,
@@ -198,7 +202,7 @@ async function takeTypedLotNo(req, lotNo, transaction, exceptId) {
 
 async function list(req, q) {
   const where = { companyId: req.user.companyId };
-  for (const f of ['isActive', 'isApproved', 'isReprocess', 'customerId', 'qualityId']) if (q[f] !== undefined) where[f] = q[f];
+  for (const f of ['isActive', 'isApproved', 'isReprocess', 'customerId', 'qualityId', 'source']) if (q[f] !== undefined) where[f] = q[f];
   if (q.dateFrom || q.dateTo) {
     where.inwardDate = {};
     if (q.dateFrom) where.inwardDate[Op.gte] = q.dateFrom;
@@ -245,11 +249,15 @@ async function create(req, data) {
   });
 }
 
+/** A lot made from Fabric Store cloth belongs to its fabric issue: it is changed or removed there (cancel the issue), not on the grey inward screen. */
+const notStoreLot = (lot) => { if (lot.source === 'STORE') throw AppError.rule('STORE_LOT', 'This lot is cloth from the Fabric Store; change it by cancelling its fabric issue'); };
+
 const EDITABLE = ['typeNo', 'dcNo', 'inwardDate', 'customerId', 'qualityId', 'partyRef', 'glm', 'gsm', 'width', 'vehicleNo', 'remarks', 'isReprocess', 'reprocessOfLotId'];
 
 async function update(req, id, changes) {
   return sequelize.transaction(async (transaction) => {
     const lot = await findOr404(req, id, transaction, true);
+    notStoreLot(lot);
     if (lot.isApproved) throw AppError.rule('LOT_APPROVED', 'An approved lot cannot be edited');
     if (changes.reprocessOfLotId === lot.id) throw AppError.rule('UNKNOWN_LOT', 'A lot cannot point to itself');
     const q = QTY_FIELDS.some((f) => changes[f] !== undefined) ? quantities(changes, lot) : null;
@@ -335,6 +343,7 @@ async function setActive(req, id, isActive) {
 async function setApproved(req, id, approved) {
   return sequelize.transaction(async (transaction) => {
     const lot = await findOr404(req, id, transaction, true);
+    if (!approved) notStoreLot(lot);
     if (approved && !lot.isActive) throw AppError.rule('LOT_INACTIVE', 'Switch the lot on before approving it');
     lot.isApproved = approved;
     lot.approvedById = approved ? req.user.id : null;
@@ -355,6 +364,7 @@ async function setApproved(req, id, approved) {
 async function remove(req, id) {
   return sequelize.transaction(async (transaction) => {
     const lot = await findOr404(req, id, transaction, true);
+    notStoreLot(lot);
     if (lot.isApproved) throw AppError.rule('LOT_APPROVED', 'An approved lot cannot be deleted');
     if (lot.outwardMeters > 0) throw AppError.rule('LOT_IN_USE', 'Cloth has already gone out of this lot');
     const before = await load(lot.id, transaction);
@@ -408,6 +418,7 @@ async function giveBack(req, id, { thaanNos, meters, pieces, returnDate, vehicle
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
     const lot = await findOr404(req, id, transaction, true);
+    notStoreLot(lot);
     const balance = r2(lot.inwardMeters - lot.outwardMeters);
     let rows = [];
     if (thaanNos) {
@@ -457,4 +468,26 @@ async function undoGiveBack(req, id, returnId) {
   });
 }
 
-module.exports = { list, get, create, update, remove, setActive, setApproved, nextNumbers, setNextNumbers, giveBack, undoGiveBack, YARD };
+/**
+ * Fabric Store cloth going to a customer's SO card: makes an APPROVED lot of the customer (source STORE) with the issued thaans, inside the caller's transaction.
+ * data: { fabricIssueId, inwardDate, customerId, qualityId, dcNo, unit, thaans: [{ meters, yards, width }] | null, inwardMeters, pieces, glm, gsm, width, partyRef, remarks }
+ */
+async function createFromStore(req, data, transaction) {
+  const companyId = req.user.companyId;
+  await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`grey-lot-no:${companyId}`], transaction });
+  const lotNo = await counters.take(companyId, LOT, async () => ((await maxLot(companyId, transaction)) || 0) + 1, transaction);
+  const typeNo = typeText(await counters.take(companyId, TYPE, async () => (await maxType(companyId, transaction)) + 1, transaction));
+  const thaans = data.thaans && data.thaans.length ? data.thaans.map((t, i) => ({ thaanNo: i + 1, meters: r2(t.meters), yards: r2(t.yards), width: t.width ?? null })) : null;
+  const inwardMeters = thaans ? r2(thaans.reduce((t, x) => t + x.meters, 0)) : r2(data.inwardMeters);
+  const inwardYards = thaans ? r2(thaans.reduce((t, x) => t + x.yards, 0)) : toYards(inwardMeters);
+  const lot = await GreyLot.create({
+    companyId, lotNo, typeNo, dcNo: data.dcNo || null, inwardDate: data.inwardDate, customerId: data.customerId, qualityId: data.qualityId, unit: data.unit || 'METER',
+    inwardMeters, inwardYards, pieces: thaans ? thaans.length : data.pieces || 0, glm: data.glm ?? null, gsm: data.gsm ?? null, width: data.width ?? null,
+    partyRef: data.partyRef || null, remarks: data.remarks || null, source: 'STORE', fabricIssueId: data.fabricIssueId,
+    isApproved: true, approvedById: req.user.id, approvedAt: new Date(), createdById: req.user.id,
+  }, { transaction });
+  if (thaans) await GreyLotThaan.bulkCreate(thaans.map((t) => ({ ...t, lotId: lot.id })), { transaction });
+  return lot;
+}
+
+module.exports = { createFromStore, list, get, create, update, remove, setActive, setApproved, nextNumbers, setNextNumbers, giveBack, undoGiveBack, YARD };

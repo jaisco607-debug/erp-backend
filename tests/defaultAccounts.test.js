@@ -71,7 +71,7 @@ async function jv(w, date, lines) {
 }
 
 const payment = (w, body) => w.api('post', '/payment-vouchers', body);
-const KEYS = ['SALES', 'OUTPUT_TAX', 'CUSTOMERS', 'PURCHASES', 'INPUT_TAX', 'SUPPLIERS', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'CUSTOMER_ADVANCES', 'SUPPLIER_ADVANCES', 'EMPLOYEE_LOANS', 'EMPLOYEE_ADVANCES', 'SALARY_EXPENSE', 'SALARIES_PAYABLE', 'EOBI_PAYABLE', 'SALARY_TAX_PAYABLE', 'EMPLOYEE_DEDUCTIONS', 'EOBI_EMPLOYER_EXPENSE'];
+const KEYS = ['SALES', 'OUTPUT_TAX', 'CUSTOMERS', 'PURCHASES', 'SIZING_CHARGES', 'INPUT_TAX', 'SUPPLIERS', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'CUSTOMER_ADVANCES', 'SUPPLIER_ADVANCES', 'EMPLOYEE_LOANS', 'EMPLOYEE_ADVANCES', 'SALARY_EXPENSE', 'SALARIES_PAYABLE', 'EOBI_PAYABLE', 'SALARY_TAX_PAYABLE', 'EMPLOYEE_DEDUCTIONS', 'EOBI_EMPLOYER_EXPENSE'];
 const getAcc = (w, id) => ok(w.api('get', `/accounts/${id}`), 200);
 /** A new ordinary account under a folder of the standard chart. */
 const newAccount = async (w, parentCode, name, accountType) => ok(w.api('post', '/accounts', { name, parentId: await w.id(parentCode), accountType }));
@@ -80,7 +80,7 @@ test('default accounts: the tab lists every role with the Chart of Accounts id o
   const w = await setup();
   const d = await ok(w.api('get', '/accounts/defaults'), 200);
   expect(d.data.map((x) => x.key)).toEqual(KEYS);
-  expect(d).toMatchObject({ missing: 8, inactive: 0, groups: [{ code: 'SALES_INVOICE', text: 'Sales invoice' }, { code: 'PURCHASE_INVOICE', text: 'Purchase invoice' }, { code: 'VOUCHERS', text: 'Vouchers' }, { code: 'PAYROLL', text: 'Payroll' }] }); // the standard chart has no Employee Loans account until the first loan voucher (or the Default Accounts tab) makes it
+  expect(d).toMatchObject({ missing: 9, inactive: 0, groups: [{ code: 'SALES_INVOICE', text: 'Sales invoice' }, { code: 'PURCHASE_INVOICE', text: 'Purchase invoice' }, { code: 'VOUCHERS', text: 'Vouchers' }, { code: 'PAYROLL', text: 'Payroll' }] }); // the standard chart has no Employee Loans account until the first loan voucher (or the Default Accounts tab) makes it
   const sales = d.data.find((x) => x.key === 'SALES');
   expect(sales).toMatchObject({ group: 'SALES_INVOICE', groupText: 'Sales invoice', title: 'Sales', usedBy: ['Sales invoice'], accountType: 'INCOME', status: 'SET', canChange: true, holdsParties: null,
     account: { id: await w.id('4001'), code: '4001', name: 'Sales', isActive: true, hasEntries: false } });
@@ -96,7 +96,7 @@ test('default accounts: the tab lists every role with the Chart of Accounts id o
 test('default accounts: a company without any can make them before its first invoice (one, or all), and nothing is made twice', async () => {
   const w = await setup({ template: false });
   const d = await ok(w.api('get', '/accounts/defaults'), 200);
-  expect(d.missing).toBe(18);
+  expect(d.missing).toBe(19);
   expect(d.data.every((x) => x.status === 'NOT_SET' && x.account === null && x.canChange === true)).toBe(true);
   expect((await ok(w.api('get', '/accounts'), 200)).total).toBe(0);
 
@@ -104,14 +104,14 @@ test('default accounts: a company without any can make them before its first inv
   expect(s1).toMatchObject({ key: 'SALES', status: 'SET', account: { name: 'Sales' }, standardName: 'Sales' });
   const again = await ok(w.api('post', '/accounts/defaults/SALES/create'), 200);
   expect(again.account.id).toBe(s1.account.id); // the same account, not a second one
-  expect((await ok(w.api('get', '/accounts/defaults'), 200)).missing).toBe(17);
+  expect((await ok(w.api('get', '/accounts/defaults'), 200)).missing).toBe(18);
 
   const all = await ok(w.api('post', '/accounts/defaults/create-all'), 200);
   expect(all.created).toEqual(KEYS.filter((k) => k !== 'SALES'));
   expect(all).toMatchObject({ missing: 0 });
   expect(all.data.find((x) => x.key === 'SALES').account.id).toBe(s1.account.id);
   const ids = all.data.map((x) => x.account.id);
-  expect(new Set(ids).size).toBe(18); // eighteen different accounts
+  expect(new Set(ids).size).toBe(19); // nineteen different accounts
   expect((await ok(w.api('post', '/accounts/defaults/create-all'), 200)).created).toEqual([]);
   // they are in the Chart, with their roles
   const system = await sql('SELECT "controlType", "systemKey", "isSystem" FROM accounts WHERE "companyId" = :c AND "isSystem" = true ORDER BY "controlType"', { c: w.company.id });

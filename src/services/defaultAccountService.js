@@ -22,6 +22,7 @@ const ROLES = [
   { key: 'OUTPUT_TAX', group: 'SALES_INVOICE', title: 'Sales Tax (Output)', description: 'The sales tax we charge our customers and owe to the government.', usedBy: ['Sales invoice'] },
   { key: 'CUSTOMERS', group: 'SALES_INVOICE', title: 'Accounts Receivable', description: 'What customers owe us. Every line names the customer.', usedBy: ['Sales invoice', 'Receipt voucher', 'Contra voucher'], party: 'CUSTOMER' },
   { key: 'PURCHASES', group: 'PURCHASE_INVOICE', title: 'Purchases / Cost of Goods Sold', description: 'The expense account a purchase invoice debits (the bill amount before tax).', usedBy: ['Purchase invoice'] },
+  { key: 'SIZING_CHARGES', group: 'PURCHASE_INVOICE', title: 'Sizing Charges', description: 'The expense account a sizing purchase invoice debits: what the sizing party charges us for sizing our yarn (lbs used x rate, before tax).', usedBy: ['Purchase invoice (sizing)'] },
   { key: 'INPUT_TAX', group: 'PURCHASE_INVOICE', title: 'Sales Tax (Input)', description: 'The sales tax our vendors charged us, which we may claim back.', usedBy: ['Purchase invoice'] },
   { key: 'SUPPLIERS', group: 'PURCHASE_INVOICE', title: 'Accounts Payable', description: 'What we owe our vendors. Every line names the vendor.', usedBy: ['Purchase invoice', 'Payment voucher', 'Contra voucher'], party: 'VENDOR' },
   { key: 'INCOME_TAX_CUSTOMERS', group: 'VOUCHERS', title: 'Income Tax - Customers', description: 'Income tax our customers withheld when they paid us.', usedBy: ['Receipt voucher'] },

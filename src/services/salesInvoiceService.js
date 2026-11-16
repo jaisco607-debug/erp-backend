@@ -16,6 +16,7 @@ const packing = require('./packingService');
 const { round } = require('../utils/money');
 const { today } = require('../utils/dates');
 const { soLabel } = require('../utils/soLabel');
+const outwards = require('./yarnOutwardService');
 
 const SOURCE = 'SALES_INVOICE';
 const DEFAULT_TAX_RATE = 18;
@@ -101,6 +102,56 @@ async function buildLines(req, customerId, gatePassIds, invoiceId, transaction) 
   return (await describe(req, rows.sort((a, b) => a.gatePassNo - b.gatePassNo), transaction));
 }
 
+/** The yarn SALE challans with what they bring (bags, lbs, amount); `invoiceId` is the sales invoice a sale is already on. */
+const YARN_SQL = `
+  SELECT o.id AS "saleId", o."challanNo", to_char(o."outwardDate", 'YYYY-MM-DD') AS "outwardDate", o.description, o."customerId",
+    COALESCE((SELECT SUM(l.bags) FROM yarn_outward_lines l WHERE l."outwardId" = o.id), 0)::int AS bags,
+    COALESCE((SELECT SUM(l.lbs) FROM yarn_outward_lines l WHERE l."outwardId" = o.id), 0)::float AS lbs,
+    COALESCE((SELECT SUM(l.amount) FROM yarn_outward_lines l WHERE l."outwardId" = o.id), 0)::float AS amount,
+    (SELECT y."invoiceId" FROM sales_invoice_yarn_sales y WHERE y."outwardId" = o.id) AS "invoiceId",
+    (SELECT i2."invoiceNo" FROM sales_invoice_yarn_sales y JOIN sales_invoices i2 ON i2.id = y."invoiceId" WHERE y."outwardId" = o.id) AS "invoiceNo",
+    (SELECT string_agg(DISTINCT yb.name, ', ') FROM yarn_outward_lines l JOIN yarn_inwards yi ON yi.id = l."inwardId" JOIN yarn_items it ON it.id = yi."itemId" JOIN yarn_brands yb ON yb.id = it."brandId" WHERE l."outwardId" = o.id) AS brands
+  FROM yarn_outwards o WHERE o."companyId" = :companyId AND o.type = 'SALE' AND o."deletedAt" IS NULL`;
+const yarnLine = (r) => ({
+  saleId: r.saleId, challanNo: r.challanNo, challanText: label(r.challanNo), outwardDate: r.outwardDate, description: r.description, brands: r.brands || null,
+  bags: r.bags, lbs: round(r.lbs), amount: r.amount,
+});
+
+/** GET /sales-invoices/yarn-sales?customerId= : the yarn sales of this customer that can still be put on an invoice (the screen's dropdown). */
+async function yarnSales(req, { customerId, search, invoiceId, limit }) {
+  const rows = await q(`${YARN_SQL} AND o."customerId" = :customerId ORDER BY o."challanNo" DESC`, { companyId: req.user.companyId, customerId });
+  let data = rows.filter((r) => !r.invoiceId || r.invoiceId === invoiceId);
+  if (search) {
+    const s = search.trim().toLowerCase();
+    data = data.filter((r) => String(r.challanNo) === s || (r.description || '').toLowerCase().includes(s) || (r.brands || '').toLowerCase().includes(s));
+  }
+  return { data: data.slice(0, limit).map((r) => ({ ...yarnLine(r), canBill: r.amount > 0, blockedReason: r.amount > 0 ? null : 'The sale has no amount' })), total: data.length };
+}
+
+/** The lines of a YARN invoice from the chosen yarn sales; every rule about a sale is checked here. */
+async function buildYarn(req, customerId, saleIds, invoiceId, transaction) {
+  const ids = [...new Set(saleIds)];
+  const rows = await q(`${YARN_SQL} AND o.id IN (:ids)`, { companyId: req.user.companyId, ids }, transaction);
+  if (rows.length !== ids.length) throw AppError.notFound('Yarn sale');
+  for (const r of rows) {
+    const name = `Yarn sale ${label(r.challanNo)}`;
+    if (r.customerId !== customerId) throw AppError.rule('SALE_OTHER_CUSTOMER', `${name} belongs to another customer; one invoice is for one customer`);
+    if (r.invoiceId && r.invoiceId !== invoiceId) throw AppError.rule('SALE_TAKEN', `${name} is already on invoice ${label(r.invoiceNo)}`);
+    if (!(r.amount > 0)) throw AppError.rule('NO_RATES', `${name} has no amount, so there is nothing to bill`);
+  }
+  return rows.sort((a, b) => a.challanNo - b.challanNo);
+}
+
+async function writeYarnLines(invoiceId, companyId, lines, transaction) {
+  await sequelize.query('DELETE FROM sales_invoice_yarn_sales WHERE "invoiceId" = :invoiceId', { replacements: { invoiceId }, transaction });
+  let lineNo = 0;
+  for (const l of lines) {
+    lineNo += 1;
+    await sequelize.query('INSERT INTO sales_invoice_yarn_sales ("invoiceId", "companyId", "lineNo", "outwardId", amount) VALUES (:invoiceId, :companyId, :lineNo, :saleId, :amount)',
+      { replacements: { invoiceId, companyId, lineNo, saleId: l.saleId, amount: l.amount }, transaction });
+  }
+}
+
 // others (owner 2026-10-28): an extra amount on the bill (with a note); the tax is worked out on the gross only, others is added to the bill
 function totalsOf(lines, taxRate, othersAmount = 0) {
   const gross = round(lines.reduce((t, l) => t + l.amount, 0), 2);
@@ -120,7 +171,7 @@ async function writeLines(invoiceId, companyId, lines, transaction) {
   }
 }
 
-const COLS = `i.id, i."voucherNo", i."invoiceNo", to_char(i."invoiceDate", 'YYYY-MM-DD') AS "invoiceDate", to_char(i."dueDate", 'YYYY-MM-DD') AS "storedDue",
+const COLS = `i.id, i.kind, i."voucherNo", i."invoiceNo", to_char(i."invoiceDate", 'YYYY-MM-DD') AS "invoiceDate", to_char(i."dueDate", 'YYYY-MM-DD') AS "storedDue",
   to_char(COALESCE(i."dueDate", i."invoiceDate" + c."creditDays"), 'YYYY-MM-DD') AS "dueDate", i.notes, i."invoiceDetails", i."hsCode", i."taxRate"::float AS "taxRate", i."othersAmount"::float AS others, i."othersNote",
   i."grossAmount"::float AS gross, i."taxAmount"::float AS tax, i."netAmount"::float AS net, i."receivedAmount"::float AS received, i.status, i."approvedAt", i."createdAt", i."updatedAt",
   c.id AS "customerId", c.code AS "customerCode", c.name AS "customerName", c.ntn AS "customerNtn", c.address AS "customerAddress", c.city AS "customerCity",
@@ -130,7 +181,7 @@ const FROM = `FROM sales_invoices i JOIN customers c ON c.id = i."customerId" LE
 
 function invoiceJson(r) {
   return {
-    id: r.id, voucherNo: r.voucherNo, voucherLabel: label(r.voucherNo), invoiceNo: r.invoiceNo, invoiceLabel: label(r.invoiceNo), invoiceDate: r.invoiceDate, dueDate: r.dueDate,
+    id: r.id, kind: r.kind, kindText: r.kind === 'YARN' ? 'Yarn' : 'Cloth', voucherNo: r.voucherNo, voucherLabel: label(r.voucherNo), invoiceNo: r.invoiceNo, invoiceLabel: label(r.invoiceNo), invoiceDate: r.invoiceDate, dueDate: r.dueDate,
     isOverdue: r.status === 'APPROVED' && r.net - r.received > 0 && r.dueDate < today(),
     customer: { id: r.customerId, code: r.customerCode, name: r.customerName, ntn: r.customerNtn, address: r.customerAddress, city: r.customerCity },
     notes: r.notes, invoiceDetails: r.invoiceDetails, hsCode: r.hsCode, taxRate: r.taxRate, othersAmount: r.others, othersNote: r.othersNote, othersEffect: 'ADD',
@@ -153,10 +204,21 @@ async function load(req, id, transaction, lock = false) {
 async function get(req, id, transaction) {
   const inv = invoiceJson(await load(req, id, transaction));
   inv.creditWarning = await credit.warning(req, 'CUSTOMER', inv.customer.id, { status: inv.status, net: inv.net }, transaction); // over the customer's credit limit, or null
-  const stored = await q(`SELECT "gatePassId", "lineNo", "qtyA"::float AS "qtyA", "qtyB"::float AS "qtyB", "qtyCP"::float AS "qtyCP", "rateA"::float AS "rateA", "rateB"::float AS "rateB",
+  if (inv.kind === 'YARN') {
+    // the lines of a yarn invoice are its yarn sales (challans): the amount is the one saved on the invoice, the items come from the challan
+    const sales = await q('SELECT "outwardId", "lineNo", amount::float AS amount FROM sales_invoice_yarn_sales WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    inv.lines = [];
+    for (const s of sales) {
+      const ch = await outwards.get(req, 'SALE', s.outwardId);
+      inv.lines.push({ lineNo: s.lineNo, saleId: ch.id, challanNo: ch.challanNo, challanText: ch.challanText, outwardDate: ch.outwardDate, description: ch.description, bags: ch.totalBags, lbs: ch.totalLbs, amount: s.amount, items: ch.lines });
+    }
+    inv.qty = round(inv.lines.reduce((t, l) => t + l.lbs, 0));
+    inv.qtyUnit = 'lbs';
+  }
+  const stored = inv.kind === 'YARN' ? [] : await q(`SELECT "gatePassId", "lineNo", "qtyA"::float AS "qtyA", "qtyB"::float AS "qtyB", "qtyCP"::float AS "qtyCP", "rateA"::float AS "rateA", "rateB"::float AS "rateB",
       "rateCP"::float AS "rateCP", "billedQty"::float AS "billedQty", amount::float AS amount FROM sales_invoice_lines WHERE "invoiceId" = :id ORDER BY "lineNo"`, { id }, transaction);
   const live = await describe(req, stored.length ? await q(`${GATE_SQL} AND g.id IN (:ids) ${GATE_GROUP}`, { companyId: req.user.companyId, ids: stored.map((s) => s.gatePassId) }, transaction) : [], transaction);
-  inv.lines = stored.map((s) => {
+  if (inv.kind !== 'YARN') inv.lines = stored.map((s) => {
     const g = live.find((x) => x.gatePassId === s.gatePassId);
     // the numbers are the ones saved on the invoice; the descriptions come from the gate pass
     return { lineNo: s.lineNo, ...gateLine({ ...g, ...s }) };
@@ -179,10 +241,11 @@ function options() {
   return { statuses: Object.entries(STATUS_TEXT).map(([code, text]) => ({ code, text })), taxRates: [0, 5, 10, 15, 18], defaultTaxRate: DEFAULT_TAX_RATE, defaultHsCode: DEFAULT_HS_CODE };
 }
 
-async function list(req, { page, limit, status, dateFrom, dateTo, customerId, search }) {
+async function list(req, { page, limit, status, kind, dateFrom, dateTo, customerId, search }) {
   const where = ['i."companyId" = :companyId'];
   const r = { companyId: req.user.companyId };
   if (status) { where.push('i.status = :status'); r.status = status; }
+  if (kind) { where.push('i.kind = :kind'); r.kind = kind; }
   if (dateFrom) { where.push('i."invoiceDate" >= :dateFrom'); r.dateFrom = dateFrom; }
   if (dateTo) { where.push('i."invoiceDate" <= :dateTo'); r.dateTo = dateTo; }
   if (customerId) { where.push('i."customerId" = :customerId'); r.customerId = customerId; }
@@ -215,7 +278,8 @@ async function create(req, data) {
   const id = await sequelize.transaction(async (transaction) => {
     await lockSales(companyId, transaction);
     await customerOr404(req, data.customerId, transaction);
-    const lines = await buildLines(req, data.customerId, data.gatePassIds, null, transaction);
+    const yarn = Boolean(data.yarnSaleIds); // a YARN invoice is made of yarn sales, a cloth invoice of gate passes
+    const lines = yarn ? await buildYarn(req, data.customerId, data.yarnSaleIds, null, transaction) : await buildLines(req, data.customerId, data.gatePassIds, null, transaction);
     const taxRate = data.taxRate ?? DEFAULT_TAX_RATE;
     const totals = totalsOf(lines, taxRate, data.othersAmount);
     const invoiceNo = data.invoiceNo || (await nextNo('invoiceNo', companyId, transaction));
@@ -230,12 +294,12 @@ async function create(req, data) {
     await accounts.ensureDefault(req, 'CUSTOMERS', transaction);
     await accounts.ensureDefault(req, 'SALES', transaction);
     await accounts.ensureDefault(req, 'OUTPUT_TAX', transaction);
-    const [{ id: newId }] = await q(`INSERT INTO sales_invoices ("companyId", "voucherNo", "invoiceNo", "invoiceDate", "dueDate", "customerId", notes, "invoiceDetails", "hsCode", "taxRate",
+    const [{ id: newId }] = await q(`INSERT INTO sales_invoices ("companyId", kind, "voucherNo", "invoiceNo", "invoiceDate", "dueDate", "customerId", notes, "invoiceDetails", "hsCode", "taxRate",
         "othersAmount", "othersNote", "grossAmount", "taxAmount", "netAmount", "createdById", "updatedById")
-      VALUES (:companyId, :voucherNo, :invoiceNo, :invoiceDate, :dueDate, :customerId, :notes, :invoiceDetails, :hsCode, :taxRate, :others, :othersNote, :gross, :tax, :net, :userId, :userId) RETURNING id`,
-    { companyId, voucherNo, invoiceNo, invoiceDate, dueDate, customerId: data.customerId, notes: data.notes || null, invoiceDetails: data.invoiceDetails || null,
-      hsCode: data.hsCode === undefined ? DEFAULT_HS_CODE : data.hsCode || null, taxRate, othersNote: data.othersNote || null, ...totals, userId: req.user.id }, transaction);
-    await writeLines(newId, companyId, lines, transaction);
+      VALUES (:companyId, :kind, :voucherNo, :invoiceNo, :invoiceDate, :dueDate, :customerId, :notes, :invoiceDetails, :hsCode, :taxRate, :others, :othersNote, :gross, :tax, :net, :userId, :userId) RETURNING id`,
+    { companyId, kind: yarn ? 'YARN' : 'CLOTH', voucherNo, invoiceNo, invoiceDate, dueDate, customerId: data.customerId, notes: data.notes || null, invoiceDetails: data.invoiceDetails || null,
+      hsCode: data.hsCode === undefined ? (yarn ? null : DEFAULT_HS_CODE) : data.hsCode || null, taxRate, othersNote: data.othersNote || null, ...totals, userId: req.user.id }, transaction);
+    if (yarn) await writeYarnLines(newId, companyId, lines, transaction); else await writeLines(newId, companyId, lines, transaction);
     await audit.log(req, { action: 'SALES_INVOICE_CREATED', entityType: 'SalesInvoice', entityId: newId, after: { invoiceNo, voucherNo, customerId: data.customerId, gatePasses: lines.length, ...totals } }, { transaction });
     return newId;
   });
@@ -248,13 +312,17 @@ async function update(req, id, changes) {
     await lockSales(companyId, transaction);
     const cur = await load(req, id, transaction, true);
     if (cur.status === 'APPROVED') throw AppError.rule('INVOICE_APPROVED', 'An approved invoice cannot be changed. Un-approve it first');
+    const yarn = cur.kind === 'YARN';
+    if (yarn ? changes.gatePassIds : changes.yarnSaleIds) throw AppError.rule('WRONG_INVOICE_KIND', yarn ? 'This is a yarn invoice: it is made of yarn sales, not gate passes' : 'This is a cloth invoice: it is made of gate passes, not yarn sales');
     const customerId = changes.customerId ?? cur.customerId;
+    const newIds = yarn ? changes.yarnSaleIds : changes.gatePassIds;
     if (changes.customerId && changes.customerId !== cur.customerId) {
       await customerOr404(req, customerId, transaction);
-      if (!changes.gatePassIds) throw AppError.rule('GATE_PASSES_REQUIRED', 'The customer changed: choose the gate passes of the new customer');
+      if (!newIds) throw AppError.rule(yarn ? 'YARN_SALES_REQUIRED' : 'GATE_PASSES_REQUIRED', yarn ? 'The customer changed: choose the yarn sales of the new customer' : 'The customer changed: choose the gate passes of the new customer');
     }
-    const ids = changes.gatePassIds || (await q('SELECT "gatePassId" FROM sales_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.gatePassId);
-    const lines = await buildLines(req, customerId, ids, id, transaction);
+    const ids = newIds || (yarn ? (await q('SELECT "outwardId" FROM sales_invoice_yarn_sales WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.outwardId)
+      : (await q('SELECT "gatePassId" FROM sales_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.gatePassId));
+    const lines = yarn ? await buildYarn(req, customerId, ids, id, transaction) : await buildLines(req, customerId, ids, id, transaction);
     const taxRate = changes.taxRate ?? cur.taxRate;
     const totals = totalsOf(lines, taxRate, changes.othersAmount ?? cur.others);
     let invoiceNo = cur.invoiceNo;
@@ -270,7 +338,7 @@ async function update(req, id, changes) {
     const redo = changes.dueDate === undefined ? Boolean(changes.invoiceDate || changes.customerId) : !changes.dueDate;
     const dueDate = changes.dueDate || (redo ? await credit.defaultDueDate(companyId, 'CUSTOMER', customerId, invoiceDate, transaction) : cur.storedDue);
     if (dueDate && dueDate < invoiceDate) throw AppError.rule('DUE_BEFORE_DATE', 'The due date cannot be before the invoice date');
-    await writeLines(id, companyId, lines, transaction);
+    if (yarn) await writeYarnLines(id, companyId, lines, transaction); else await writeLines(id, companyId, lines, transaction);
     await sequelize.query(`UPDATE sales_invoices SET "invoiceNo" = :invoiceNo, "invoiceDate" = :invoiceDate, "dueDate" = :dueDate, "customerId" = :customerId, notes = :notes, "invoiceDetails" = :invoiceDetails,
         "hsCode" = :hsCode, "taxRate" = :taxRate, "othersAmount" = :others, "othersNote" = :othersNote, "grossAmount" = :gross, "taxAmount" = :tax, "netAmount" = :net, "updatedById" = :userId, "updatedAt" = now() WHERE id = :id`,
     { replacements: { id, invoiceNo, invoiceDate, dueDate, customerId, notes: pick('notes', cur.notes), invoiceDetails: pick('invoiceDetails', cur.invoiceDetails),
@@ -300,17 +368,19 @@ async function approve(req, id) {
     await lockSales(companyId, transaction);
     const cur = await load(req, id, transaction, true);
     if (cur.status === 'APPROVED') throw AppError.rule('ALREADY_APPROVED', 'This invoice is already approved');
-    const ids = (await q('SELECT "gatePassId" FROM sales_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.gatePassId);
-    if (!ids.length) throw AppError.rule('NO_LINES', 'The invoice has no gate passes');
-    const lines = await buildLines(req, cur.customerId, ids, id, transaction);
+    const yarn = cur.kind === 'YARN';
+    const ids = yarn ? (await q('SELECT "outwardId" FROM sales_invoice_yarn_sales WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.outwardId)
+      : (await q('SELECT "gatePassId" FROM sales_invoice_lines WHERE "invoiceId" = :id', { id }, transaction)).map((l) => l.gatePassId);
+    if (!ids.length) throw AppError.rule('NO_LINES', yarn ? 'The invoice has no yarn sales' : 'The invoice has no gate passes');
+    const lines = yarn ? await buildYarn(req, cur.customerId, ids, id, transaction) : await buildLines(req, cur.customerId, ids, id, transaction);
     const totals = totalsOf(lines, cur.taxRate, cur.others);
     if (!(totals.net > 0)) throw AppError.rule('NOTHING_TO_BILL', 'The invoice amount is zero');
-    await writeLines(id, companyId, lines, transaction);
+    if (yarn) await writeYarnLines(id, companyId, lines, transaction); else await writeLines(id, companyId, lines, transaction);
 
     const receivable = await accounts.ensureDefault(req, 'CUSTOMERS', transaction);
     const sales = await accounts.ensureDefault(req, 'SALES', transaction);
     const taxAccount = totals.tax > 0 ? await accounts.ensureDefault(req, 'OUTPUT_TAX', transaction) : null;
-    const narration = `Sales invoice ${label(cur.invoiceNo)} - ${cur.customerName}`;
+    const narration = `${yarn ? 'Yarn sales invoice' : 'Sales invoice'} ${label(cur.invoiceNo)} - ${cur.customerName}`;
     const entry = await journal.post(req, {
       entryDate: cur.invoiceDate, sourceType: SOURCE, sourceId: id, narration,
       lines: [
@@ -355,4 +425,4 @@ async function accountsEntry(req, id) {
 
 const creditOf = (req, customerId) => credit.publicStatus(req, 'CUSTOMER', customerId);
 
-module.exports = { creditOf, options, gatePasses, list, get, create, update, remove, approve, unapprove, accountsEntry };
+module.exports = { creditOf, options, gatePasses, yarnSales, list, get, create, update, remove, approve, unapprove, accountsEntry };

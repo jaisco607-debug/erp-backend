@@ -16,6 +16,8 @@ function init(sequelize) {
       sentAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
       acceptedById: { type: DataTypes.UUID, allowNull: true },
       acceptedAt: { type: DataTypes.DATE, allowNull: true },
+      // the card came back to the SO card desk before this move was accepted: it is history only and never "waiting" again
+      cancelledAt: { type: DataTypes.DATE, allowNull: true },
     },
     { sequelize, modelName: 'SoCardMove', tableName: 'so_card_moves' },
   );

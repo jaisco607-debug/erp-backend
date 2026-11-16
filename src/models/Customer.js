@@ -8,6 +8,8 @@ function init(sequelize) {
     {
       id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
       companyId: { type: DataTypes.UUID, allowNull: false },
+      // which module's list the customer belongs to: MAIN (Grey Store, stores, accounts) or WEAVING (the weaving module keeps its own list)
+      module: { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'MAIN' },
       code: { type: DataTypes.INTEGER, allowNull: false },
       name: { type: DataTypes.STRING(150), allowNull: false },
       phone: { type: DataTypes.STRING(30), allowNull: true },

@@ -2,7 +2,7 @@
 // categories, brands and items. Each company has its own lists; another company's rows are "not found".
 // A row that is already used (e.g. an item on an inward entry) cannot be deleted: switch it off instead.
 const { Op } = require('sequelize');
-const { sequelize, Vendor, StoreCategory, StoreBrand, StoreItem, StoreInward, StoreInwardLine, StoreMove } = require('../models');
+const { sequelize, FabricInward, YarnInward,YarnOutward, YarnSizingInward, Vendor, StoreCategory, StoreBrand, StoreItem, StoreInward, StoreInwardLine, StoreMove } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 
@@ -11,7 +11,7 @@ const avgRate = (i) => (i.stockQty > 0 ? round(i.stockValue / i.stockQty, 4) : 0
 
 const VENDOR_FIELDS = ['legalName', 'status', 'type', 'payment', 'cnic', 'ntn', 'gstNo', 'email', 'city', 'province', 'bankName', 'bankBranch', 'accountTitle', 'accountNo', 'iban'];
 const vendorJSON = (v) => ({
-  id: v.id, code: v.code, name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, creditLimit: v.creditLimit == null ? null : Number(v.creditLimit), creditDays: v.creditDays ?? 0, label: `${v.name} (${v.code})`,
+  id: v.id, code: v.code, module: v.module, moduleText: v.module === 'WEAVING' ? 'Weaving' : 'Processing', name: v.name, phone: v.phone, address: v.address, isActive: v.isActive, creditLimit: v.creditLimit == null ? null : Number(v.creditLimit), creditDays: v.creditDays ?? 0, label: `${v.name} (${v.code})`,
   ...Object.fromEntries(VENDOR_FIELDS.map((f) => [f, v[f] ?? null])),
 });
 const namedJSON = (r) => ({ id: r.id, name: r.name, isActive: r.isActive });
@@ -60,7 +60,13 @@ const KINDS = {
   item: { Model: StoreItem, json: itemJSON, entity: 'StoreItem', fields: ['name', 'unit', 'categoryId', 'brandId', 'reorderLevel', 'isActive'], include: itemInclude },
 };
 
-const scope = (kind, req, store) => (KINDS[kind].shared ? { companyId: req.user.companyId } : { companyId: req.user.companyId, store });
+// Vendors: the main stores use the MAIN list, the Weaving module its own WEAVING list in the same table (the weaving routes set req.partyModule = 'WEAVING').
+const moduleOf = (kind, req) => {
+  if (kind !== 'vendor') return {};
+  const m = req.partyModule || (req.method === 'GET' && req.query && ['ALL', 'WEAVING'].includes(String(req.query.module).toUpperCase()) ? String(req.query.module).toUpperCase() : 'MAIN');
+  return m === 'ALL' ? {} : { module: m };
+};
+const scope = (kind, req, store) => (KINDS[kind].shared ? { companyId: req.user.companyId, ...moduleOf(kind, req) } : { companyId: req.user.companyId, store });
 
 async function findOr404(kind, req, store, id, transaction) {
   const { Model, include, entity } = KINDS[kind];
@@ -141,9 +147,9 @@ async function create(kind, req, store, data) {
     if (kind === 'vendor') {
       await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`vendor-code:${req.user.companyId}`], transaction });
       if (fields.code) {
-        if (await Vendor.findOne({ where: { companyId: req.user.companyId, code: fields.code }, transaction })) throw AppError.rule('CODE_TAKEN', `Vendor code ${fields.code} already exists`);
+        if (await Vendor.findOne({ where: { companyId: req.user.companyId, ...moduleOf(kind, req), code: fields.code }, transaction })) throw AppError.rule('CODE_TAKEN', `Vendor code ${fields.code} already exists`);
       } else {
-        fields.code = ((await Vendor.max('code', { where: { companyId: req.user.companyId }, transaction })) || 0) + 1;
+        fields.code = ((await Vendor.max('code', { where: { companyId: req.user.companyId, ...moduleOf(kind, req) }, transaction })) || 0) + 1;
       }
     }
     const row = await Model.create(fields, { transaction });
@@ -177,7 +183,7 @@ async function update(kind, req, store, id, changes) {
 }
 
 async function inUse(kind, id, transaction) {
-  if (kind === 'vendor') return StoreInward.count({ where: { vendorId: id }, transaction });
+  if (kind === 'vendor') return (await StoreInward.count({ where: { vendorId: id }, transaction })) + (await FabricInward.count({ where: { vendorId: id }, paranoid: false, transaction })) +(await YarnInward.count({ where: { [Op.or]: [{ vendorId: id }, { directVendorId: id }] }, paranoid: false, transaction })) + (await YarnOutward.count({ where: { vendorId: id }, paranoid: false, transaction })) + (await YarnSizingInward.count({ where: { vendorId: id }, paranoid: false, transaction })) /* a deleted yarn inward / return still points at the vendor */;
   if (kind === 'category') return StoreItem.count({ where: { categoryId: id }, transaction });
   if (kind === 'brand') return StoreItem.count({ where: { brandId: id }, transaction });
   return (await StoreInwardLine.count({ where: { itemId: id }, transaction })) + (await StoreMove.count({ where: { itemId: id }, transaction }));

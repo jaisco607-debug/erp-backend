@@ -26,6 +26,7 @@ const CONTROL_TYPES = {
   SRB_WITHHOLDING: { accountType: 'LIABILITY', single: true },
   SALES: { accountType: 'INCOME', single: true }, // the income account sales invoices post to
   PURCHASES: { accountType: 'EXPENSE', single: true }, // the expense account purchase invoices post to
+  SIZING_CHARGES: { accountType: 'EXPENSE', single: true }, // the expense account the sizing (weaving) purchase invoices post to
   CUSTOMER_ADVANCES: { accountType: 'LIABILITY', single: true }, // money a customer paid before an invoice (we owe him the goods)
   SUPPLIER_ADVANCES: { accountType: 'ASSET', single: true }, // money we paid a vendor before his bill
   EMPLOYEE_LOANS: { accountType: 'ASSET', single: true }, // money employees owe us for loans paid to them

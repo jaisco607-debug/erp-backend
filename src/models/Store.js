@@ -33,6 +33,8 @@ function init(sequelize) {
   Vendor.init(
     {
       id, companyId, isActive, createdById,
+      // which module's list the vendor belongs to: MAIN (the stores, accounts) or WEAVING (the weaving module keeps its own list)
+      module: { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'MAIN' },
       code: { type: DataTypes.INTEGER, allowNull: false },
       name: { type: DataTypes.STRING(150), allowNull: false },
       phone: { type: DataTypes.STRING(30), allowNull: true },

@@ -24,7 +24,7 @@ const groupLines = Joi.array().items(Joi.object({
 
 module.exports = {
   availableLots: {
-    query: Joi.object({ customerId: Joi.string().guid(), search: Joi.string().trim().max(20), limit: Joi.number().integer().min(1).max(500).default(200) }),
+    query: Joi.object({ customerId: Joi.string().guid(), search: Joi.string().trim().max(20), source: Joi.string().uppercase().valid('CUSTOMER', 'STORE'), limit: Joi.number().integer().min(1).max(500).default(200) }),
   },
   list: {
     query: Joi.object({
@@ -41,6 +41,8 @@ module.exports = {
     }),
   },
   get: { params: uuidParam },
+  // cancelling a card that holds store cloth: RETURN (back to the Fabric Store, default), CANCEL (the issue is cancelled, cloth back in the store), KEEP (the lot stays with the customer)
+  cancel: { params: uuidParam, query: Joi.object({ storeAction: Joi.string().uppercase().valid('RETURN', 'CANCEL', 'KEEP').default('RETURN') }) },
   create: {
     body: Joi.object({
       cardDate: date.required(),

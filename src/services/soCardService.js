@@ -41,7 +41,7 @@ const include = [
   {
     model: SoCardLot, as: 'lots',
     include: [{
-      model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'typeNo', 'dcNo', 'inwardDate', 'isReprocess', 'unit', 'glm', 'gsm', 'width', 'inwardMeters', 'pieces'], paranoid: false,
+      model: GreyLot, as: 'greyLot', attributes: ['id', 'lotNo', 'typeNo', 'dcNo', 'inwardDate', 'isReprocess', 'source', 'unit', 'glm', 'gsm', 'width', 'inwardMeters', 'pieces'], paranoid: false,
       include: [{ model: Quality, as: 'quality', attributes: ['id', 'name'], paranoid: false }],
     }, { model: SoCardLotThaan, as: 'thaanParts', include: [{ model: GreyLotThaan, as: 'thaan', attributes: ['thaanNo', 'meters', 'yards', 'width'] }] }],
   },
@@ -70,7 +70,17 @@ function moveJSON(m) {
     sentAt: m.sentAt,
     acceptedBy: person(m.acceptedBy),
     acceptedAt: m.acceptedAt,
+    cancelledAt: m.cancelledAt || null,
   };
+}
+
+/**
+ * A card that is NOT sent (status NEW) cannot have a move waiting to be accepted: such a row is left over from a send that was undone (the cloth was returned to the SO card desk).
+ * It is closed (cancelled, kept in the history) so the card can be sent again; the one-open-move index would refuse a second send otherwise.
+ */
+async function cancelOpenMoves(cardIds, transaction) {
+  if (!cardIds.length) return;
+  await sequelize.query('UPDATE so_card_moves SET "cancelledAt" = now() WHERE "soCardId" IN (:ids) AND "acceptedAt" IS NULL AND "cancelledAt" IS NULL', { replacements: { ids: cardIds }, transaction });
 }
 
 /**
@@ -99,8 +109,23 @@ async function lineInfoOf(cardIds, transaction) {
       COALESCE((SELECT SUM(ji.meters) FROM job_items ji JOIN jobs j ON j.id = ji."jobId" WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED'), 0)::float AS sent,
       (SELECT row_to_json(x) FROM (SELECT s.id, s.code, svc_name(s.id, j."companyId", s.name) AS name, j."jobNo" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" JOIN services s ON s.id = j."departmentId"
         WHERE ji."soCardLotId" = scl.id AND ji."sourceJobItemId" IS NULL AND j.status <> 'REJECTED' ORDER BY j."createdAt" DESC LIMIT 1) x) AS dept
+      ,(SELECT row_to_json(x) FROM (SELECT fi.id AS "issueId", fi."issueNo", fin.id AS "inwardId", fin."inwardNo", v.name AS "vendorName", lc.id AS "linkedCardId", lc."cardNo" AS "linkedCardNo", lc."isGreyReturn" AS "linkedIsGreyReturn"
+         FROM grey_lots gl JOIN fabric_issues fi ON fi.id = gl."fabricIssueId" JOIN fabric_inwards fin ON fin.id = fi."fabricInwardId" JOIN vendors v ON v.id = fin."vendorId" LEFT JOIN so_cards lc ON lc.id = fi."linkedSoCardId"
+         WHERE gl.id = scl."greyLotId") x) AS store
     FROM so_card_lots scl WHERE scl."soCardId" IN (:ids)`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
-  for (const r of rows) out.set(r.id, { sent: round(r.sent), left: Math.max(0, round(r.meters - r.sent)), dept: r.dept || null });
+  for (const r of rows) out.set(r.id, { sent: round(r.sent), left: Math.max(0, round(r.meters - r.sent)), dept: r.dept || null, store: r.store || null });
+  // the other direction: store cloth issued to REPLACE these cards (kept under 'replaced:<cardId>'), and the SO cards that took that cloth
+  const repl = await sequelize.query(`SELECT fi."linkedSoCardId" AS "cardId", fi.id AS "issueId", fi."issueNo", fi.meters::float AS "issueMeters", sc.id AS "newId", sc."cardNo", sc."isGreyReturn", scl.meters::float AS meters
+    FROM fabric_issues fi LEFT JOIN so_card_lots scl ON scl."greyLotId" = fi."greyLotId" LEFT JOIN so_cards sc ON sc.id = scl."soCardId" AND sc."deletedAt" IS NULL
+    WHERE fi."linkedSoCardId" IN (:ids) AND fi."cancelledAt" IS NULL ORDER BY fi."issueNo", sc."cardNo"`, { replacements: { ids: cardIds }, type: QueryTypes.SELECT, transaction });
+  for (const r of repl) {
+    const key = `replaced:${r.cardId}`;
+    const list = out.get(key) || [];
+    let issue = list.find((i) => i.issueId === r.issueId);
+    if (!issue) { issue = { issueId: r.issueId, issueNo: r.issueNo, issueText: String(r.issueNo).padStart(5, '0'), meters: r.issueMeters, soCards: [] }; list.push(issue); }
+    if (r.newId) issue.soCards.push({ id: r.newId, cardNo: r.cardNo, cardLabel: soLabel(r.cardNo, r.isGreyReturn), meters: r.meters });
+    out.set(key, list);
+  }
   return out;
 }
 
@@ -132,10 +157,20 @@ const jsonMany = async (cards) => {
   return cards.map((c) => json(c, pos.get(c.id), info));
 };
 
+/** The Fabric Store side of an SO card line: which fabric issue / inward the cloth came from and the card it replaces (null for the customer's own cloth). */
+const storeJSON = (s) => (s ? {
+  issueId: s.issueId, issueNo: s.issueNo, inwardId: s.inwardId, inwardNo: s.inwardNo, inwardText: String(s.inwardNo).padStart(5, '0'), vendorName: s.vendorName,
+  linkedSoCard: s.linkedCardId ? { id: s.linkedCardId, cardNo: s.linkedCardNo, cardLabel: soLabel(s.linkedCardNo, s.linkedIsGreyReturn) } : null,
+} : null);
+
 function json(c, position, lineInfo = new Map()) {
+  const storeLines = (c.lots || []).map((l) => ({ line: l, store: storeJSON((lineInfo.get(l.id) || {}).store) })).filter((x) => x.line.greyLot && x.line.greyLot.source === 'STORE');
+  const replacedBy = lineInfo.get(`replaced:${c.id}`) || [];
+  const replaces = [...new Map(storeLines.filter((x) => x.store && x.store.linkedSoCard).map((x) => [x.store.linkedSoCard.id, x.store.linkedSoCard])).values()];
   const here = position ? position.department : dept(c.currentDepartment);
   const waiting = c.status === 'SENT' && (position ? position.waiting : true);
   const moves = (c.moves || []).map(moveJSON);
+  const liveMoves = moves.filter((m) => !m.cancelledAt); // a cancelled move (the card came back) is history, not the last move
   return {
     id: c.id,
     cardNo: c.cardNo,
@@ -161,7 +196,16 @@ function json(c, position, lineInfo = new Map()) {
     // ready-made line for the card view
     deliveryText: c.status === 'NEW' ? 'Not sent to any department yet'
       : waiting ? `Sent to ${here?.name} (waiting for accept)` : `Delivered to ${here?.name}`,
-    lastMove: moves.length ? moves[moves.length - 1] : null,
+    lastMove: liveMoves.length ? liveMoves[liveMoves.length - 1] : null,
+    // where the cloth came from: the customer (grey inward), the Fabric Store (bought from a vendor), or both; and the earlier card(s) the store cloth replaces
+    clothSource: !storeLines.length ? 'CUSTOMER' : storeLines.length === (c.lots || []).length ? 'STORE' : 'MIXED',
+    clothSourceText: !storeLines.length ? 'Customer cloth' : storeLines.length === (c.lots || []).length ? 'Store cloth' : 'Customer + store cloth',
+    replacesSoCards: replaces,
+    replacesText: replaces.length ? `Made to replace SO ${replaces.map((x) => x.cardLabel).join(', ')}` : null,
+    // the other side: store cloth issued to replace THIS card, and the new card(s) that took it
+    replacedBy,
+    isReplaced: replacedBy.length > 0,
+    replacedText: replacedBy.length ? (replacedBy.some((i) => i.soCards.length) ? `Replaced by SO ${[...new Set(replacedBy.flatMap((i) => i.soCards.map((x) => x.cardLabel)))].join(', ')}` : 'Replacement cloth issued from the store (no SO card made yet)') : null,
     lots: (c.lots || []).map((l) => {
       const g = l.greyLot || {};
       const showYards = g.unit === 'YARD';
@@ -183,6 +227,9 @@ function json(c, position, lineInfo = new Map()) {
         unit: g.unit || 'METER',
         showYards,
         isReprocess: g.isReprocess,
+        source: g.source || 'CUSTOMER',
+        fromStore: g.source === 'STORE',
+        storeIssue: g.source === 'STORE' ? storeJSON((lineInfo.get(l.id) || {}).store) : null,
         lotInwardMeters: g.inwardMeters,
         lotPieces: g.pieces,
         // the lot when this card was made: gone out before, going on this card, left after
@@ -237,7 +284,7 @@ async function departments(req, transaction) {
  * With `mine` (the card being edited) the card's own meters count as free again, so the edit
  * form shows what the card can hold: each lot/thaan also says what is on this card now.
  */
-async function availableLots(req, { customerId, search, limit }, mine) {
+async function availableLots(req, { customerId, search, limit, source }, mine) {
   const where = {
     companyId: req.user.companyId,
     isApproved: true,
@@ -245,6 +292,7 @@ async function availableLots(req, { customerId, search, limit }, mine) {
     [Op.and]: [sequelize.where(sequelize.col('inwardMeters'), Op.gt, sequelize.col('outwardMeters'))],
   };
   if (customerId) where.customerId = customerId;
+  if (source) where.source = source;
   if (search && /^\d+$/.test(search)) where.lotNo = Number(search);
   const include = [
     { model: Customer, as: 'customer', attributes: ['id', 'code', 'name'], paranoid: false },
@@ -281,6 +329,7 @@ async function availableLots(req, { customerId, search, limit }, mine) {
         balanceMeters: round(l.inwardMeters - out),
         balanceYards: l.unit === 'YARD' ? round((l.inwardMeters - out) / YARD) : null,
         isReprocess: l.isReprocess,
+        source: l.source, fromStore: l.source === 'STORE', fabricIssueId: l.fabricIssueId || null,
         isThaanWise: thaansOf.has(l.id),
         // meters = what can be taken of the thaan (part of it may already be on another card)
         thaans,
@@ -626,7 +675,7 @@ async function replaceLots(req, card, lots, qualityChosen, transaction, groupDef
 }
 
 /** Cancel a card that has not been sent anywhere: its meters go back to the grey lots. */
-async function cancel(req, id) {
+async function cancel(req, id, { storeAction = 'RETURN' } = {}) {
   return sequelize.transaction(async (transaction) => {
     const card = await findOr404(req, id, transaction, true);
     if (card.status !== 'NEW') throw AppError.rule('CARD_SENT', 'This card has already been sent to a department');
@@ -642,7 +691,12 @@ async function cancel(req, id) {
     }
     await freeThaans(lines.map((l) => l.id), transaction);
     await card.destroy({ transaction });
-    await audit.log(req, { action: 'SO_CARD_CANCELLED', entityType: 'SoCard', entityId: id, before }, { transaction });
+    // store cloth on this card goes back to the Fabric Store (RETURN, the default), or its issue is cancelled (CANCEL), or the lot stays with the customer (KEEP)
+    if (storeAction !== 'KEEP') {
+      const storeLots = lots.filter((l) => l.source === 'STORE').map((l) => l.id);
+      if (storeLots.length) await require('./fabricIssueService').releaseLots(req, storeLots, storeAction === 'CANCEL' ? 'DELETE' : 'RETURNED', transaction);
+    }
+    await audit.log(req, { action: 'SO_CARD_CANCELLED', entityType: 'SoCard', entityId: id, before, after: { storeAction } }, { transaction });
   });
 }
 
@@ -677,6 +731,7 @@ async function sendIn(req, card, { departmentId, sentThrough, remarks, workInstr
     }
     if (card.currentDepartmentId === departmentId) throw AppError.rule('SAME_DEPARTMENT', 'The card is already in this department');
 
+    await cancelOpenMoves([id], transaction); // the card is not sent (status NEW here): an open move is a left-over of an undone send
     await SoCardMove.create({
       soCardId: id,
       fromDepartmentId: card.currentDepartmentId,
@@ -708,6 +763,7 @@ async function sendMany(req, { soCardIds, departmentId, colourId, jobDate, sentT
     const rows = (await jobService.available(req, null, transaction)).filter((r) => ids.includes(r.soCard.id));
     if (!rows.length) throw AppError.rule('NOTHING_LEFT', 'These SO cards have nothing left to send');
     const job = await jobService.create(req, { departmentId, colourId, jobDate, sentThrough, remarks, instructions: workInstructions, items: rows.map((r) => ({ soCardLotId: r.soCardLotId })) }, transaction);
+    await cancelOpenMoves(cards.map((c) => c.id), transaction); // every card here is NEW: an open move is a left-over of an undone send (returned to the SO card desk)
     for (const card of cards) {
       await SoCardMove.create({
         soCardId: card.id, fromDepartmentId: null, toDepartmentId: departmentId,
@@ -727,7 +783,7 @@ async function accept(req, id) {
   return sequelize.transaction(async (transaction) => {
     const card = await findOr404(req, id, transaction, true);
     if (card.status !== 'SENT') throw AppError.rule('NOTHING_TO_ACCEPT', 'This card is not on its way to a department');
-    const move = await SoCardMove.findOne({ where: { soCardId: id, acceptedAt: null }, lock: transaction.LOCK.UPDATE, transaction });
+    const move = await SoCardMove.findOne({ where: { soCardId: id, acceptedAt: null, cancelledAt: null }, lock: transaction.LOCK.UPDATE, transaction });
     // a card sent through the job flow has no move: its department accepts the job (PUT /departments/:code/jobs/:id/status)
     if (!move) throw AppError.rule('ACCEPT_ON_JOB', 'This card was sent as a job: the department accepts it on its job, not on the SO card');
 
@@ -814,7 +870,7 @@ async function incoming(req, departmentId) {
   const cards = await SoCard.findAll({
     where: { companyId: req.user.companyId, status: 'SENT', currentDepartmentId: departmentId, isGreyReturn: false,
       // only cards with a move waiting to be accepted: cards sent through the job flow are accepted on their job
-      id: { [Op.in]: sequelize.literal('(SELECT "soCardId" FROM so_card_moves WHERE "acceptedAt" IS NULL)') } },
+      id: { [Op.in]: sequelize.literal('(SELECT "soCardId" FROM so_card_moves WHERE "acceptedAt" IS NULL AND "cancelledAt" IS NULL)') } },
     include, order: [['cardNo', 'ASC'], ...order],
   });
   return { data: await jsonMany(cards) };

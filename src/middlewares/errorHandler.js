@@ -46,7 +46,10 @@ module.exports = function errorHandler(err, req, res, next) {
     return res.status(413).json({ error: { code: 'TOO_LARGE', message: 'Request body is too large' } });
   }
   if (err instanceof UniqueConstraintError) {
-    return res.status(409).json({ error: { code: 'DUPLICATE', message: 'A record with the same value already exists' } });
+    // say which value clashed (the fields and the index), so the problem can be traced
+    const details = { fields: Object.keys(err.fields || {}), constraint: (err.parent && err.parent.constraint) || (err.original && err.original.constraint) || null, table: (err.parent && err.parent.table) || null };
+    req.log.warn({ err: { message: err.message, fields: details.fields, constraint: details.constraint, table: details.table } }, 'Duplicate value');
+    return res.status(409).json({ error: { code: 'DUPLICATE', message: 'A record with the same value already exists', details } });
   }
   if (err instanceof ForeignKeyConstraintError) {
     return res.status(409).json({ error: { code: 'IN_USE', message: 'This record is linked to other records' } });

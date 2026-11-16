@@ -465,6 +465,11 @@ const DEFAULT_ACCOUNTS = {
     name: 'Purchases', accountType: 'EXPENSE', subType: 'COST_OF_SALES', alsoNamed: /^(cost of goods sold|purchases)$/i,
     path: [header('Cost of Sales', /^cost of (sales?|goods sold)$/i, 'COST_OF_SALES')],
   },
+  // weaving: what the sizing party charges for sizing our yarn on the beams
+  SIZING_CHARGES: {
+    name: 'Sizing Charges', accountType: 'EXPENSE', subType: 'COST_OF_SALES', alsoNamed: /^(sizing( charges| expenses?| cost| bills?)?|sizing and warping charges)$/i,
+    path: [header('Cost of Sales', /^cost of (sales?|goods sold)$/i, 'COST_OF_SALES')],
+  },
   // the vouchers: income tax withheld, and money paid / received in advance
   INCOME_TAX_CUSTOMERS: {
     name: 'Income Tax - Customers', accountType: 'ASSET', subType: 'CURRENT_ASSET', alsoNamed: /^income tax\s*-\s*customers?$/i,

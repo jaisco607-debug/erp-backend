@@ -8,7 +8,7 @@ exports.get = async (req, res) => res.json(await soCardService.get(req, req.para
 exports.create = async (req, res) => res.status(201).json(await soCardService.create(req, req.body));
 exports.update = async (req, res) => res.json(await soCardService.update(req, req.params.id, req.body));
 exports.cancel = async (req, res) => {
-  await soCardService.cancel(req, req.params.id);
+  await soCardService.cancel(req, req.params.id, { storeAction: req.validatedQuery.storeAction });
   res.status(204).end();
 };
 exports.sendMany = async (req, res) => res.status(201).json(await soCardService.sendMany(req, req.body));

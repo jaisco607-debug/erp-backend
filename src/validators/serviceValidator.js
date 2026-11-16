@@ -1,7 +1,7 @@
 const { Joi, uuidParam } = require('./common');
 
 const KINDS = ['MODULE', 'PROCESS', 'FOLDING', 'PACKING', 'REPORT'];
-const GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL'];
+const GROUPS = ['PRODUCTION', 'PROCESS', 'STORE', 'REPORTS', 'ACCOUNTS', 'PAYROLL', 'WEAVING'];
 
 module.exports = {
   // kind: one or more of MODULE, PROCESS, FOLDING, PACKING, REPORT, e.g. ?kind=PROCESS&kind=FOLDING (or ?kind=PROCESS,FOLDING)

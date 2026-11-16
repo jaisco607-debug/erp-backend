@@ -15,6 +15,9 @@ router.use(authenticate);
 router.get('/options', view, c.options);
 router.get('/credit/:id', view, validate(v.get), c.credit);
 router.get('/inwards', view, validate(v.inwards), c.inwards);
+router.get('/sizing-inwards', view, validate(v.sizingInwards), c.sizingInwards); // the weaving sizing receipts of a vendor that can go on a sizing invoice
+router.get('/fabric-inwards', view, validate(v.fabricInwards), c.fabricInwards); // the store fabric inwards (cloth bought) of a vendor that can go on a fabric invoice
+router.get('/yarn-inwards', view, validate(v.yarnInwards), c.yarnInwards); // the weaving yarn bought from a vendor that can go on a yarn invoice
 router.get('/', view, validate(v.list), c.list);
 router.post('/', full, validate(v.create), c.create);
 router.get('/:id', view, validate(v.get), c.get);
