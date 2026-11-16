@@ -48,13 +48,13 @@ test('services list: kinds, menu groups, a module can be given to companies from
   const all = (await sup('get', '/services')).body.data;
   const by = (g) => all.filter((s) => s.menuGroup === g).map((s) => s.code);
   expect(by('PRODUCTION').sort()).toEqual(['GATE_PASS', 'GREY_STORE', 'PACKING', 'SO_CARD']);
-  expect(by('STORE').sort()).toEqual(['CHEMICAL_STORE', 'FABRIC_STORE', 'GENERAL_STORE', 'STORE_REPORTS']);
+  expect(by('STORE').sort()).toEqual(['CHEMICAL_STORE', 'FABRIC_STORE', 'GENERAL_STORE', 'STORE_REPORTS', 'YARN_STORE']);
   expect(by('REPORTS')).toHaveLength(9);
   expect(by('PROCESS')).toEqual(expect.arrayContaining(['DYEING', 'FOLDING']));
   expect((await sup('get', '/services?kind=REPORT')).body.data).toHaveLength(11);
   expect(all.find((s) => s.code === 'REPORTS')).toBeUndefined();
   // built-in services cannot be deleted (the screen hides their delete button)
-  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(31);
+  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(32);
   expect(by('ACCOUNTS').sort()).toEqual(['ACC_BANK', 'ACC_COA', 'ACC_CONTRA', 'ACC_JOURNAL', 'ACC_PAYMENTS', 'ACC_PURCHASES', 'ACC_RECEIPTS', 'ACC_REPORTS', 'ACC_SALES']);
   expect(by('PAYROLL').sort()).toEqual(['PAYROLL_APPLICATIONS', 'PAYROLL_EMPLOYEES', 'PAYROLL_REPORTS', 'PAYROLL_SALARY']);
   expect(by('WEAVING')).toEqual(['WEAVING_MASTERS']);

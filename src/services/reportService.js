@@ -130,6 +130,24 @@ async function chemLines(companyId, f = {}) {
     CROSS JOIN LATERAL (SELECT CASE WHEN r."soCardId" IS NOT NULL THEN 1 ELSE cm.m / NULLIF(jm.tot, 0) END AS f) x
     WHERE ${where.join(' AND ')}`, rep);
 }
+/** Yarn cost lines: one row per yarn use line and SO card (a use for the whole job is shared by meters), like chemLines. */
+async function yarnLines(companyId, f = {}) {
+  const where = ['u."companyId" = :companyId'];
+  const rep = { companyId };
+  if (f.dateFrom) { where.push('u."usageDate" >= :dateFrom'); rep.dateFrom = f.dateFrom; }
+  if (f.dateTo) { where.push('u."usageDate" <= :dateTo'); rep.dateTo = f.dateTo; }
+  return q(`
+    WITH jm AS (SELECT "jobId", SUM(meters) AS tot FROM job_items GROUP BY "jobId"),
+         cm AS (SELECT "jobId", "soCardId", SUM(meters) AS m FROM job_items GROUP BY "jobId", "soCardId")
+    SELECT u.id AS "usageId", u."usageNo", u."requestId", u."departmentId", svc_name(s.id, u."companyId", s.name) AS department, u."jobId", j."jobNo", cm."soCardId", i."yarnName", i.brand,
+           (ul.bags * x.f)::float AS bags, (ul.lbs * x.f)::float AS lbs, (ul.value * x.f)::float AS amount
+    FROM store_yarn_usages u JOIN store_yarn_usage_lines ul ON ul."usageId" = u.id JOIN store_yarn_outward_lines l ON l.id = ul."outwardLineId" JOIN store_yarn_inwards i ON i.id = l."inwardId"
+    JOIN services s ON s.id = u."departmentId" JOIN jobs j ON j.id = u."jobId"
+    JOIN cm ON cm."jobId" = u."jobId" AND (u."soCardId" IS NULL OR cm."soCardId" = u."soCardId")
+    JOIN jm ON jm."jobId" = u."jobId"
+    CROSS JOIN LATERAL (SELECT CASE WHEN u."soCardId" IS NOT NULL THEN 1 ELSE cm.m / NULLIF(jm.tot, 0) END AS f) x
+    WHERE ${where.join(' AND ')}`, rep);
+}
 const costMap = (lines, keyFn) => {
   const m = new Map();
   for (const l of lines) m.set(keyFn(l), round((m.get(keyFn(l)) || 0) + l.amount));
@@ -336,6 +354,7 @@ async function soCards(req, f) {
     WHERE ${where.join(' AND ')} ORDER BY sc."cardNo" DESC`, rep);
   const now = await clothNow(companyId);
   const cost = costMap(await chemLines(companyId), (l) => l.soCardId);
+  const yarn = costMap(await yarnLines(companyId), (l) => l.soCardId);
   const pos = await cardPositions(companyId);
   const place = (c) => pos.get(c.id) || { key: 'RETURN', text: 'Fabric return' };
   const rows = cards.filter((c) => !f.status || place(c).key === positionKey(f.status)).map((c) => {
@@ -345,14 +364,15 @@ async function soCards(req, f) {
       lotCount: c.lotCount, lots: lotsText(c.lots), thaans: c.thaans, meters: round(c.meters), status: place(c).key, statusText: place(c).text, currentDepartment: c.currentDepartment, wentTo: c.wentTo,
       inProcessMeters: round(mine.filter((n) => n.stageKind === 'DEPARTMENT').reduce((t, n) => t + n.meters, 0)),
       atPackingMeters: round(mine.filter((n) => n.stageKind === 'PACKING').reduce((t, n) => t + n.meters, 0)),
-      chemicalCost: nz(cost.get(c.id)), costPerMeter: c.meters ? round(nz(cost.get(c.id)) / c.meters) : 0, tag: c.isGreyReturn ? TAG : '',
+      chemicalCost: nz(cost.get(c.id)), yarnCost: nz(yarn.get(c.id)), totalCost: round(nz(cost.get(c.id)) + nz(yarn.get(c.id))),
+      costPerMeter: c.meters ? round((nz(cost.get(c.id)) + nz(yarn.get(c.id))) / c.meters) : 0, tag: c.isGreyReturn ? TAG : '',
     };
   });
   const columns = [col('soNo', 'SO#', 'number'), col('idNo', 'ID#', 'number'), col('cardDate', 'Date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('article', 'Article'),
     col('lotCount', 'Lots', 'number'), col('lots', 'Lot#s', 'list'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number'), col('statusText', 'Status'),
     col('currentDepartment', 'Now at'), col('wentTo', 'Went to', 'list'), col('inProcessMeters', 'In process (m)', 'number'), col('atPackingMeters', 'Reached Packing (m)', 'number'),
-    col('chemicalCost', 'Chemical cost', 'money'), col('costPerMeter', 'Cost / m', 'money'), col('tag', 'Tag', 'tag')];
-  return respond('SO cards', f, [section('cards', 'SO cards', columns, rows, ['lotCount', 'thaans', 'meters', 'inProcessMeters', 'atPackingMeters', 'chemicalCost'])], f);
+    col('chemicalCost', 'Chemical cost', 'money'), col('yarnCost', 'Yarn cost', 'money'), col('totalCost', 'Total cost', 'money'), col('costPerMeter', 'Cost / m', 'money'), col('tag', 'Tag', 'tag')];
+  return respond('SO cards', f, [section('cards', 'SO cards', columns, rows, ['lotCount', 'thaans', 'meters', 'inProcessMeters', 'atPackingMeters', 'chemicalCost', 'yarnCost', 'totalCost'])], f);
 }
 
 /** Which SO card went to which department: one row per job and card, with lots, thaans and meters. */
@@ -387,11 +407,13 @@ async function soCardDetail(req, id) {
   const chem = await chemLines(companyId);
   const mineChem = chem.filter((l) => l.soCardId === id);
   const cost = costMap(mineChem, (l) => l.jobId);
+  const mineYarn = (await yarnLines(companyId)).filter((l) => l.soCardId === id);
+  const yarnCost = costMap(mineYarn, (l) => l.jobId);
   const path = section('path', 'Departments it passed', [col('jobNo', 'Job#', 'number'), col('jobDate', 'Date', 'date'), col('department', 'Department'), col('fromDepartment', 'From'), col('lots', 'Lot#s', 'list'),
     col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number'), col('statusText', 'Status'), col('operatorName', 'Operator'), col('processDate', 'Process date', 'date'), col('sentTo', 'Then sent to', 'list'),
-    col('chemicalCost', 'Chemical cost', 'money')],
+    col('chemicalCost', 'Chemical cost', 'money'), col('yarnCost', 'Yarn cost', 'money'), col('totalCost', 'Total cost', 'money')],
   jobs.slice().sort((a, b) => a.jobNo - b.jobNo).map((r) => ({ jobNo: r.jobNo, jobDate: r.jobDate, department: r.department, fromDepartment: r.fromDepartment || 'SO Card', lots: lotsText(r.lots), thaans: nz(r.thaans),
-    meters: round(r.meters), statusText: STATUS_TEXT[r.status], operatorName: r.operatorName, processDate: r.processDate, sentTo: r.sentTo || '', chemicalCost: nz(cost.get(r.jobId)) })), ['meters', 'chemicalCost']);
+    meters: round(r.meters), statusText: STATUS_TEXT[r.status], operatorName: r.operatorName, processDate: r.processDate, sentTo: r.sentTo || '', chemicalCost: nz(cost.get(r.jobId)), yarnCost: nz(yarnCost.get(r.jobId)), totalCost: round(nz(cost.get(r.jobId)) + nz(yarnCost.get(r.jobId))) })), ['meters', 'chemicalCost', 'yarnCost', 'totalCost']);
   const chemRows = new Map();
   for (const l of mineChem) {
     const k = `${l.department}|${l.itemId}`;
@@ -400,6 +422,14 @@ async function soCardDetail(req, id) {
   }
   const chemicals = section('chemicals', 'Chemicals used', [col('department', 'Department'), col('chemical', 'Chemical'), col('qty', 'Qty', 'number'), col('unit', 'Unit'), col('rate', 'Avg rate', 'money'), col('amount', 'Amount', 'money')],
     [...chemRows.values()].map((r) => ({ ...r, rate: r.qty ? round(r.amount / r.qty) : 0 })).sort((a, b) => a.department.localeCompare(b.department) || b.amount - a.amount), ['amount']);
+  const yarnRows = new Map();
+  for (const l of mineYarn) {
+    const k = `${l.department}|${l.yarnName}|${l.brand || ''}`;
+    const r = yarnRows.get(k) || { department: l.department, yarn: l.brand ? `${l.yarnName} - ${l.brand}` : l.yarnName, bags: 0, lbs: 0, amount: 0 };
+    r.bags = round(r.bags + l.bags); r.lbs = round(r.lbs + l.lbs); r.amount = round(r.amount + l.amount); yarnRows.set(k, r);
+  }
+  const yarnSection = section('yarn', 'Yarn used', [col('department', 'Department'), col('yarn', 'Yarn'), col('bags', 'Bags', 'number'), col('lbs', 'Lbs', 'number'), col('rate', 'Avg rate / lb', 'money'), col('amount', 'Amount', 'money')],
+    [...yarnRows.values()].map((r) => ({ ...r, rate: r.lbs ? round(r.amount / r.lbs) : 0 })).sort((a, b) => a.department.localeCompare(b.department) || b.amount - a.amount), ['bags', 'lbs', 'amount']);
   const now = (await clothNow(companyId)).filter((n) => n.soCardId === id);
   const where = section('now', 'Where the cloth is now', [col('stage', 'Place'), col('statusText', 'Status'), col('lotNo', 'Lot#', 'number'), col('width', 'Width (m)', 'list'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number')],
     now.map((n) => ({ stage: n.stage, statusText: n.statusText, lotNo: n.lotNo, width: n.width || '', thaans: n.thaans, meters: round(n.meters) })), ['meters']);
@@ -411,8 +441,9 @@ async function soCardDetail(req, id) {
   lists.map((r) => ({ listNo: r.listNo, listDate: r.listDate, statusText: r.status === 'FINAL' ? 'Final' : 'Draft', meters: round(r.meters), gatePassNo: r.gatePassNo, passDate: r.passDate, driverName: r.driverName, vehicleNo: r.vehicleNo, destination: r.destination })), ['meters']);
   const head = { soNo: c.cardNo, idNo: c.idNo, cardDate: c.cardDate, party: c.party, partyCode: c.partyCode, quality: c.quality, article: c.article, description: c.description, deliveryDate: c.deliveryDate,
     statusText: (await cardPositions(req.user.companyId)).get(id)?.text || 'Fabric return', currentDepartment: c.currentDepartment, totalMeters: round(c.totalMeters), instructions: c.instructions, tag: c.isGreyReturn ? TAG : null,
-    chemicalCost: round(mineChem.reduce((t, l) => t + l.amount, 0)) };
-  const out = respond(`SO card ${c.cardNo}`, { soCardId: id }, [lots, path, chemicals, where, packing], { export: true });
+    chemicalCost: round(mineChem.reduce((t, l) => t + l.amount, 0)), yarnCost: round(mineYarn.reduce((t, l) => t + l.amount, 0)) };
+  head.totalCost = round(head.chemicalCost + head.yarnCost);
+  const out = respond(`SO card ${c.cardNo}`, { soCardId: id }, [lots, path, chemicals, yarnSection, where, packing], { export: true });
   out.header = head;
   return out;
 }
@@ -457,17 +488,20 @@ async function departmentJobs(req, f, code) {
   } else if (f.departmentId) ids = ids.filter((id) => id === f.departmentId);
   const jobs = await jobCards(req.user.companyId, { ...f, departmentIds: ids });
   const cost = costMap(await chemLines(req.user.companyId), (l) => `${l.jobId}:${l.soCardId}`);
+  const yarn = costMap(await yarnLines(req.user.companyId), (l) => `${l.jobId}:${l.soCardId}`);
   const rows = jobs.map((r) => {
-    const c = nz(cost.get(`${r.jobId}:${r.soCardId}`));
+    const chemical = nz(cost.get(`${r.jobId}:${r.soCardId}`));
+    const y = nz(yarn.get(`${r.jobId}:${r.soCardId}`));
+    const c = round(chemical + y);
     return { department: r.department, jobNo: r.jobNo, jobDate: r.jobDate, fromDepartment: r.fromDepartment || 'SO Card', soNo: r.soNo, party: r.customer, quality: r.quality, colour: r.colour,
       lots: lotsText(r.lots), thaans: nz(r.thaans), meters: round(r.meters), statusText: STATUS_TEXT[r.status], operatorName: r.operatorName, processDate: r.processDate, sentTo: r.sentTo || '',
-      sentOnMeters: round(r.sentOnMeters), chemicalCost: c, costPerMeter: r.meters ? round(c / r.meters) : 0, tag: r.isGreyReturn ? TAG : (r.isRework ? 'RE-WORK' : '') };
+      sentOnMeters: round(r.sentOnMeters), chemicalCost: chemical, yarnCost: y, totalCost: c, costPerMeter: r.meters ? round(c / r.meters) : 0, tag: r.isGreyReturn ? TAG : (r.isRework ? 'RE-WORK' : '') };
   });
   const columns = [col('department', 'Department'), col('jobNo', 'Job#', 'number'), col('jobDate', 'Date', 'date'), col('fromDepartment', 'From'), col('soNo', 'SO#', 'number'), col('party', 'Party'),
     col('quality', 'Quality'), col('colour', 'Colour'), col('lots', 'Lot#s', 'list'), col('thaans', 'Thaans', 'number'), col('meters', 'Meters', 'number'), col('statusText', 'Status'),
     col('operatorName', 'Operator'), col('processDate', 'Process date', 'date'), col('sentTo', 'Sent to', 'list'), col('sentOnMeters', 'Sent on (m)', 'number'),
-    col('chemicalCost', 'Chemical cost', 'money'), col('costPerMeter', 'Cost / m', 'money'), col('tag', 'Tag', 'tag')];
-  return respond(code ? `${code} jobs` : 'Department jobs', f, [section('jobs', 'Jobs and SO cards', columns, rows, ['thaans', 'meters', 'sentOnMeters', 'chemicalCost'])], f);
+    col('chemicalCost', 'Chemical cost', 'money'), col('yarnCost', 'Yarn cost', 'money'), col('totalCost', 'Total cost', 'money'), col('costPerMeter', 'Cost / m', 'money'), col('tag', 'Tag', 'tag')];
+  return respond(code ? `${code} jobs` : 'Department jobs', f, [section('jobs', 'Jobs and SO cards', columns, rows, ['thaans', 'meters', 'sentOnMeters', 'chemicalCost', 'yarnCost', 'totalCost'])], f);
 }
 
 /** Per department and operator: jobs, SO cards, lots, thaans, meters and chemical cost they handled. */

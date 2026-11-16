@@ -23,6 +23,7 @@ const fields = {
 };
 const inwardIds = Joi.array().items(id).min(1).max(200);
 const sizingInwardIds = Joi.array().items(id).min(1).max(200); // a SIZING invoice is made of weaving sizing receipts
+const storeYarnInwardIds = Joi.array().items(id).min(1).max(200); // a STORE_YARN invoice is made of store yarn inwards (yarn bought from a vendor for processing)
 const fabricInwardIds = Joi.array().items(id).min(1).max(200); // a FABRIC invoice is made of store fabric inwards (cloth bought from a vendor)
 const yarnInwardIds = Joi.array().items(id).min(1).max(200); // a YARN invoice is made of weaving yarn inward entries instead of store inwards
 
@@ -30,7 +31,7 @@ module.exports = {
   list: {
     query: Joi.object({
       ...paging, limit: Joi.number().integer().min(1).max(500).default(50),
-      status: Joi.string().valid('APPROVED', 'UNAPPROVED'), kind: Joi.string().uppercase().valid('STORE', 'YARN', 'SIZING', 'FABRIC'), dateFrom: date, dateTo: date, vendorId: id, search: Joi.string().trim().max(100),
+      status: Joi.string().valid('APPROVED', 'UNAPPROVED'), kind: Joi.string().uppercase().valid('STORE', 'YARN', 'SIZING', 'FABRIC', 'STORE_YARN'), dateFrom: date, dateTo: date, vendorId: id, search: Joi.string().trim().max(100),
     }),
   },
   inwards: {
@@ -42,6 +43,9 @@ module.exports = {
   sizingInwards: {
     query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(100), invoiceId: id, limit: Joi.number().integer().min(1).max(500).default(200) }),
   },
+  storeYarnInwards: {
+    query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(100), invoiceId: id, limit: Joi.number().integer().min(1).max(500).default(200) }),
+  },
   fabricInwards: {
     query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(100), invoiceId: id, limit: Joi.number().integer().min(1).max(500).default(200) }),
   },
@@ -49,7 +53,7 @@ module.exports = {
     query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(100), invoiceId: id, limit: Joi.number().integer().min(1).max(500).default(200) }),
   },
   get: { params: uuidParam },
-  create: { body: Joi.object({ vendorId: id.required(), inwardIds, yarnInwardIds, sizingInwardIds, fabricInwardIds, ...fields }).xor('inwardIds', 'yarnInwardIds', 'sizingInwardIds', 'fabricInwardIds') },
-  update: { params: uuidParam, body: Joi.object({ vendorId: id, inwardIds, yarnInwardIds, sizingInwardIds, fabricInwardIds, ...fields }).oxor('inwardIds', 'yarnInwardIds', 'sizingInwardIds', 'fabricInwardIds').min(1) },
+  create: { body: Joi.object({ vendorId: id.required(), inwardIds, yarnInwardIds, sizingInwardIds, fabricInwardIds, storeYarnInwardIds, ...fields }).xor('inwardIds', 'yarnInwardIds', 'sizingInwardIds', 'fabricInwardIds', 'storeYarnInwardIds') },
+  update: { params: uuidParam, body: Joi.object({ vendorId: id, inwardIds, yarnInwardIds, sizingInwardIds, fabricInwardIds, storeYarnInwardIds, ...fields }).oxor('inwardIds', 'yarnInwardIds', 'sizingInwardIds', 'fabricInwardIds', 'storeYarnInwardIds').min(1) },
   unapprove: { params: uuidParam, body: Joi.object({ reason: Joi.string().trim().max(200) }) },
 };

@@ -20,7 +20,7 @@ const router = express.Router();
 router.use(authenticate, requireUserType('CLIENT_ADMIN', 'USER'));
 
 // A department the client admin did not give chemical requests shows NO chemical field (counts, amounts, cost per metre, Folding cost) on any of its screens.
-const CHEMICAL_KEYS = new Set(['chemicalCount', 'chemicalAmount', 'previousChemicalAmount', 'totalChemicalAmount', 'costPerMeter', 'totalCostPerMeter', 'chemicalRequests', 'pendingChemicalRequests', 'foldingChemicalAmount', 'cost']);
+const CHEMICAL_KEYS = new Set(['chemicalCount', 'chemicalAmount', 'previousChemicalAmount', 'totalChemicalAmount', 'costPerMeter', 'totalCostPerMeter', 'chemicalRequests', 'pendingChemicalRequests', 'foldingChemicalAmount', 'cost', 'totalCostAmount', 'grandCostPerMeter']);
 const stripChemical = (v) => {
   if (Array.isArray(v)) return v.map(stripChemical);
   if (v && typeof v === 'object' && !(v instanceof Date)) return Object.fromEntries(Object.entries(v).filter(([k]) => !CHEMICAL_KEYS.has(k)).map(([k, x]) => [k, stripChemical(x)]));
@@ -285,6 +285,34 @@ router.get('/:code/jobs/:jobId/chemical-cost', validate({ params: jobKey }), asy
   await ownJob(req);
   res.json(await chem.jobCost(req, req.params.jobId));
 });
+
+// ---- Yarn requests to the Yarn Store (like the chemical requests; only departments the client admin switched on) ----
+const yreq = require('../services/yarnRequestService');
+const yarnLine = Joi.object({ yarnName: Joi.string().trim().min(1).max(120).required(), brand: Joi.string().trim().max(80).allow('', null), bags: Joi.number().integer().min(1).max(1000000).required() });
+const yarnReqBody = { jobId: Joi.string().guid(), soCardId: Joi.string().guid().allow(null, ''), notes: Joi.string().trim().max(500).allow('', null), lines: Joi.array().items(yarnLine).min(1).max(100) };
+router.get('/:code/yarn-requests/form-data', async (req, res) => res.json(await yreq.formData(req, req.params.code)));
+router.get('/:code/yarn-requests', validate({ query: reqList }), async (req, res) => res.json(await yreq.deptList(req, req.params.code, req.validatedQuery)));
+router.post('/:code/yarn-requests', validate({ body: Joi.object({ ...yarnReqBody, jobId: yarnReqBody.jobId.required(), lines: yarnReqBody.lines.required() }) }),
+  async (req, res) => res.status(201).json(await yreq.create(req, req.params.code, req.body)));
+router.get('/:code/yarn-requests/:id', validate({ params: reqKey }), async (req, res) => res.json(await yreq.deptGet(req, req.params.code, req.params.id)));
+router.patch('/:code/yarn-requests/:id', validate({ params: reqKey, body: Joi.object(yarnReqBody).min(1) }), async (req, res) => res.json(await yreq.update(req, req.params.code, req.params.id, req.body)));
+router.post('/:code/yarn-requests/:id/cancel', validate({ params: reqKey }), async (req, res) => res.json(await yreq.cancel(req, req.params.code, req.params.id)));
+router.post('/:code/yarn-requests/:id/receive', validate({ params: reqKey }), async (req, res) => res.json(await yreq.receive(req, req.params.code, req.params.id)));
+
+// ---- Yarn: what the Yarn Store gave this department, and its use on jobs / SO cards (the yarn cost) ----
+const yarn = require('../services/departmentYarnService');
+router.get('/:code/yarn', validate({ query: Joi.object({ showZero: Joi.boolean().default(false), search: Joi.string().trim().max(100) }) }), async (req, res) => res.json(await yarn.stock(req, req.params.code, req.validatedQuery)));
+router.get('/:code/yarn/form-data', async (req, res) => res.json(await yarn.formData(req, req.params.code)));
+router.get('/:code/yarn-usages', validate({ query: Joi.object({ ...paging, jobId: Joi.string().guid(), soCardId: Joi.string().guid(), dateFrom: date, dateTo: date, search: Joi.string().trim().max(100) }) }),
+  async (req, res) => res.json(await yarn.usages(req, req.params.code, req.validatedQuery)));
+router.post('/:code/yarn-usages', validate({ body: Joi.object({
+  usageDate: date, jobId: Joi.string().guid().required(), soCardId: Joi.string().guid().allow(null, ''), remarks: Joi.string().trim().max(300).allow('', null),
+  lines: Joi.array().items(Joi.object({ outwardLineId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(1000000).required() })).min(1).max(100).unique('outwardLineId').required(),
+}) }), async (req, res) => res.status(201).json(await yarn.use(req, req.params.code, { ...req.body, soCardId: req.body.soCardId || null })));
+router.get('/:code/jobs/:jobId/yarn-cost', validate({ params: jobKey }), async (req, res) => res.json(await yarn.jobCost(req, req.params.code, req.params.jobId)));
+router.get('/:code/so-cards/:soCardId/yarn-cost', validate({ params: Joi.object({ code: Joi.string().max(50).required(), soCardId: Joi.string().guid().required() }) }), async (req, res) => res.json(await yarn.soCardCost(req, req.params.code, req.params.soCardId)));
+router.get('/:code/yarn-usages/:id', validate({ params: reqKey }), async (req, res) => res.json(await yarn.getUsage(req, req.params.code, req.params.id)));
+router.delete('/:code/yarn-usages/:id', validate({ params: reqKey }), async (req, res) => res.json(await yarn.removeUsage(req, req.params.code, req.params.id)));
 
 // ---- Packing department (kind PACKING): packing lists per SO card ----
 const day = ymdDate();

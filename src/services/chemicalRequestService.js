@@ -21,6 +21,7 @@ const counters = require('./counterService');
 const { companyServices, userServices } = require('./accessService');
 const m = require('./storeMasterService');
 const batches = require('./batchService');
+const yarnCost = require('./yarnCostService');
 
 const COUNTER = 'chemical_request_no';
 const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING'];
@@ -586,9 +587,13 @@ async function jobCost(req, jobId) {
   const reqs = await costOf(req, [job.id]);
   const issued = await batches.issuesOf(reqs.flatMap((r) => r.lines.map((l) => l.id)));
   const lines = reqs.flatMap((r) => r.lines.filter((l) => l.sentQty > 0).map((l) => ({ item: l.item, qty: m.round(l.sentQty - l.returnedQty, 3), value: m.round(l.value - l.returnedValue, 2), parts: partsOf(l, issued) })));
+  const chemicalValue = m.round(reqs.reduce((t, r) => t + net(r), 0), 2);
+  const yarn = await yarnCost.jobYarn(req, job.id);
   return {
     job: { id: job.id, jobNo: job.jobNo },
-    totalValue: m.round(reqs.reduce((t, r) => t + net(r), 0), 2),
+    totalValue: chemicalValue,
+    // the yarn the departments used on this job, and the cost of both together
+    chemicalValue, yarnValue: yarn.totalValue, grandTotal: m.round(chemicalValue + yarn.totalValue, 2), yarn,
     chemicals: chemicalTotals(lines),
     requests: reqs.map((r) => ({ id: r.id, reqNo: r.reqNo, department: dept(r.department), status: r.status, sentAt: r.sentAt, soCardId: r.soCardId, totalValue: r.totalValue, returnedValue: r.returnedValue, netValue: net(r) })),
   };
@@ -601,7 +606,7 @@ async function soCardCost(req, soCardId, departmentId) {
   const mine = await JobItem.findAll({ where: { soCardId: card.id }, attributes: ['jobId'], include: departmentId ? [{ model: Job, as: 'job', attributes: [], where: { departmentId } }] : [] });
   const jobIds = [...new Set(mine.map((i) => i.jobId))];
   if (departmentId && !jobIds.length) throw AppError.notFound('SO card');
-  if (!jobIds.length) return { soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn) }, totalValue: 0, chemicals: [], byJob: [] };
+  if (!jobIds.length) return { soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn) }, totalValue: 0, chemicalValue: 0, yarnValue: 0, grandTotal: 0, yarn: { totalValue: 0, totalBags: 0, items: [], usages: [] }, chemicals: [], byJob: [] };
   const all = await JobItem.findAll({ where: { jobId: jobIds } });
   const share = {};
   for (const jid of jobIds) {
@@ -625,9 +630,19 @@ async function soCardCost(req, soCardId, departmentId) {
     byJob[r.jobId] = b;
   }
   const chemicals = chemicalTotals(lines);
+  const chemicalValue = m.round(chemicals.reduce((t, c) => t + c.value, 0), 2);
+  // the yarn the departments used on this card (its own, or its share of a whole-job use)
+  const { byJob: yarnByJob, departments: yarnDepts, ...yarn } = await yarnCost.cardYarn(req, card.id, jobIds, share);
+  for (const [jid, value] of yarnByJob) {
+    const b = byJob[jid] || { job: { id: jid, jobNo: jobs.get(jid).jobNo }, department: yarnDepts.get(jid), sharePercent: m.round(share[jid] * 100, 2), value: 0, requests: 0 };
+    b.yarnValue = value;
+    byJob[jid] = b;
+  }
+  for (const b of Object.values(byJob)) { b.yarnValue = b.yarnValue || 0; b.grandValue = m.round(b.value + b.yarnValue, 2); }
   return {
     soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn) },
-    totalValue: m.round(chemicals.reduce((t, c) => t + c.value, 0), 2),
+    totalValue: chemicalValue,
+    chemicalValue, yarnValue: yarn.totalValue, grandTotal: m.round(chemicalValue + yarn.totalValue, 2), yarn,
     chemicals,
     byJob: Object.values(byJob),
   };
@@ -650,17 +665,28 @@ async function costReport(req, q) {
     order: [['sentAt', 'ASC']],
   });
   const rows = new Map();
-  const add = (key, make, value, r) => {
-    const row = rows.get(key) || { ...make(), value: 0, requests: 0, jobs: new Set(), departments: new Map(), lastSentAt: null };
-    row.value += value;
-    row.requests += 1;
+  const add = (key, make, value, r, kind = 'chemical') => {
+    const row = rows.get(key) || { ...make(), value: 0, yarnValue: 0, requests: 0, yarnUsages: 0, jobs: new Set(), departments: new Map(), lastSentAt: null };
+    if (kind === 'yarn') { row.yarnValue += value; row.yarnUsages += 1; } else { row.value += value; row.requests += 1; }
     row.jobs.add(r.job.jobNo);
     row.departments.set(r.department.id, r.department.name);
     row.lastSentAt = r.sentAt;
     rows.set(key, row);
   };
-  for (const r of reqs) {
+  // the yarn the departments used (by the date of the use) counts in the same rows: a Job / SO card with yarn only is listed too
+  const uses = await yarnCost.reportUsages(req.user.companyId, q);
+  const useJobs = uses.length ? new Map((await Job.findAll({
+    where: { id: [...new Set(uses.map((u) => u.jobId))] },
+    include: [{ model: JobItem, as: 'items', include: [{ model: SoCard, as: 'soCard', include: [{ model: Customer, as: 'customer', paranoid: false }] }] }],
+  })).map((j) => [j.id, j])) : new Map();
+  const useDepts = new Map((await Service.findAll({ where: { id: [...new Set(uses.map((u) => u.departmentId))] } })).map((s) => [s.id, s]));
+  const placed = [
+    ...reqs.map((r) => ({ r, value: null, kind: 'chemical' })),
+    ...uses.map((u) => ({ r: { jobId: u.jobId, soCardId: u.soCardId, job: useJobs.get(u.jobId), department: useDepts.get(u.departmentId), sentAt: u.usageDate }, value: u.totalValue, kind: 'yarn' })),
+  ];
+  for (const { r, value: given, kind } of placed) {
     const items = r.job.items;
+    const amount = kind === 'yarn' ? given : net(r);
     if (q.by === 'job') {
       const cards = [...new Map(items.map((i) => [i.soCard.id, i.soCard])).values()];
       if (q.customerId && !cards.some((c) => c.customerId === q.customerId)) continue;
@@ -668,7 +694,7 @@ async function costReport(req, q) {
         job: { id: r.job.id, jobNo: r.job.jobNo, jobDate: r.job.jobDate, status: r.job.status },
         soNos: cards.map((c) => c.cardNo).sort((a, b) => a - b),
         customers: [...new Set(cards.map((c) => (c.customer ? c.customer.name : null)).filter(Boolean))],
-      }), net(r), r);
+      }), amount, r, kind);
     } else {
       const total = items.reduce((t, i) => t + i.meters, 0);
       const parts = new Map();
@@ -684,19 +710,24 @@ async function costReport(req, q) {
         add(card.id, () => ({
           soCard: { id: card.id, cardNo: card.cardNo, cardLabel: soLabel(card.cardNo, card.isGreyReturn), cardDate: card.cardDate },
           customer: card.customer ? { id: card.customer.id, name: card.customer.name } : null,
-        }), net(r) * f, r);
+        }), amount * f, r, kind);
       }
     }
   }
   const all = [...rows.values()].map((row) => ({
     ...row,
+    // value = the chemical cost (as before); yarnValue = the yarn cost; grandValue = both together
     value: m.round(row.value, 2),
+    chemicalValue: m.round(row.value, 2),
+    yarnValue: m.round(row.yarnValue, 2),
+    grandValue: m.round(row.value + row.yarnValue, 2),
     jobs: undefined,
     jobNos: [...row.jobs].sort((a, b) => a - b),
     departments: [...row.departments.values()],
   })).sort((a, b) => (b.job ? b.job.jobNo - a.job.jobNo : b.soCard.cardNo - a.soCard.cardNo));
   const totalValue = m.round(all.reduce((t, x) => t + x.value, 0), 2);
-  return { data: all.slice((q.page - 1) * q.limit, q.page * q.limit), total: all.length, page: q.page, limit: q.limit, totalValue };
+  const totalYarnValue = m.round(all.reduce((t, x) => t + x.yarnValue, 0), 2);
+  return { data: all.slice((q.page - 1) * q.limit, q.page * q.limit), total: all.length, page: q.page, limit: q.limit, totalValue, totalChemicalValue: totalValue, totalYarnValue, grandTotal: m.round(totalValue + totalYarnValue, 2) };
 }
 
 module.exports = {

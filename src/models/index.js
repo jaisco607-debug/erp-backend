@@ -20,6 +20,7 @@ const YarnSizingInwardModel = require('./YarnSizingInward');
 const CompanyCounterModel = require('./CompanyCounter');
 const GreyLotModel = require('./GreyLot');
 const FabricInwardModel = require('./FabricInward');
+const StoreYarnInwardModel = require('./StoreYarnInward');
 const SoCardModel = require('./SoCard');
 const SoCardLotModel = require('./SoCardLot');
 const SoCardMoveModel = require('./SoCardMove');
@@ -79,6 +80,8 @@ YarnInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' 
 YarnSizingInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
 YarnInward.belongsTo(storeModels.Vendor, { foreignKey: 'directVendorId', as: 'directVendor' });
 const { FabricInward, FabricInwardThaan, FabricIssue } = FabricInwardModel.init(sequelize);
+const StoreYarnInward = StoreYarnInwardModel.init(sequelize);
+StoreYarnInward.belongsTo(storeModels.Vendor, { foreignKey: 'vendorId', as: 'vendor' });
 FabricIssue.belongsTo(FabricInward, { foreignKey: 'fabricInwardId', as: 'fabricInward' });
 FabricIssue.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 FabricIssue.belongsTo(SoCard, { foreignKey: 'linkedSoCardId', as: 'linkedSoCard' });
@@ -205,6 +208,7 @@ module.exports = {
   FabricInward,
   FabricInwardThaan,
   FabricIssue,
+  StoreYarnInward,
   SoCard,
   SoCardLot,
   SoCardLotThaan,

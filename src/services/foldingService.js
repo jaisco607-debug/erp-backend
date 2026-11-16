@@ -78,6 +78,9 @@ async function rows(req, depId, extra, replacements, transaction) {
   const graded = await q(`SELECT * FROM folding_lines WHERE "jobId" IN (:jobIds)`, { jobIds }, transaction);
   const chem = await jobCost.chemicalsOf(jobIds.map((id) => ({ id })));
   const prev = await jobCost.previousCosts(items.map((i) => i.id));
+  const yarnCost = require('./yarnCostService');
+  const yarnUses = await yarnCost.valuesOfJobs(jobIds);
+  const prevYarn = await yarnCost.previousYarnCosts(items.map((i) => i.id));
 
   return base.map((r) => {
     const mine = items.filter((i) => i.jobId === r.jobId && i.soCardId === r.soCardId);
@@ -85,7 +88,10 @@ async function rows(req, depId, extra, replacements, transaction) {
     const cardM = mine.reduce((t, i) => t + i.meters, 0);
     const here = jobCost.chemicalCols(chem.get(r.jobId), cardM, { id: r.soCardId, share: jobM ? cardM / jobM : 0 }).chemicalAmount;
     const before = round(mine.reduce((t, i) => t + (prev.get(i.id) || 0), 0));
-    const totalCost = round(before + here);
+    const yarnHere = yarnCost.yarnCols(yarnUses.get(r.jobId), cardM, { id: r.soCardId, share: jobM ? cardM / jobM : 0 }).yarnAmount;
+    const yarnBefore = round(mine.reduce((t, i) => t + (prevYarn.get(i.id) || 0), 0));
+    // chemical and yarn together
+    const totalCost = round(before + here + yarnBefore + yarnHere);
     const perMeter = cardM ? totalCost / cardM : 0;
 
     const closed = Boolean(r.isClosed);
@@ -153,7 +159,7 @@ async function rows(req, depId, extra, replacements, transaction) {
       leftInFolding,
       isClosed: closed, closeNote: r.closeNote || null, closedAt: r.closedAt || null,
       closedBy: r.closedById ? { id: r.closedById, name: r.closedByName } : null,
-      cost: { previousChemicalAmount: before, foldingChemicalAmount: here, totalCost, costPerMeter: round(perMeter, 4) },
+      cost: { previousChemicalAmount: before, foldingChemicalAmount: here, previousYarnAmount: yarnBefore, foldingYarnAmount: yarnHere, totalCost, costPerMeter: round(perMeter, 4) },
       categoryCost: { a: round(perMeter * totals.a), b: round(perMeter * totals.b), cp: round(perMeter * totals.cp) },
       sentForRework: Boolean(r.sentBackTo), sentBackTo: r.sentBackTo || null,
       isConfirmed: Boolean(r.isConfirmed),

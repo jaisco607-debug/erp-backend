@@ -14,6 +14,7 @@ const STORES = [
   { store: 'CHEMICAL', service: 'CHEMICAL_STORE', name: 'Chemical Store' },
   { store: 'GENERAL', service: 'GENERAL_STORE', name: 'General Store' },
   { store: 'FABRIC', service: 'FABRIC_STORE', name: 'Fabric Store' },
+  { store: 'YARN', service: 'YARN_STORE', name: 'Yarn Store' },
 ];
 const q = (sql, replacements) => sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
 
@@ -34,6 +35,36 @@ const nextMonthStart = (month) => {
   const m = Number(month.slice(5, 7));
   return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
 };
+
+/**
+ * The Yarn Store rows (Store > Yarn Inward / Outward / Requests), in the same shapes as the store_inwards queries (every row has store = 'YARN').
+ *   inwards  approved, switched-on yarn inwards by inwardDate (amount = total lbs x rate, 0 without a rate);  outwards  every yarn outward by outwardDate (its value, fixed when it was given)
+ *   stock    value of the yarn still in the store (amount x bags left / bags); a category = one yarn (name + brand, letter case ignored), the newest spelling is its title
+ *   drafts   un-approved yarn inwards; and the yarn requests still waiting at the store (Pending + Accepted), returned as `pending`
+ */
+async function yarnRows(r) {
+  const live = 'i."companyId" = :companyId AND i."deletedAt" IS NULL AND i."isApproved" AND i."isActive"';
+  const inRange = 'i."inwardDate" >= :from AND i."inwardDate" < :to';
+  const left = '(i.bags - i."outwardBags")';
+  const value = `round(COALESCE(i.amount, 0) * ${left} / NULLIF(i.bags, 0), 2)`;
+  const yarnKey = "lower(i.\"yarnName\") || '|' || lower(COALESCE(i.brand, ''))";
+  const [inwards, issues, stock, categories, vendors, drafts, pending] = await Promise.all([
+    q(`SELECT 'YARN' AS store, to_char(i."inwardDate", 'YYYY-MM') AS month, round(COALESCE(SUM(i.amount), 0), 2)::text AS amount, count(*)::int AS n FROM store_yarn_inwards i WHERE ${live} AND ${inRange} GROUP BY month`, r),
+    q(`SELECT 'YARN' AS store, to_char(o."outwardDate", 'YYYY-MM') AS month, round(COALESCE(SUM(o."totalValue"), 0), 2)::text AS amount, count(*)::int AS n FROM store_yarn_outwards o
+       WHERE o."companyId" = :companyId AND o."outwardDate" >= :from AND o."outwardDate" < :to GROUP BY month`, r),
+    q(`SELECT 'YARN' AS store, round(COALESCE(SUM(${value}) FILTER (WHERE i.bags > i."outwardBags"), 0), 2)::text AS value, count(DISTINCT ${yarnKey}) FILTER (WHERE i.bags > i."outwardBags")::int AS items, 0 AS low, 0 AS out
+       FROM store_yarn_inwards i WHERE ${live}`, r),
+    q(`SELECT 'YARN' AS store, (array_agg(CASE WHEN i.brand IS NULL THEN i."yarnName" ELSE i."yarnName" || ' - ' || i.brand END ORDER BY i."inwardDate" DESC, i."inwardNo" DESC))[1] AS category,
+         round(SUM(${value}), 2)::text AS value, count(*)::int AS items
+       FROM store_yarn_inwards i WHERE ${live} AND i.bags > i."outwardBags" GROUP BY ${yarnKey} ORDER BY SUM(${value}) DESC, 2`, r),
+    q(`SELECT * FROM (SELECT 'YARN' AS store, v.id AS "vendorId", v.name, round(COALESCE(SUM(i.amount), 0), 2)::text AS amount, count(*)::int AS n,
+         row_number() OVER (ORDER BY COALESCE(SUM(i.amount), 0) DESC, v.name) AS rn
+       FROM store_yarn_inwards i JOIN vendors v ON v.id = i."vendorId" WHERE ${live} AND ${inRange} GROUP BY v.id, v.name) t WHERE rn <= 10 ORDER BY rn`, r),
+    q('SELECT \'YARN\' AS store, count(*)::int AS n FROM store_yarn_inwards i WHERE i."companyId" = :companyId AND i."deletedAt" IS NULL AND i."isActive" AND NOT i."isApproved"', r),
+    q('SELECT count(*)::int AS n FROM yarn_requests WHERE "companyId" = :companyId AND status IN (\'PENDING\', \'ACCEPTED\')', r),
+  ]);
+  return { inwards, issues, stock, categories, vendors, drafts, pending: pending[0].n };
+}
 
 /** The Fabric Store rows, in the same shapes as the store_inwards queries (every row has store = 'FABRIC'). Value of an entry still in the store = its amount x balance / inward meters. */
 async function fabricRows(r) {
@@ -72,7 +103,7 @@ async function overview(req, { months = 6 } = {}) {
   const list = monthsBack(asOf, months);
   const r = { companyId, stores: keys, from: `${list[0]}-01`, to: nextMonthStart(list[list.length - 1]) };
   const inwardWhere = 'i."companyId" = :companyId AND i.store IN (:stores) AND i."isApproved" AND i."inwardDate" >= :from AND i."inwardDate" < :to';
-  const [inwards, issues, stock, categories, vendors, draftInwards, pending, fabric] = await Promise.all([
+  const [inwards, issues, stock, categories, vendors, draftInwards, pending, fabric, yarn] = await Promise.all([
     q(`SELECT i.store, to_char(i."inwardDate", 'YYYY-MM') AS month, round(SUM(i.amount + i."salesTax"), 2)::text AS amount, count(*)::int AS n
        FROM store_inwards i WHERE ${inwardWhere} GROUP BY i.store, month`, r),
     q(`SELECT mv.store, to_char(mv."moveDate", 'YYYY-MM') AS month, round(-SUM(mv.value), 2)::text AS amount, count(DISTINCT COALESCE(mv."requestId", mv.id))::int AS n
@@ -91,9 +122,13 @@ async function overview(req, { months = 6 } = {}) {
     // chemical requests the store has not sent yet (Queue and Process): the outwards still waiting
     keys.includes('CHEMICAL') ? q('SELECT count(*)::int AS n FROM chemical_requests WHERE "companyId" = :companyId AND status IN (\'PENDING\', \'ACCEPTED\')', r) : [],
     keys.includes('FABRIC') ? fabricRows(r) : null,
+    keys.includes('YARN') ? yarnRows(r) : null,
   ]);
   if (fabric) {
     inwards.push(...fabric.inwards); issues.push(...fabric.issues); stock.push(...fabric.stock); categories.push(...fabric.categories); vendors.push(...fabric.vendors); draftInwards.push(...fabric.drafts);
+  }
+  if (yarn) {
+    inwards.push(...yarn.inwards); issues.push(...yarn.issues); stock.push(...yarn.stock); categories.push(...yarn.categories); vendors.push(...yarn.vendors); draftInwards.push(...yarn.drafts);
   }
 
   const pick = (rows, store) => rows.filter((x) => x.store === store);
@@ -115,7 +150,7 @@ async function overview(req, { months = 6 } = {}) {
           byCategory: pick(categories, store).map((c) => ({ category: c.category, value: c.value, items: c.items })),
         },
         topVendors: pick(vendors, store).map((v) => ({ vendorId: v.vendorId, name: v.name, amount: v.amount, count: v.n })),
-        drafts: { inwards: (pick(draftInwards, store)[0] || { n: 0 }).n, outwards: store === 'CHEMICAL' ? (pending[0] || { n: 0 }).n : 0 },
+        drafts: { inwards: (pick(draftInwards, store)[0] || { n: 0 }).n, outwards: store === 'CHEMICAL' ? (pending[0] || { n: 0 }).n : store === 'YARN' ? yarn.pending : 0 },
       };
     }),
   };

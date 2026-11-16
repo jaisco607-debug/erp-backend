@@ -450,7 +450,7 @@ async function nextOf(jobIds) {
 }
 
 /** Item-level columns for a row: sent on? rejected back? earlier cost. */
-function flowCols(items, next, prev) {
+function flowCols(items, next, prev, prevYarn = new Map()) {
   const n = items.map((i) => next.get(i.id) || {});
   const rejected = n.map((x) => x.rejectedBack).filter(Boolean);
   return {
@@ -460,6 +460,8 @@ function flowCols(items, next, prev) {
     // the next department rejected it: it is back here, with the reason
     rejectedBack: rejected.length ? rejected[rejected.length - 1] : null,
     previousChemicalAmount: round(items.reduce((t, i) => t + (prev.get(i.id) || 0), 0)),
+    // the yarn the cloth picked up in earlier departments
+    previousYarnAmount: round(items.reduce((t, i) => t + (prevYarn.get(i.id) || 0), 0)),
   };
 }
 
@@ -535,8 +537,10 @@ async function list(req, q) {
   const { rows, count } = await Job.findAndCountAll({ where, order: [['jobNo', 'DESC']], limit: q.limit, offset: (q.page - 1) * q.limit });
   const full = rows.length ? await Job.findAll({ where: { id: rows.map((r) => r.id) }, include, order: [['jobNo', 'DESC']] }) : [];
   const chem = await chemicalsOf(full);
+  const yarnUses = await require('./yarnCostService').valuesOfJobs(full.map((j) => j.id));
   const next = await nextOf(full.map((j) => j.id));
   const prev = await previousCosts(full.flatMap((j) => j.items.map((i) => i.id)));
+  const prevYarn = await require('./yarnCostService').previousYarnCosts(full.flatMap((j) => j.items.map((i) => i.id)));
   const first = await firstJobs(full.flatMap((j) => j.items.map((i) => i.id)));
   const trails = await trailsOf(full);
   const firstNos = (items) => [...new Set(items.map((i) => first.get(i.id)).filter(Boolean))].sort((a, b) => a - b);
@@ -544,15 +548,19 @@ async function list(req, q) {
     ...row,
     totalChemicalAmount: round(row.previousChemicalAmount + row.chemicalAmount),
     totalCostPerMeter: meters ? round((row.previousChemicalAmount + row.chemicalAmount) / meters, 4) : 0,
+    // yarn: earlier departments + this one; and the cost of chemical and yarn together (earlier departments included)
+    totalYarnAmount: round((row.previousYarnAmount || 0) + (row.yarnAmount || 0)),
+    totalCostAmount: round(row.previousChemicalAmount + row.chemicalAmount + (row.previousYarnAmount || 0) + (row.yarnAmount || 0)),
+    grandCostPerMeter: meters ? round((row.previousChemicalAmount + row.chemicalAmount + (row.previousYarnAmount || 0) + (row.yarnAmount || 0)) / meters, 4) : 0,
   });
   const jobs = full.map((j) => {
     const x = json(j);
     x.items = x.items.map((i) => ({ ...i, ...(next.get(i.id) || { sentTo: null, rejectedBack: null }), previousChemicalAmount: round(prev.get(i.id) || 0), firstJobNo: first.get(i.id) || null }));
     // the Job# the cloth got when it first left the SO card (stays the same in every department)
-    const flow = flowCols(x.items, next, prev);
+    const flow = flowCols(x.items, next, prev, prevYarn);
     // operator name + date stay editable from Accept until the cloth is sent on
     const canEditOperator = !['IN_WAY', 'QUEUE', 'REJECTED'].includes(j.status) && !x.items.some((i) => i.sentTo);
-    return withTotals({ ...x, ...trailCols(x, trails.get(j.id) || []), canEditOperator, firstJobNos: firstNos(x.items), ...chemicalCols(chem.get(j.id), j.totalMeters), ...flow }, j.totalMeters);
+    return withTotals({ ...x, ...trailCols(x, trails.get(j.id) || []), canEditOperator, firstJobNos: firstNos(x.items), ...chemicalCols(chem.get(j.id), j.totalMeters), ...require('./yarnCostService').yarnCols(yarnUses.get(j.id), j.totalMeters, null), ...flow }, j.totalMeters);
   });
   if (q.view !== 'so') return { data: jobs, page: q.page, limit: q.limit, total: count };
 
@@ -571,7 +579,7 @@ async function list(req, q) {
     }
     for (const r of [...byCard.values()].sort((a, b) => a.soCard.cardNo - b.soCard.cardNo)) {
       data.push(withTotals({
-        ...flowCols(r.parts, next, prev),
+        ...flowCols(r.parts, next, prev, prevYarn),
         firstJobNos: firstNos(r.parts),
         thaans: r.thaans, thaanCount: r.thaans.length, itemIds: r.parts.map((i) => i.id),
         colourSetBy: r.colourSetBy, colourSetAt: r.colourSetAt,
@@ -579,6 +587,7 @@ async function list(req, q) {
         jobId: j.id, jobNo: j.jobNo, jobDate: j.jobDate, soCard: r.soCard, customer: r.customer, quality: r.quality,
         colour: r.colour || null, meters: r.meters, lotNos: r.lotNos, isReprocess: r.isReprocess, isRework: j.isRework,
         ...chemicalCols(chem.get(j.id), r.meters, { id: r.soCard.id, share: j.totalMeters ? r.meters / j.totalMeters : 0 }),
+        ...require('./yarnCostService').yarnCols(yarnUses.get(j.id), r.meters, { id: r.soCard.id, share: j.totalMeters ? r.meters / j.totalMeters : 0 }),
         status: j.status, statusText: j.statusText, sentText: j.sentText, canReject: j.canReject, canUndoReject: j.canUndoReject, isRejected: j.isRejected, rejectReason: j.rejectReason, rejectedAt: j.rejectedAt, rejectedBy: j.rejectedBy,
         department: j.department, fromDepartment: j.fromDepartment,
         toDepartment: j.toDepartment, toDepartmentName: j.toDepartmentName, fromDepartmentName: j.fromDepartmentName,

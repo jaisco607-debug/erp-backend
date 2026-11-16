@@ -39,6 +39,8 @@ const store = require('./storeRoutes');
 router.use('/v1/vendors', store.vendors);
 router.use('/v1/stores', store.stores);
 router.use('/v1/fabric-inwards', require('./fabricInwardRoutes'));
+router.use('/v1/store-yarn-inwards', require('./storeYarnInwardRoutes'));
+router.use('/v1/store-yarn-outwards', require('./storeYarnOutwardRoutes'));
 router.use('/v1/reports', require('./reportRoutes'));
 router.use('/v1/accounts', require('./accountRoutes'));
 router.use('/v1/accounting', require('./accountingRoutes'));

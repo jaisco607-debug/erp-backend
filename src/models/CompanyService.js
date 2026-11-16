@@ -11,6 +11,8 @@ function init(sequelize) {
       givenById: { type: DataTypes.UUID, allowNull: true },
       // a department the client admin allowed (true) or not (false) to request chemicals from the Chemical Store
       chemicalRequests: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      // a department the client admin allowed (true) or not (false, the default) to request yarn from the Yarn Store
+      yarnRequests: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       // the company's own switch for a service it has (a process the client admin switched off is hidden from his menus and users; nothing is deleted)
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       // the company's own name for the service (a process the client admin renamed); null = the original name

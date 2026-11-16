@@ -2,7 +2,7 @@
 // categories, brands and items. Each company has its own lists; another company's rows are "not found".
 // A row that is already used (e.g. an item on an inward entry) cannot be deleted: switch it off instead.
 const { Op } = require('sequelize');
-const { sequelize, FabricInward, YarnInward,YarnOutward, YarnSizingInward, Vendor, StoreCategory, StoreBrand, StoreItem, StoreInward, StoreInwardLine, StoreMove } = require('../models');
+const { sequelize, StoreYarnInward, FabricInward, YarnInward,YarnOutward, YarnSizingInward, Vendor, StoreCategory, StoreBrand, StoreItem, StoreInward, StoreInwardLine, StoreMove } = require('../models');
 const AppError = require('../utils/AppError');
 const audit = require('./auditService');
 
@@ -183,7 +183,7 @@ async function update(kind, req, store, id, changes) {
 }
 
 async function inUse(kind, id, transaction) {
-  if (kind === 'vendor') return (await StoreInward.count({ where: { vendorId: id }, transaction })) + (await FabricInward.count({ where: { vendorId: id }, paranoid: false, transaction })) +(await YarnInward.count({ where: { [Op.or]: [{ vendorId: id }, { directVendorId: id }] }, paranoid: false, transaction })) + (await YarnOutward.count({ where: { vendorId: id }, paranoid: false, transaction })) + (await YarnSizingInward.count({ where: { vendorId: id }, paranoid: false, transaction })) /* a deleted yarn inward / return still points at the vendor */;
+  if (kind === 'vendor') return (await StoreInward.count({ where: { vendorId: id }, transaction })) + (await FabricInward.count({ where: { vendorId: id }, paranoid: false, transaction })) + (await StoreYarnInward.count({ where: { vendorId: id }, paranoid: false, transaction })) +(await YarnInward.count({ where: { [Op.or]: [{ vendorId: id }, { directVendorId: id }] }, paranoid: false, transaction })) + (await YarnOutward.count({ where: { vendorId: id }, paranoid: false, transaction })) + (await YarnSizingInward.count({ where: { vendorId: id }, paranoid: false, transaction })) /* a deleted yarn inward / return still points at the vendor */;
   if (kind === 'category') return StoreItem.count({ where: { categoryId: id }, transaction });
   if (kind === 'brand') return StoreItem.count({ where: { brandId: id }, transaction });
   return (await StoreInwardLine.count({ where: { itemId: id }, transaction })) + (await StoreMove.count({ where: { itemId: id }, transaction }));
