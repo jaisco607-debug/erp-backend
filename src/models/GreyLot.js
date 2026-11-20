@@ -48,6 +48,10 @@ function init(sequelize) {
       approvedAt: { type: DataTypes.DATE, allowNull: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       createdById: { type: DataTypes.UUID, allowNull: true },
+      // who removed the lot, what kind of removal (DELETED / CANCELLED / RETURNED) and why: the Deleted / cancelled lots report
+      deletedById: { type: DataTypes.UUID, allowNull: true },
+      deleteKind: { type: DataTypes.STRING(12), allowNull: true },
+      deleteReason: { type: DataTypes.STRING(300), allowNull: true },
     },
     { sequelize, modelName: 'GreyLot', tableName: 'grey_lots', paranoid: true },
   );

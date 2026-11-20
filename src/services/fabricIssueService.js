@@ -109,7 +109,7 @@ async function linkCards(req, { customerId, search, limit }) {
  * Gives the cloth of an ISSUED issue back to the entry's stock and removes its lot, inside the caller's transaction.
  * The cloth must be on no SO card (422 ISSUE_IN_USE otherwise). The issue row itself is left to the caller (delete it, mark it returned, or issue it again).
  */
-async function release(req, issueRow, transaction) {
+async function release(req, issueRow, transaction, reason = 'Fabric issue cancelled') {
   const lot = await GreyLot.findOne({ where: { id: issueRow.greyLotId }, lock: transaction.LOCK.UPDATE, paranoid: false, transaction });
   if (lot.outwardMeters > 0) {
     const cards = (await cardsOf([lot.id], transaction)).get(lot.id) || [];
@@ -119,6 +119,7 @@ async function release(req, issueRow, transaction) {
   await FabricInwardThaan.update({ status: 'IN_STOCK', takenMeters: 0, issueId: null }, { where: { issueId: issueRow.id }, transaction });
   inward.outwardMeters = r2(inward.outwardMeters - issueRow.meters);
   await inward.save({ transaction });
+  await lot.update({ deletedById: req.user.id, deleteKind: 'CANCELLED', deleteReason: reason }, { transaction });
   await GreyLotThaan.destroy({ where: { lotId: lot.id }, transaction });
   await lot.destroy({ transaction });
 }
@@ -133,7 +134,7 @@ async function build(req, data, transaction, existing) {
   const companyId = req.user.companyId;
   if (existing && data.fabricInwardId && data.fabricInwardId !== existing.fabricInwardId) throw AppError.rule('INWARD_NOT_CHANGEABLE', 'The fabric inward of an issue cannot change: delete the issue and make a new one');
   const before = existing ? await loadOne(req, existing.id, transaction) : null;
-  if (existing && !existing.cancelledAt) await release(req, existing, transaction);
+  if (existing && !existing.cancelledAt) await release(req, existing, transaction, 'Fabric issue edited and issued again');
   const inward = await FabricInward.findOne({ where: { id: existing ? existing.fabricInwardId : data.fabricInwardId, companyId }, lock: transaction.LOCK.UPDATE, transaction });
   if (!inward) throw AppError.notFound('Fabric inward');
   if (!inward.isApproved) throw AppError.rule('INWARD_NOT_APPROVED', 'Approve the fabric inward first: only approved cloth is in the stock');
@@ -225,7 +226,7 @@ const edit = (req, id, data) => sequelize.transaction(async (transaction) => bui
 /** Deletes the issue row for good (the cloth is back in the stock, nothing is left in the ledger). */
 async function removeRow(req, issueRow, transaction) {
   const before = await loadOne(req, issueRow.id, transaction);
-  if (!issueRow.cancelledAt) await release(req, issueRow, transaction);
+  if (!issueRow.cancelledAt) await release(req, issueRow, transaction, 'Fabric issue deleted');
   await issueRow.destroy({ transaction });
   await audit.log(req, { action: 'FABRIC_ISSUE_DELETED', entityType: 'FabricIssue', entityId: before.id, before }, { transaction });
   return { id: before.id, issueNo: before.issueNo, deleted: true };

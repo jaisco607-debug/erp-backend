@@ -64,6 +64,8 @@ router.get('/overview', ...run('REPORT_OVERVIEW', hub.overview));
 router.get('/grey/parties', ...run('REPORT_GREY', reports.greyParties));
 router.get('/grey/lots', ...run('REPORT_GREY', reports.greyLots));
 router.get('/grey/returns', ...run('REPORT_GREY', hub.greyReturns));
+router.get('/grey/deleted-lots', ...run('REPORT_GREY', hub.greyDeletedLots));
+router.get('/grey/lot-gaps', ...run('REPORT_GREY', hub.greyLotGaps));
 router.get('/so-cards', ...run('REPORT_SO_CARDS', reports.soCards));
 router.get('/so-cards/lots', ...run('REPORT_SO_CARDS', hub.soCardLots));
 router.get('/so-cards/movement', ...run('REPORT_SO_CARDS', reports.soCardMovement));

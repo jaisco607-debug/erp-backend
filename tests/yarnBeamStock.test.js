@@ -32,7 +32,7 @@ test('beam stock: 30 beams in four places; counts; click a place for its beams w
 
   const st = (await w.api('get', '/weaving/beam-stock')).body;
   expect(st.total).toBe(30);
-  expect(st.statuses).toEqual([
+  expect(st.statuses.map(({ weightKg, ...s }) => s)).toEqual([
     { status: 'EMPTY', text: 'Empty', count: 4 }, { status: 'FULL', text: 'Full', count: 4 },
     { status: 'AT_LOOM', text: 'At loom', count: 20 }, { status: 'AT_SIZING', text: 'At sizing', count: 2 }]);
 

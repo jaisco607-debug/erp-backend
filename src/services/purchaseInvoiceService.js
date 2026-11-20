@@ -212,6 +212,53 @@ async function writeFabricLines(invoiceId, companyId, lines, transaction) {
   }
 }
 
+/** The confirmed SIZING BATCHES (Sizing Management) with what the sizing costs; "inwardId" is the batch id (the generic invoice code calls every source row an inward); `invoiceId` is the purchase invoice a batch is already on. */
+const SIZING_BATCH_SQL = `
+  SELECT s.id AS "inwardId", s."batchNo", to_char(s."batchDate", 'YYYY-MM-DD') AS "batchDate", s."vendorId", s."setNo", s.ends, s.status, yc.name AS "yarnCount", s."netWarpWt"::float AS "netWarpWt", s."ratePerLb"::float AS rate, s.amount::float AS amount,
+    (SELECT pl."invoiceId" FROM purchase_invoice_sizing_batches pl WHERE pl."batchId" = s.id) AS "invoiceId",
+    (SELECT p."voucherNo" FROM purchase_invoice_sizing_batches pl JOIN purchase_invoices p ON p.id = pl."invoiceId" WHERE pl."batchId" = s.id) AS "invoiceVoucherNo"
+  FROM sizing_batches s JOIN yarn_counts yc ON yc.id = s."yarnCountId" WHERE s."companyId" = :companyId AND s."deletedAt" IS NULL`;
+const sizingBatchLine = (r) => ({
+  inwardId: r.inwardId, batchId: r.inwardId, batchNo: r.batchNo, batchLabel: label(r.batchNo), batchDate: r.batchDate, setNo: r.setNo, ends: r.ends, yarnCount: r.yarnCount, title: `Sizing batch ${label(r.batchNo)} - Set ${r.setNo}`,
+  netWarpWt: r.netWarpWt, ratePerLb: r.rate, amount: r.amount, salesTax: r.salesTax || 0, net: round(r.amount + (r.salesTax || 0), 2),
+});
+
+/** GET /purchase-invoices/sizing-batches?vendorId= : the confirmed sizing batches of this sizing party that can still be put on an invoice. */
+async function sizingBatches(req, { vendorId, search, invoiceId, limit }) {
+  const rows = await q(`${SIZING_BATCH_SQL} AND s."vendorId" = :vendorId AND s.status = 'CONFIRMED' ORDER BY s."batchDate" DESC, s."batchNo" DESC`, { companyId: req.user.companyId, vendorId });
+  let data = rows.filter((r) => !r.invoiceId || r.invoiceId === invoiceId);
+  if (search) {
+    const t = search.trim().toLowerCase();
+    data = data.filter((r) => String(r.batchNo) === t || [r.setNo, r.yarnCount].some((x) => (x || '').toLowerCase().includes(t)));
+  }
+  return { data: data.slice(0, limit).map((r) => ({ ...sizingBatchLine(r), canBill: r.amount > 0, blockedReason: r.amount > 0 ? null : 'The batch has no amount' })), total: data.length };
+}
+
+/** The lines of a SIZING_BATCH invoice from the chosen batches; every rule about a batch is checked here. */
+async function buildSizingBatch(req, vendorId, batchIds, invoiceId, transaction) {
+  const ids = [...new Set(batchIds)];
+  const rows = await q(`${SIZING_BATCH_SQL} AND s.id IN (:ids)`, { companyId: req.user.companyId, ids }, transaction);
+  if (rows.length !== ids.length) throw AppError.notFound('Sizing batch');
+  for (const r of rows) {
+    const name = `Sizing batch ${label(r.batchNo)}`;
+    if (r.status !== 'CONFIRMED') throw AppError.rule('BATCH_NOT_CONFIRMED', `${name} is not confirmed yet`);
+    if (r.vendorId !== vendorId) throw AppError.rule('BATCH_OTHER_VENDOR', `${name} belongs to another sizing party; one invoice is for one vendor`);
+    if (r.invoiceId && r.invoiceId !== invoiceId) throw AppError.rule('BATCH_TAKEN', `${name} is already on purchase invoice ${label(r.invoiceVoucherNo)}`);
+    if (!(r.amount > 0)) throw AppError.rule('NO_AMOUNT', `${name} has no amount, so there is nothing to bill`);
+  }
+  return rows.sort((a, b) => a.batchNo - b.batchNo).map((r) => ({ ...r, salesTax: 0 }));
+}
+
+async function writeSizingBatchLines(invoiceId, companyId, lines, transaction) {
+  await sequelize.query('DELETE FROM purchase_invoice_sizing_batches WHERE "invoiceId" = :invoiceId', { replacements: { invoiceId }, transaction });
+  let lineNo = 0;
+  for (const l of lines) {
+    lineNo += 1;
+    await sequelize.query('INSERT INTO purchase_invoice_sizing_batches ("invoiceId", "companyId", "lineNo", "batchId", amount, "salesTax") VALUES (:invoiceId, :companyId, :lineNo, :batchId, :amount, :salesTax)',
+      { replacements: { invoiceId, companyId, lineNo, batchId: l.inwardId, amount: l.amount, salesTax: l.salesTax }, transaction });
+  }
+}
+
 /** The STORE YARN inward entries (Store > Yarn Inward: yarn bought from a vendor for processing) with what they cost; `invoiceId` is the purchase invoice an entry is already on. */
 const STORE_YARN_SQL = `
   SELECT s.id AS "inwardId", s."inwardNo", to_char(s."inwardDate", 'YYYY-MM-DD') AS "inwardDate", s."vendorId", s."dcNo", s."isApproved", s."yarnName", s.brand, s.bags, s."lbsPerBag"::float AS "lbsPerBag",
@@ -262,20 +309,21 @@ async function writeStoreYarnLines(invoiceId, companyId, lines, transaction) {
 
 // the five kinds of purchase invoice: STORE (chemical / general store inwards), YARN (weaving yarn inward entries), SIZING (weaving sizing receipts), FABRIC (store fabric inwards),
 // STORE_YARN (store yarn inwards: yarn bought from a vendor for processing)
-const KIND_OF = (d) => (d.yarnInwardIds ? 'YARN' : d.sizingInwardIds ? 'SIZING' : d.fabricInwardIds ? 'FABRIC' : d.storeYarnInwardIds ? 'STORE_YARN' : 'STORE');
-const IDS_KEY = { STORE: 'inwardIds', YARN: 'yarnInwardIds', SIZING: 'sizingInwardIds', FABRIC: 'fabricInwardIds', STORE_YARN: 'storeYarnInwardIds' };
-const KIND_TEXT = { STORE: 'Store', YARN: 'Yarn', SIZING: 'Sizing', FABRIC: 'Fabric', STORE_YARN: 'Store Yarn' };
-const NARRATION = { STORE: 'Purchase invoice', YARN: 'Yarn purchase invoice', SIZING: 'Sizing purchase invoice', FABRIC: 'Fabric purchase invoice', STORE_YARN: 'Yarn purchase invoice' };
-const EXPENSE_ROLE = { STORE: 'PURCHASES', YARN: 'PURCHASES', SIZING: 'SIZING_CHARGES', FABRIC: 'PURCHASES', STORE_YARN: 'PURCHASES' }; // the account the invoice debits
+const KIND_OF = (d) => (d.yarnInwardIds ? 'YARN' : d.sizingInwardIds ? 'SIZING' : d.fabricInwardIds ? 'FABRIC' : d.storeYarnInwardIds ? 'STORE_YARN' : d.sizingBatchIds ? 'SIZING_BATCH' : 'STORE');
+const IDS_KEY = { STORE: 'inwardIds', YARN: 'yarnInwardIds', SIZING: 'sizingInwardIds', FABRIC: 'fabricInwardIds', STORE_YARN: 'storeYarnInwardIds', SIZING_BATCH: 'sizingBatchIds' };
+const KIND_TEXT = { STORE: 'Store', YARN: 'Yarn', SIZING: 'Sizing', FABRIC: 'Fabric', STORE_YARN: 'Store Yarn', SIZING_BATCH: 'Sizing Batch' };
+const NARRATION = { STORE: 'Purchase invoice', YARN: 'Yarn purchase invoice', SIZING: 'Sizing purchase invoice', FABRIC: 'Fabric purchase invoice', STORE_YARN: 'Yarn purchase invoice', SIZING_BATCH: 'Sizing batch purchase invoice' };
+const EXPENSE_ROLE = { STORE: 'PURCHASES', YARN: 'PURCHASES', SIZING: 'SIZING_CHARGES', FABRIC: 'PURCHASES', STORE_YARN: 'PURCHASES', SIZING_BATCH: 'SIZING_CHARGES' }; // the account the invoice debits
 const STORED_IDS_SQL = {
   STORE: 'SELECT "inwardId" FROM purchase_invoice_lines WHERE "invoiceId" = :id',
   YARN: 'SELECT "inwardId" FROM purchase_invoice_yarn_inwards WHERE "invoiceId" = :id',
   SIZING: 'SELECT "inwardId" FROM purchase_invoice_sizing_inwards WHERE "invoiceId" = :id',
   FABRIC: 'SELECT "inwardId" FROM purchase_invoice_fabric_inwards WHERE "invoiceId" = :id',
   STORE_YARN: 'SELECT "inwardId" FROM purchase_invoice_store_yarn_inwards WHERE "invoiceId" = :id',
+  SIZING_BATCH: 'SELECT "batchId" AS "inwardId" FROM purchase_invoice_sizing_batches WHERE "invoiceId" = :id',
 };
-const buildFor = (kind, ...a) => ({ STORE: buildLines, YARN: buildYarn, SIZING: buildSizing, FABRIC: buildFabric, STORE_YARN: buildStoreYarn })[kind](...a);
-const writeFor = (kind, ...a) => ({ STORE: writeLines, YARN: writeYarnLines, SIZING: writeSizingLines, FABRIC: writeFabricLines, STORE_YARN: writeStoreYarnLines })[kind](...a);
+const buildFor = (kind, ...a) => ({ STORE: buildLines, YARN: buildYarn, SIZING: buildSizing, FABRIC: buildFabric, STORE_YARN: buildStoreYarn, SIZING_BATCH: buildSizingBatch })[kind](...a);
+const writeFor = (kind, ...a) => ({ STORE: writeLines, YARN: writeYarnLines, SIZING: writeSizingLines, FABRIC: writeFabricLines, STORE_YARN: writeStoreYarnLines, SIZING_BATCH: writeSizingBatchLines })[kind](...a);
 
 /**
  * The tax of the lines (owner 2026-10-28): the sales tax is chosen on the invoice (taxRate %). It is worked out on every purchase that carries no tax of its own
@@ -310,7 +358,7 @@ const COLS = `p.id, p.kind, p."voucherNo", p."billNo", to_char(p."invoiceDate", 
   to_char(COALESCE(p."dueDate", p."invoiceDate" + v."creditDays"), 'YYYY-MM-DD') AS "dueDate", p.notes, p."billDetails",
   p."taxRate"::float AS "taxRate", p."othersAmount"::float AS others, p."othersNote", p."grossAmount"::float AS gross, p."taxAmount"::float AS tax, p."netAmount"::float AS net, p."paidAmount"::float AS paid, p.status, p."approvedAt", p."createdAt", p."updatedAt",
   v.id AS "vendorId", v.code AS "vendorCode", v.name AS "vendorName", v.ntn AS "vendorNtn", v.address AS "vendorAddress", v.city AS "vendorCity",
-  ((SELECT count(*) FROM purchase_invoice_lines l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_fabric_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_store_yarn_inwards l WHERE l."invoiceId" = p.id))::int AS "inwardCount", ab.name AS "approvedByName"`;
+  ((SELECT count(*) FROM purchase_invoice_lines l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_fabric_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_store_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_batches l WHERE l."invoiceId" = p.id))::int AS "inwardCount", ab.name AS "approvedByName"`;
 const FROM = `FROM purchase_invoices p JOIN vendors v ON v.id = p."vendorId" LEFT JOIN users ab ON ab.id = p."approvedById"`;
 
 function invoiceJson(r) {
@@ -341,6 +389,11 @@ async function get(req, id, transaction) {
     const yarn = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_yarn_inwards WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
     const live = yarn.length ? await q(`${YARN_SQL} AND y.id IN (:ids)`, { companyId: req.user.companyId, ids: yarn.map((s) => s.inwardId) }, transaction) : [];
     inv.lines = yarn.map((s) => ({ lineNo: s.lineNo, ...yarnLine({ ...(live.find((x) => x.inwardId === s.inwardId) || {}), amount: s.amount, salesTax: s.salesTax }) }));
+  } else if (inv.kind === 'SIZING_BATCH') {
+    // the lines of a sizing batch invoice are confirmed sizing batches: the amounts are the ones saved on the invoice
+    const sb = await q('SELECT "batchId" AS "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_sizing_batches WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
+    const live = sb.length ? await q(`${SIZING_BATCH_SQL} AND s.id IN (:ids)`, { companyId: req.user.companyId, ids: sb.map((s) => s.inwardId) }, transaction) : [];
+    inv.lines = sb.map((s) => ({ lineNo: s.lineNo, ...sizingBatchLine({ ...(live.find((x) => x.inwardId === s.inwardId) || {}), amount: s.amount, salesTax: s.salesTax }) }));
   } else if (inv.kind === 'STORE_YARN') {
     // the lines of a store yarn invoice are store yarn inwards: the amounts are the ones saved on the invoice
     const sy = await q('SELECT "inwardId", "lineNo", amount::float AS amount, "salesTax"::float AS "salesTax" FROM purchase_invoice_store_yarn_inwards WHERE "invoiceId" = :id ORDER BY "lineNo"', { id }, transaction);
@@ -456,7 +509,7 @@ async function update(req, id, changes) {
     const cur = await load(req, id, transaction, true);
     if (cur.status === 'APPROVED') throw AppError.rule('INVOICE_APPROVED', 'An approved invoice cannot be changed. Un-approve it first');
     const kind = cur.kind;
-    if (['STORE', 'YARN', 'SIZING', 'FABRIC', 'STORE_YARN'].some((k) => k !== kind && changes[IDS_KEY[k]])) throw AppError.rule('WRONG_INVOICE_KIND', `This is a ${KIND_TEXT[kind].toLowerCase()} invoice: it is made of ${{ STORE: 'store purchases', YARN: 'yarn inward entries', SIZING: 'sizing receipts', FABRIC: 'fabric inwards', STORE_YARN: 'store yarn inwards' }[kind]}, not of the other kind`);
+    if (['STORE', 'YARN', 'SIZING', 'FABRIC', 'STORE_YARN', 'SIZING_BATCH'].some((k) => k !== kind && changes[IDS_KEY[k]])) throw AppError.rule('WRONG_INVOICE_KIND', `This is a ${KIND_TEXT[kind].toLowerCase()} invoice: it is made of ${{ STORE: 'store purchases', YARN: 'yarn inward entries', SIZING: 'sizing receipts', FABRIC: 'fabric inwards', STORE_YARN: 'store yarn inwards', SIZING_BATCH: 'sizing batches' }[kind]}, not of the other kind`);
     const vendorId = changes.vendorId ?? cur.vendorId;
     const newIds = changes[IDS_KEY[kind]];
     if (changes.vendorId && changes.vendorId !== cur.vendorId) {
@@ -557,4 +610,4 @@ async function accountsEntry(req, id) {
 
 const creditOf = (req, vendorId) => credit.publicStatus(req, 'VENDOR', vendorId);
 
-module.exports = { creditOf, options, inwards, yarnInwards, sizingInwards, fabricInwards, storeYarnInwards, list, get, create, update, remove, approve, unapprove, accountsEntry };
+module.exports = { creditOf, options, inwards, yarnInwards, sizingInwards, fabricInwards, storeYarnInwards, sizingBatches, list, get, create, update, remove, approve, unapprove, accountsEntry };

@@ -1,13 +1,27 @@
 // Weaving > Masters > Beam. Add / change / delete the beams of the company. A beam has a number (typed, or the next free one), a name and a date (default today).
 // The beam number is unique among the company's beams (a deleted beam frees its number for typing; the automatic number never goes back).
 const { Op } = require('sequelize');
-const { sequelize, YarnBeam } = require('../models');
+const { sequelize, YarnBeam, WeavingDepartment } = require('../models');
 const AppError = require('../utils/AppError');
 const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const { STATUS_TEXT } = require('../models/YarnBeam');
 
-const json = (b) => ({ id: b.id, beamNo: b.beamNo, beamLabel: String(b.beamNo).padStart(5, '0'), name: b.name, beamDate: b.beamDate, status: b.status, statusText: STATUS_TEXT[b.status], statusDate: b.statusDate, meters: b.meters == null ? null : Number(b.meters), isActive: b.isActive, createdAt: b.createdAt });
+const deptJson = (d) => (d ? { id: d.id, code: d.code, name: d.name } : null);
+const json = (b, dept = b.department) => ({ id: b.id, beamNo: b.beamNo, beamLabel: String(b.beamNo).padStart(5, '0'), name: b.name, beamDate: b.beamDate, status: b.status, statusText: STATUS_TEXT[b.status], statusDate: b.statusDate, meters: b.meters == null ? null : Number(b.meters),
+  // the weight in kg and the department of the beam (null when not given)
+  weightKg: b.weightKg == null ? null : Number(b.weightKg), departmentId: b.departmentId || null, department: deptJson(dept), isActive: b.isActive, createdAt: b.createdAt });
+const withDept = [{ model: WeavingDepartment, as: 'department', required: false, paranoid: false }];
+/** The beam as the screen shows it (with its department), inside the caller's transaction. */
+const shown = async (b, transaction) => json(b, b.departmentId ? await WeavingDepartment.findByPk(b.departmentId, { paranoid: false, transaction }) : null);
+
+/** The department of a beam must be one of the company's, switched on. */
+async function checkDepartment(companyId, departmentId, transaction) {
+  if (!departmentId) return;
+  const d = await WeavingDepartment.findOne({ where: { id: departmentId, companyId }, transaction });
+  if (!d) throw AppError.rule('UNKNOWN_DEPARTMENT', 'Department not found: add it in Masters > Department first', { field: 'departmentId' });
+  if (!d.isActive) throw AppError.rule('DEPARTMENT_INACTIVE', 'This department is switched off', { field: 'departmentId' });
+}
 const clean = (s) => String(s).trim().replace(/\s+/g, ' ');
 const noTaken = (n) => AppError.rule('BEAM_NO_TAKEN', `Beam number ${n} is already used`, { field: 'beamNo' });
 
@@ -31,9 +45,11 @@ async function next(req) {
   return { beamNo: await nextNo(req.user.companyId), date: today() };
 }
 
-async function list(req, { page, limit, search, isActive, status, dateFrom, dateTo }) {
+async function list(req, { page, limit, search, isActive, status, departmentId, noDepartment, dateFrom, dateTo }) {
   const where = { companyId: req.user.companyId };
   if (status) where.status = status;
+  if (departmentId) where.departmentId = departmentId;
+  if (noDepartment) where.departmentId = null;
   if (isActive !== undefined) where.isActive = isActive;
   if (dateFrom || dateTo) where.beamDate = { ...(dateFrom ? { [Op.gte]: dateFrom } : {}), ...(dateTo ? { [Op.lte]: dateTo } : {}) };
   if (search) {
@@ -41,18 +57,18 @@ async function list(req, { page, limit, search, isActive, status, dateFrom, date
     if (/^\d+$/.test(search)) or.push({ beamNo: Number(search) });
     where[Op.or] = or;
   }
-  const { rows, count } = await YarnBeam.findAndCountAll({ where, order: [['beamNo', 'ASC']], limit, offset: (page - 1) * limit });
-  return { data: rows.map(json), page, limit, total: count };
+  const { rows, count } = await YarnBeam.findAndCountAll({ where, include: withDept, order: [['beamNo', 'ASC']], limit, offset: (page - 1) * limit });
+  return { data: rows.map((b) => json(b)), page, limit, total: count };
 }
 
-const get = async (req, id) => json(await findOr404(req, id));
+const get = async (req, id) => shown(await findOr404(req, id));
 
 // The place of a beam cannot be dated before the beam itself.
 function checkStatusDate(beamDate, statusDate) {
   if (String(statusDate) < String(beamDate)) throw AppError.rule('STATUS_BEFORE_BEAM', `The date cannot be before the beam's own date (${beamDate})`, { field: 'statusDate', beamDate });
 }
 
-async function create(req, { beamNo, name, beamDate, status = 'EMPTY', statusDate, isActive = true }) {
+async function create(req, { beamNo, name, beamDate, status = 'EMPTY', statusDate, isActive = true, weightKg = null, departmentId = null }) {
   const { companyId } = req.user;
   try {
     return await sequelize.transaction(async (transaction) => {
@@ -62,9 +78,11 @@ async function create(req, { beamNo, name, beamDate, status = 'EMPTY', statusDat
       const date = beamDate || today();
       const since = statusDate || date;
       checkStatusDate(date, since);
-      const row = await YarnBeam.create({ companyId, beamNo: no, name: clean(name), beamDate: date, status, statusDate: since, isActive, createdById: req.user.id }, { transaction });
-      await audit.log(req, { action: 'YARN_BEAM_CREATED', entityType: 'YarnBeam', entityId: row.id, after: json(row) }, { transaction });
-      return json(row);
+      await checkDepartment(companyId, departmentId, transaction);
+      const row = await YarnBeam.create({ companyId, beamNo: no, name: clean(name), beamDate: date, status, statusDate: since, isActive, weightKg, departmentId, createdById: req.user.id }, { transaction });
+      const out = await shown(row, transaction);
+      await audit.log(req, { action: 'YARN_BEAM_CREATED', entityType: 'YarnBeam', entityId: row.id, after: out }, { transaction });
+      return out;
     });
   } catch (e) {
     if (e.name === 'SequelizeUniqueConstraintError') throw noTaken(beamNo);
@@ -78,7 +96,7 @@ async function update(req, id, changes) {
     return await sequelize.transaction(async (transaction) => {
       await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`yarn-beam:${companyId}`], transaction });
       const row = await findOr404(req, id, transaction);
-      const before = json(row);
+      const before = await shown(row, transaction);
       if ((changes.status !== undefined && changes.status !== row.status) || changes.statusDate !== undefined) { const c = await challanOf(id, transaction); if (c) throw onChallan(c); }
       if (changes.beamNo !== undefined && changes.beamNo !== row.beamNo) {
         if (await YarnBeam.findOne({ where: { companyId, beamNo: changes.beamNo, id: { [Op.ne]: id } }, transaction })) throw noTaken(changes.beamNo);
@@ -91,9 +109,16 @@ async function update(req, id, changes) {
       if (changes.status !== undefined && changes.status !== row.status) { row.status = changes.status; row.statusDate = changes.statusDate || today(); } else if (changes.statusDate !== undefined) row.statusDate = changes.statusDate;
       checkStatusDate(row.beamDate, row.statusDate);
       if (changes.isActive !== undefined) row.isActive = changes.isActive;
+      // weight and department: null clears them; a department is checked only when it changes
+      if (changes.weightKg !== undefined) row.weightKg = changes.weightKg;
+      if (changes.departmentId !== undefined) {
+        if (changes.departmentId !== row.departmentId) await checkDepartment(companyId, changes.departmentId, transaction);
+        row.departmentId = changes.departmentId;
+      }
       await row.save({ transaction });
-      await audit.log(req, { action: 'YARN_BEAM_UPDATED', entityType: 'YarnBeam', entityId: id, before, after: json(row) }, { transaction });
-      return json(row);
+      const out = await shown(row, transaction);
+      await audit.log(req, { action: 'YARN_BEAM_UPDATED', entityType: 'YarnBeam', entityId: id, before, after: out }, { transaction });
+      return out;
     });
   } catch (e) {
     if (e.name === 'SequelizeUniqueConstraintError') throw noTaken(changes.beamNo);
@@ -107,7 +132,7 @@ async function remove(req, id) {
     const row = await findOr404(req, id, transaction);
     const challan = await challanOf(id, transaction);
     if (challan) throw onChallan(challan);
-    const before = json(row);
+    const before = await shown(row, transaction);
     await row.destroy({ transaction });
     await audit.log(req, { action: 'YARN_BEAM_DELETED', entityType: 'YarnBeam', entityId: id, before }, { transaction });
     return { deleted: true, id };

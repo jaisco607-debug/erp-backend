@@ -1,6 +1,7 @@
 const { app, request, clean, makeUser, makeCompany, loginAs } = require('./helpers');
 const { Service, CompanyService, UserService } = require('../src/models');
 
+const { withContract } = require('./contractHelper');
 jest.setTimeout(240000);
 beforeEach(clean);
 
@@ -22,7 +23,7 @@ async function setup() {
   const sizer = (await api('post', '/weaving/vendors', { name: 'Sizing Co' })).body; // the sizing party is a vendor: we pay it for the work
   const sizer2 = (await api('post', '/weaving/vendors', { name: 'Other Sizing' })).body;
   const cust = (await api('post', '/weaving/customers', { name: 'Ali Traders' })).body;
-  const inward = async (b) => (await api('post', '/weaving/yarn-inwards', { itemId: item.id, ...b })).body;
+  const inward = async (b) => (await api('post', '/weaving/yarn-inwards', await withContract(api, item, { itemId: item.id, ...b }))).body;
   const f1 = await inward({ vendorId: supplier.id, bags: 10, lbsPerBag: 100, ratePerLb: 300, inwardDate: '2026-11-01' }); // came to our factory
   const d1 = await inward({ vendorId: supplier.id, bags: 6, lbsPerBag: 50, ratePerLb: 310, inwardDate: '2026-11-02', directVendorId: sizer.id }); // delivered straight to Sizing Co
   const beam = async (b) => (await api('post', '/weaving/beams', { beamDate: '2026-10-01', ...b })).body;

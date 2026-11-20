@@ -7,6 +7,8 @@ const requireService = require('../middlewares/requireService');
 const { Joi, uuidParam, paging } = require('../validators/common');
 const yarnCounts = require('../services/yarnCountService');
 const yarnBrands = require('../services/yarnBrandService');
+const weavingDepartments = require('../services/weavingDepartmentService');
+const weavingQualities = require('../services/weavingQualityService');
 const yarnItems = require('../services/yarnItemService');
 const { PACKINGS, BAGS } = require('../models/YarnItem');
 const gv = require('../validators/greyValidator');
@@ -14,6 +16,10 @@ const gc = require('../controllers/greyController');
 const sv = require('../validators/storeValidator');
 const sc = require('../controllers/storeController');
 const inwards = require('../services/yarnInwardService');
+const yarnContracts = require('../services/yarnContractService');
+const sizingReturns = require('../services/sizingReturnService');
+const looms = require('../services/loomService');
+const sizingBatches = require('../services/sizingBatchService');
 const yarnStock = require('../services/yarnStockService');
 const outwards = require('../services/yarnOutwardService');
 const sales = require('../services/yarnSaleService');
@@ -42,6 +48,8 @@ function nameRoutes(path, svc) {
 }
 nameRoutes('/yarn-counts', yarnCounts);
 nameRoutes('/brands', yarnBrands);
+nameRoutes('/qualities', weavingQualities); // Masters > Quality: the qualities picked on the sizing batch
+nameRoutes('/departments', weavingDepartments); // Masters > Department: the departments the beams belong to
 
 // ---- Item Card: yarn count + brand + packing + bags ----
 const id = Joi.string().guid({ version: 'uuidv4' });
@@ -73,19 +81,66 @@ partyRoutes('/vendors', sv.vendor, sc.vendor, { statuses: sv.VENDOR_STATUS, type
 // ---- Yarn Inward: a vendor (purchase yarn) or a customer (overhead yarn), one item card, bags x lbs per bag, rate per lb ----
 const ymd = ymdDate();
 const entry = {
+  purpose: Joi.string().uppercase().valid('WEFT', 'WARP', 'BOTH'), // what the yarn is for: weft, warp or both (default BOTH on a new entry)
+  contractLineId: id.allow(null), // the contract line the yarn counts against: required for a customer (overhead) entry, optional for a vendor entry
   directVendorId: id.allow(null), // yarn the supplier delivered straight to this sizing party (never came to our factory); null = it came to the factory
   inwardDate: ymd, dcNo: Joi.string().trim().max(50).allow('', null), remarks: Joi.string().trim().max(300).allow('', null),
   bags: Joi.number().integer().min(1).max(1000000), lbsPerBag: Joi.number().precision(2).positive().max(1000000), ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
 };
 router.get('/yarn-inwards/form-data', view, async (req, res) => res.json(await inwards.formData(req))); // before '/:id'
 router.get('/yarn-inwards', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(50), search: Joi.string().trim().max(80),
-  type: Joi.string().uppercase().valid('PURCHASE', 'OVERHEAD'), customerId: id, vendorId: id, itemId: id, dateFrom: ymd, dateTo: ymd }) }), async (req, res) => res.json(await inwards.list(req, req.validatedQuery)));
+  type: Joi.string().uppercase().valid('PURCHASE', 'OVERHEAD'), purpose: Joi.string().uppercase().valid('WEFT', 'WARP', 'BOTH'), usableFor: Joi.string().uppercase().valid('WEFT', 'WARP'), contractId: id, contractLineId: id, noContract: Joi.boolean(), customerId: id, vendorId: id, itemId: id, dateFrom: ymd, dateTo: ymd }) }), async (req, res) => res.json(await inwards.list(req, req.validatedQuery)));
 router.post('/yarn-inwards', full, validate({ body: Joi.object({ ...entry, bags: entry.bags.required(), lbsPerBag: entry.lbsPerBag.required(), itemId: id.required(), customerId: id, vendorId: id }).xor('customerId', 'vendorId') }),
   async (req, res) => res.status(201).json(await inwards.create(req, req.body)));
 router.get('/yarn-inwards/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await inwards.get(req, req.params.id)));
 router.patch('/yarn-inwards/:id', full, validate({ params: uuidParam, body: Joi.object({ ...entry, itemId: id, customerId: id, vendorId: id }).min(1).oxor('customerId', 'vendorId') }),
   async (req, res) => res.json(await inwards.update(req, req.params.id, req.body)));
 router.delete('/yarn-inwards/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await inwards.remove(req, req.params.id)));
+
+// ---- Masters > Loom: a loom no and the department it belongs to (Masters > Department: e.g. Sulzer, Airjet) ----
+router.get('/looms', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(80), departmentId: id, isActive: Joi.boolean(), running: Joi.boolean() }) }), async (req, res) => res.json(await looms.list(req, req.validatedQuery)));
+router.post('/looms', full, validate({ body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20).required(), departmentId: id.required(), isActive: Joi.boolean() }) }), async (req, res) => res.status(201).json(await looms.create(req, req.body)));
+router.get('/looms/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await looms.get(req, req.params.id)));
+router.patch('/looms/:id', full, validate({ params: uuidParam, body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20), departmentId: id, isActive: Joi.boolean() }).min(1) }), async (req, res) => res.json(await looms.update(req, req.params.id, req.body)));
+router.delete('/looms/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await looms.remove(req, req.params.id)));
+
+// ---- Sizing Return: yarn and / or empty beams sent to a sizing party are called back WITHOUT sizing (an In Pass); beams go back to Empty, the yarn back into the stock ----
+const returnYarn = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(1000000).required() });
+const returnFields = { returnDate: ymd, refNo: Joi.string().trim().max(50).allow('', null), notes: Joi.string().trim().max(300).allow('', null), beamIds: Joi.array().items(id).max(200), yarns: Joi.array().items(returnYarn).max(100) };
+router.get('/sizing-returns/pending-beams', view, validate({ query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(80) }) }), async (req, res) => res.json(await sizingBatches.pendingBeams(req, req.validatedQuery))); // the beams waiting at that sizing party
+router.get('/sizing-returns/yarn-available', view, validate({ query: Joi.object({ vendorId: id.required(), returnId: id, search: Joi.string().trim().max(80) }) }), async (req, res) => res.json(await sizingReturns.yarnAvailable(req, req.validatedQuery)));
+router.get('/sizing-returns', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(50), search: Joi.string().trim().max(80), vendorId: id, dateFrom: ymd, dateTo: ymd }) }), async (req, res) => res.json(await sizingReturns.list(req, req.validatedQuery)));
+router.post('/sizing-returns', full, validate({ body: Joi.object({ ...returnFields, vendorId: id.required() }) }), async (req, res) => res.status(201).json(await sizingReturns.create(req, req.body)));
+router.get('/sizing-returns/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await sizingReturns.get(req, req.params.id)));
+router.patch('/sizing-returns/:id', full, validate({ params: uuidParam, body: Joi.object(returnFields).min(1) }), async (req, res) => res.json(await sizingReturns.update(req, req.params.id, req.body)));
+router.delete('/sizing-returns/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await sizingReturns.remove(req, req.params.id)));
+
+// ---- Yarn Contracts: PURCHASE (with a vendor) and OVERHEAD (with a customer); lines = yarn counts; yarn inward entries count against the lines ----
+const contractLine = {
+  yarnCountId: id, bags: Joi.number().integer().min(1).max(1000000), bagWeight: Joi.number().precision(2).positive().max(1000000),
+  lbs: Joi.number().precision(2).positive().max(1000000000), ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
+};
+const contractHead = {
+  contractDate: ymd, deliveryDate: ymd.allow(null), termsDays: Joi.number().integer().min(0).max(3650), notes: Joi.string().trim().max(300).allow('', null), taxPercent: Joi.number().precision(2).min(0).max(100),
+};
+const contractId = Joi.object({ id: id.required() });
+const lineParams = Joi.object({ id: id.required(), lineId: id.required() });
+router.get('/yarn-contracts/form-data', view, async (req, res) => res.json(await yarnContracts.formData(req))); // the static paths before '/:id'
+router.get('/yarn-contracts/open-lines', view, validate({ query: Joi.object({ vendorId: id, customerId: id, yarnCountId: id, itemId: id }).xor('vendorId', 'customerId') }), async (req, res) => res.json(await yarnContracts.openLines(req, req.validatedQuery)));
+router.get('/yarn-contracts', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(50), search: Joi.string().trim().max(80),
+  kind: Joi.string().uppercase().valid(...yarnContracts.KINDS), status: Joi.string().uppercase().valid('OPEN', 'CLOSED'), vendorId: id, customerId: id, dateFrom: ymd, dateTo: ymd }) }), async (req, res) => res.json(await yarnContracts.list(req, req.validatedQuery)));
+router.post('/yarn-contracts', full, validate({ body: Joi.object({ kind: Joi.string().uppercase().valid(...yarnContracts.KINDS).required(), vendorId: id, customerId: id, ...contractHead,
+  lines: Joi.array().min(1).max(200).items(Joi.object({ ...contractLine, yarnCountId: id.required() })).required() }).oxor('vendorId', 'customerId') }), async (req, res) => res.status(201).json(await yarnContracts.create(req, req.body)));
+router.get('/yarn-contracts/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await yarnContracts.get(req, req.params.id)));
+router.patch('/yarn-contracts/:id', full, validate({ params: uuidParam, body: Joi.object({ vendorId: id, customerId: id, ...contractHead }).min(1).oxor('vendorId', 'customerId') }), async (req, res) => res.json(await yarnContracts.update(req, req.params.id, req.body)));
+router.post('/yarn-contracts/:id/close', full, validate({ params: contractId }), async (req, res) => res.json(await yarnContracts.close(req, req.params.id)));
+router.post('/yarn-contracts/:id/activate', full, validate({ params: contractId }), async (req, res) => res.json(await yarnContracts.activate(req, req.params.id)));
+router.delete('/yarn-contracts/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await yarnContracts.remove(req, req.params.id)));
+router.post('/yarn-contracts/:id/lines', full, validate({ params: contractId, body: Joi.object({ ...contractLine, yarnCountId: id.required() }) }), async (req, res) => res.status(201).json(await yarnContracts.addLine(req, req.params.id, req.body)));
+router.patch('/yarn-contracts/:id/lines/:lineId', full, validate({ params: lineParams, body: Joi.object(contractLine).min(1) }), async (req, res) => res.json(await yarnContracts.updateLine(req, req.params.id, req.params.lineId, req.body)));
+router.delete('/yarn-contracts/:id/lines/:lineId', full, validate({ params: lineParams }), async (req, res) => res.json(await yarnContracts.removeLine(req, req.params.id, req.params.lineId)));
+router.post('/yarn-contracts/:id/lines/:lineId/close', full, validate({ params: lineParams }), async (req, res) => res.json(await yarnContracts.closeLine(req, req.params.id, req.params.lineId)));
+router.post('/yarn-contracts/:id/lines/:lineId/activate', full, validate({ params: lineParams }), async (req, res) => res.json(await yarnContracts.activateLine(req, req.params.id, req.params.lineId)));
 
 // ---- Yarn Stock: per item card and lbs per bag, inward - outward = balance ----
 router.get('/yarn-stock', view, validate({ query: Joi.object({ search: Joi.string().trim().max(80), yarnCountId: id, brandId: id, itemId: id, type: Joi.string().uppercase().valid('PURCHASE', 'OVERHEAD'), dateTo: ymd, showZero: Joi.boolean() }) }),
@@ -140,17 +195,19 @@ router.get('/yarn-sales/:id/gate-pass', view, validate({ params: uuidParam }), a
 const beamNo = Joi.number().integer().min(1).max(99999999);
 const beamName = Joi.string().trim().min(1).max(80);
 const beamStatus = Joi.string().uppercase().valid(...BEAM_STATUSES);
+const beamWeight = Joi.number().precision(2).positive().max(99999999).allow(null); // kg, null clears it
+const beamDepartment = Joi.string().guid({ version: 'uuidv4' }).allow(null); // a department of Masters > Department, null clears it
 router.get('/beams/next', view, async (req, res) => res.json(await beams.next(req))); // before '/:id'
-router.get('/beams', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(80), isActive: Joi.boolean(), status: beamStatus, dateFrom: ymd, dateTo: ymd }) }),
+router.get('/beams', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(80), isActive: Joi.boolean(), status: beamStatus, departmentId: id, noDepartment: Joi.boolean(), dateFrom: ymd, dateTo: ymd }) }),
   async (req, res) => res.json(await beams.list(req, req.validatedQuery)));
-router.post('/beams', full, validate({ body: Joi.object({ beamNo, name: beamName.required(), beamDate: ymd, status: beamStatus, statusDate: ymd, isActive: Joi.boolean() }) }), async (req, res) => res.status(201).json(await beams.create(req, req.body)));
+router.post('/beams', full, validate({ body: Joi.object({ beamNo, name: beamName.required(), beamDate: ymd, status: beamStatus, statusDate: ymd, isActive: Joi.boolean(), weightKg: beamWeight, departmentId: beamDepartment }) }), async (req, res) => res.status(201).json(await beams.create(req, req.body)));
 router.get('/beams/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await beams.get(req, req.params.id)));
-router.patch('/beams/:id', full, validate({ params: uuidParam, body: Joi.object({ beamNo, name: beamName, beamDate: ymd, status: beamStatus, statusDate: ymd, isActive: Joi.boolean() }).min(1) }), async (req, res) => res.json(await beams.update(req, req.params.id, req.body)));
+router.patch('/beams/:id', full, validate({ params: uuidParam, body: Joi.object({ beamNo, name: beamName, beamDate: ymd, status: beamStatus, statusDate: ymd, isActive: Joi.boolean(), weightKg: beamWeight, departmentId: beamDepartment }).min(1) }), async (req, res) => res.json(await beams.update(req, req.params.id, req.body)));
 router.delete('/beams/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await beams.remove(req, req.params.id)));
 
 // ---- Beam stock: how many beams are empty / full / at loom / at sizing, and which ones ----
 router.get('/beam-stock', view, async (req, res) => res.json(await beamStock.summary(req)));
-router.get('/beam-stock/:status', view, validate({ params: Joi.object({ status: beamStatus.required() }), query: Joi.object({ search: Joi.string().trim().max(80) }) }),
+router.get('/beam-stock/:status', view, validate({ params: Joi.object({ status: beamStatus.required() }), query: Joi.object({ search: Joi.string().trim().max(80), departmentId: id, noDepartment: Joi.boolean() }) }),
   async (req, res) => res.json(await beamStock.details(req, req.params.status, req.validatedQuery)));
 
 // ---- Yarn Outward > Sizing: yarn bags AND empty beams to a sizing party (our vendor, we pay for the work), one challan, one gate pass ----

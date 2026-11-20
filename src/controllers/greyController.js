@@ -22,7 +22,7 @@ exports.lot = {
   create: async (req, res) => res.status(201).json(await greyLotService.create(req, req.body)),
   update: async (req, res) => res.json(await greyLotService.update(req, req.params.id, req.body)),
   remove: async (req, res) => {
-    await greyLotService.remove(req, req.params.id);
+    await greyLotService.remove(req, req.params.id, req.body && req.body.reason);
     res.status(204).end();
   },
   setActive: async (req, res) => res.json(await greyLotService.setActive(req, req.params.id, req.body.isActive)),

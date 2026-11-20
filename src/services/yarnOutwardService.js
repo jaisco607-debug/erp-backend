@@ -10,6 +10,8 @@ const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const { usedBags } = require('./yarnUsage');
 const inwards = require('./yarnInwardService');
+const sizingBatches = require('./sizingBatchService');
+const sizingReturns = require('./sizingReturnService');
 
 const n2 = (v) => Math.round(Number(v) * 100) / 100;
 const challanText = (n) => String(n).padStart(5, '0');
@@ -135,13 +137,22 @@ async function list(req, type, { page, limit, search, dateFrom, dateTo, departme
     FROM yarn_outwards o LEFT JOIN yarn_outward_lines l ON l."outwardId" = o.id WHERE ${w}`);
   const sizing = type === 'SIZING';
   const [tb] = sizing ? await q(`SELECT COUNT(*)::int AS n FROM yarn_outward_beams xb JOIN yarn_outwards o ON o.id = xb."outwardId" WHERE ${w}`) : [{ n: 0 }];
+  const returned = sizing ? await sizingReturns.challanInfo(rows.map((r) => r.id)) : null;
   return {
-    data: rows.map(({ factoryBags, totalBeams, ...r }) => ({ ...r, challanText: challanText(r.challanNo), totalLbs: n2(r.totalLbs), ...(sizing ? { factoryBags, directBags: r.totalBags - factoryBags, totalBeams } : {}) })),
+    data: rows.map(({ factoryBags, totalBeams, ...r }) => ({ ...r, challanText: challanText(r.challanNo), totalLbs: n2(r.totalLbs), ...(sizing ? { factoryBags, directBags: r.totalBags - factoryBags, totalBeams, ...returnedOf(returned.get(r.id)) } : {}) })),
     page, limit, total: t.entries, totals: { entries: t.entries, bags: t.bags, lbs: n2(t.lbs), ...(sizing ? { beams: tb.n } : {}) },
   };
 }
 
-const get = async (req, type, id) => json(await findOr404(req, type, id));
+/** The record badge of a sizing challan: what of it came back through sizing returns (see sizingReturnService.challanInfo). */
+const returnedOf = (m) => ({ returnedBags: m.returnedBags, returnedBeams: m.returnedBeams, returnCount: m.returnCount, hasReturn: m.hasReturn });
+
+const get = async (req, type, id) => {
+  const out = json(await findOr404(req, type, id));
+  if (type !== 'SIZING') return out;
+  const m = (await sizingReturns.challanInfo([id])).get(id);
+  return { ...out, ...returnedOf(m), lines: out.lines.map((l) => ({ ...l, returnedBags: m.lineBags.get(l.id) || 0 })), beams: out.beams.map((b) => ({ ...b, returned: m.beamIds.has(b.id) })) };
+};
 
 /** The party of a RETURN: a vendor or a customer of the weaving list. */
 async function partyOf(req, { vendorId, customerId }, transaction) {
@@ -185,6 +196,7 @@ async function applyBeams(req, outwardId, beamIds, date, transaction) {
 /** A sizing challan that sized beams were already received on cannot be changed (only its description) or deleted: delete the receipts first. */
 async function assertNoReceipt(outwardId, what, transaction) {
   const [r] = await sequelize.query('SELECT count(*)::int AS n FROM yarn_sizing_inwards WHERE "outwardId" = :outwardId AND "deletedAt" IS NULL', { replacements: { outwardId }, type: sequelize.QueryTypes.SELECT, transaction });
+  await sizingBatches.assertNoBatch(outwardId, what, transaction); // the yarn / beams of the challan are used in a sizing batch (Sizing Management)
   if (r.n) throw AppError.rule('HAS_SIZING_INWARD', `Sized beams were already received on this challan (${r.n} receipt${r.n === 1 ? '' : 's'}): delete the receipt${r.n === 1 ? '' : 's'} first to ${what}`, { receipts: r.n });
 }
 

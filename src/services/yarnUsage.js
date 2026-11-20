@@ -9,6 +9,9 @@ async function usedBags(ids, { transaction, excludeOutwardId } = {}) {
     WHERE l."inwardId" IN (:ids)${excludeOutwardId ? ' AND o.id <> :ex' : ''} GROUP BY l."inwardId"`,
   { replacements: { ids, ex: excludeOutwardId }, type: sequelize.QueryTypes.SELECT, transaction });
   for (const r of rows) map.set(r.inwardId, r.bags);
+  // yarn that came back from a sizing party (Sizing Management > Sizing Return) is not out any more
+  const back = await sequelize.query('SELECT "inwardId", SUM(bags)::int AS bags FROM sizing_return_yarns WHERE "inwardId" IN (:ids) GROUP BY "inwardId"', { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction });
+  for (const r of back) map.set(r.inwardId, (map.get(r.inwardId) || 0) - r.bags);
   return map;
 }
 

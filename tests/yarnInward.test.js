@@ -1,6 +1,7 @@
 const { app, request, clean, makeUser, makeCompany, loginAs } = require('./helpers');
 const { Service, CompanyService, UserService, Customer, Vendor } = require('../src/models');
 
+const { withContract } = require('./contractHelper');
 jest.setTimeout(180000);
 beforeEach(clean);
 
@@ -55,11 +56,11 @@ test('yarn inward: purchase from a vendor and overhead from a customer; bags x l
   expect(p.body).toMatchObject({ code: 1, type: 'PURCHASE', party: { kind: 'VENDOR', name: 'Yarn Mills' }, bags: 10, lbsPerBag: 100, totalLbs: 1000, ratePerLb: 350.5, amount: 350500, dcNo: 'DC-9', inwardDate: '2026-11-10' });
   expect(p.body.item).toMatchObject({ name: '22|s Cotton - Crescent - 24 - 100', packing: 24, bags: 100 });
   // overhead: customer, rate not needed
-  const o = await w.api('post', '/weaving/yarn-inwards', { customerId: customer.id, itemId: w.item.id, bags: 5, lbsPerBag: 50.5 });
+  const o = await w.api('post', '/weaving/yarn-inwards', await withContract(w.api, w.item, { customerId: customer.id, itemId: w.item.id, bags: 5, lbsPerBag: 50.5 }));
   expect(o.status).toBe(201);
   expect(o.body).toMatchObject({ code: 2, type: 'OVERHEAD', party: { kind: 'CUSTOMER', name: 'Ali Traders' }, totalLbs: 252.5, ratePerLb: null, amount: null });
   // overhead with a rate gets an amount too
-  const o2 = await w.api('post', '/weaving/yarn-inwards', { customerId: customer.id, itemId: w.item.id, bags: 2, lbsPerBag: 100, ratePerLb: 10 });
+  const o2 = await w.api('post', '/weaving/yarn-inwards', await withContract(w.api, w.item, { customerId: customer.id, itemId: w.item.id, bags: 2, lbsPerBag: 100, ratePerLb: 10 }));
   expect(o2.body.amount).toBe(2000);
 
   // rules
@@ -70,7 +71,7 @@ test('yarn inward: purchase from a vendor and overhead from a customer; bags x l
   expect((await w.api('post', '/weaving/yarn-inwards', { vendorId: vendor.id, itemId: w.item.id, bags: 1.5, lbsPerBag: 100, ratePerLb: 1 })).status).toBe(400);
   expect((await w.api('post', '/weaving/yarn-inwards', { vendorId: vendor.id, itemId: w.item.id, bags: 1, lbsPerBag: 0, ratePerLb: 1 })).status).toBe(400);
   err(await w.api('post', '/weaving/yarn-inwards', { vendorId: customer.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, ratePerLb: 1 }), 422, 'UNKNOWN_VENDOR');
-  err(await w.api('post', '/weaving/yarn-inwards', { customerId: vendor.id, itemId: w.item.id, bags: 1, lbsPerBag: 100 }), 422, 'UNKNOWN_CUSTOMER');
+  err(await w.api('post', '/weaving/yarn-inwards', { customerId: vendor.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, contractLineId: '11111111-1111-4111-8111-111111111111' }), 422, 'UNKNOWN_CUSTOMER');
   err(await w.api('post', '/weaving/yarn-inwards', { vendorId: vendor.id, itemId: vendor.id, bags: 1, lbsPerBag: 100, ratePerLb: 1 }), 422, 'UNKNOWN_ITEM');
   expect((await w.viewer('post', '/weaving/yarn-inwards', { vendorId: vendor.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, ratePerLb: 1 })).status).toBe(403);
 
@@ -106,7 +107,7 @@ test('yarn inward: purchase from a vendor and overhead from a customer; bags x l
 
   // a switched-off item card cannot be used for a new entry
   await w.api('patch', `/weaving/item-cards/${w.item.id}`, { isActive: false });
-  err(await w.api('post', '/weaving/yarn-inwards', { customerId: customer.id, itemId: w.item.id, bags: 1, lbsPerBag: 100 }), 422, 'ITEM_INACTIVE');
+  err(await w.api('post', '/weaving/yarn-inwards', await withContract(w.api, w.item, { customerId: customer.id, itemId: w.item.id, bags: 1, lbsPerBag: 100 })), 422, 'ITEM_INACTIVE');
   expect((await w.api('get', '/weaving/yarn-inwards/form-data')).body.items).toHaveLength(0);
 });
 
@@ -140,7 +141,7 @@ test('weaving has its OWN customers and vendors: the main lists do not show up t
   err(await w.api('post', '/weaving/customers', { name: 'main party' }), 422, 'NAME_TAKEN');
   // a main party cannot be used in a yarn inward
   err(await w.api('post', '/weaving/yarn-inwards', { vendorId: mainVe.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, ratePerLb: 1 }), 422, 'UNKNOWN_VENDOR');
-  err(await w.api('post', '/weaving/yarn-inwards', { customerId: mainCu.id, itemId: w.item.id, bags: 1, lbsPerBag: 100 }), 422, 'UNKNOWN_CUSTOMER');
+  err(await w.api('post', '/weaving/yarn-inwards', { customerId: mainCu.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, contractLineId: '11111111-1111-4111-8111-111111111111' }), 422, 'UNKNOWN_CUSTOMER');
   expect((await w.api('post', '/weaving/yarn-inwards', { vendorId: ve.body.id, itemId: w.item.id, bags: 1, lbsPerBag: 100, ratePerLb: 1 })).status).toBe(201);
   // the main lists (Grey Store / stores) show only the main parties
   const grey = await Service.findAll({ where: { code: ['GREY_STORE', 'GENERAL_STORE'] } });
@@ -159,7 +160,7 @@ test('yarn stock: per item card and lbs per bag; inward added up, balance = inwa
   const customer = (await w.api('post', '/weaving/customers', { name: 'Ali' })).body;
   const brand2 = (await w.api('post', '/weaving/brands', { name: 'Reliance' })).body;
   const item2 = (await w.api('post', '/weaving/item-cards', { yarnCountId: w.count.id, brandId: brand2.id, packing: 12, bags: 50 })).body;
-  const post = (b) => w.api('post', '/weaving/yarn-inwards', b);
+  const post = async (b) => w.api('post', '/weaving/yarn-inwards', await withContract(w.api, b.itemId === w.item.id ? w.item : item2, b));
   const a = (await post({ vendorId: vendor.id, itemId: w.item.id, bags: 10, lbsPerBag: 100, ratePerLb: 10, inwardDate: '2026-11-01' })).body;
   await post({ vendorId: vendor.id, itemId: w.item.id, bags: 5, lbsPerBag: 100, ratePerLb: 12, inwardDate: '2026-11-05' });
   await post({ customerId: customer.id, itemId: w.item.id, bags: 4, lbsPerBag: 50.5, inwardDate: '2026-11-06' });

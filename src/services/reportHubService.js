@@ -14,6 +14,8 @@ const REPORTS = [
   { key: 'grey-parties', title: 'Grey: party wise', url: '/v1/reports/grey/parties', reportCode: 'REPORT_GREY', dataCodes: ['GREY_STORE', 'SO_CARD'], filters: [...COMMON, 'customerId', 'search'] },
   { key: 'grey-lots', title: 'Grey: lot wise', url: '/v1/reports/grey/lots', reportCode: 'REPORT_GREY', dataCodes: ['GREY_STORE', 'SO_CARD'], filters: [...COMMON, 'customerId', 'qualityId', 'stock', 'search'] },
   { key: 'grey-returns', title: 'Grey: given back', url: '/v1/reports/grey/returns', reportCode: 'REPORT_GREY', dataCodes: ['GREY_STORE', 'SO_CARD'], filters: [...COMMON, 'customerId', 'qualityId', 'search'] },
+  { key: 'grey-deleted-lots', title: 'Grey: deleted / cancelled lots', url: '/v1/reports/grey/deleted-lots', reportCode: 'REPORT_GREY', dataCodes: ['GREY_STORE', 'SO_CARD'], filters: ['dateFrom', 'dateTo', 'customerId', 'qualityId', 'search'] },
+  { key: 'grey-lot-gaps', title: 'Grey: missing lot numbers', url: '/v1/reports/grey/lot-gaps', reportCode: 'REPORT_GREY', dataCodes: ['GREY_STORE', 'SO_CARD'], filters: ['dateFrom', 'dateTo'] },
   { key: 'so-cards', title: 'SO cards', url: '/v1/reports/so-cards', reportCode: 'REPORT_SO_CARDS', dataCodes: ['SO_CARD'], filters: [...COMMON, 'customerId', 'qualityId', 'departmentId', 'status', 'search'] },
   { key: 'so-card-lots', title: 'SO cards: lots and thaans', url: '/v1/reports/so-cards/lots', reportCode: 'REPORT_SO_CARDS', dataCodes: ['SO_CARD'], filters: [...COMMON, 'customerId', 'qualityId', 'status', 'search'] },
   { key: 'departments', title: 'Departments summary', url: '/v1/reports/departments', reportCode: 'REPORT_DEPARTMENTS', depts: true, filters: [...COMMON, 'departmentId', 'customerId'] },
@@ -151,6 +153,58 @@ async function greyReturns(req, f) {
   return respond('Grey given back', f, [section('returns', 'Grey given back', columns, rows.map((r) => ({ ...r, width: r.width || '', meters: round(r.meters) })), ['thaans', 'meters'])], f);
 }
 
+const KIND_TEXT = { DELETED: 'Deleted', RETURNED: 'Returned', CANCELLED: 'Cancelled' };
+/** The flat answer of the Deleted / cancelled lots screen: { columns, rows, total, page, limit, totals } (the sections shape is kept too). */
+const flat = (out) => { const s = out.sections[0]; return { ...out, columns: s.columns, rows: s.rows, totals: s.totals }; };
+
+/** Every grey lot that was deleted, cancelled (store lot) or returned: newest first. Records come from the soft-deleted lots, so old deletions show too. */
+async function greyDeletedLots(req, f) {
+  await needAnyService(req, ['GREY_STORE', 'SO_CARD']);
+  const where = ['gl."companyId" = :companyId', 'gl."deletedAt" IS NOT NULL'];
+  const rep = { companyId: req.user.companyId };
+  if (f.customerId) { where.push('gl."customerId" = :customerId'); rep.customerId = f.customerId; }
+  if (f.qualityId) { where.push('gl."qualityId" = :qualityId'); rep.qualityId = f.qualityId; }
+  if (f.dateFrom) { where.push('gl."deletedAt" >= :dateFrom::date'); rep.dateFrom = f.dateFrom; }
+  if (f.dateTo) { where.push('gl."deletedAt" < (:dateTo::date + 1)'); rep.dateTo = f.dateTo; }
+  if (f.search) { where.push('(gl."lotNo"::text = :search OR gl."typeNo" ILIKE :like OR gl."dcNo" ILIKE :like OR gl."partyRef" ILIKE :like OR cu.name ILIKE :like)'); rep.search = f.search; rep.like = `%${f.search}%`; }
+  const rows = await q(`SELECT gl.id, gl."lotNo", gl."typeNo", gl."inwardDate", gl."customerId", cu.name AS party, cu.code AS "partyCode", gl."qualityId", qu.name AS quality, gl.unit,
+      COALESCE(NULLIF((SELECT count(*) FROM grey_lot_thaans t WHERE t."lotId" = gl.id), 0), gl.pieces)::int AS thaans, gl."inwardMeters"::float AS meters, gl."inwardYards"::float AS yards,
+      gl."dcNo", gl."partyRef", gl."vehicleNo", gl."isReprocess", gl.source, COALESCE(gl."deleteKind", CASE WHEN gl.source = 'STORE' THEN 'CANCELLED' ELSE 'DELETED' END) AS kind,
+      COALESCE(gl."deleteReason", '') AS reason, gl."deletedAt", gl."deletedById", u.name AS "deletedByName"
+    FROM grey_lots gl JOIN customers cu ON cu.id = gl."customerId" LEFT JOIN qualities qu ON qu.id = gl."qualityId" LEFT JOIN users u ON u.id = gl."deletedById"
+    WHERE ${where.join(' AND ')} ORDER BY gl."deletedAt" DESC, gl."lotNo" DESC`, rep);
+  const columns = [col('lotNo', 'Lot#', 'int'), col('typeNo', 'Type#'), col('inwardDate', 'Inward date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('unit', 'Unit'), col('thaans', 'Thaans', 'int'),
+    col('meters', 'Meters', 'meters'), col('dcNo', 'DC#'), col('kind', 'What happened'), col('reason', 'Reason'), col('deletedAt', 'Date', 'datetime'), col('deletedBy', 'By')];
+  const out = rows.map((r) => ({ lotNo: r.lotNo, typeNo: r.typeNo, inwardDate: r.inwardDate, party: r.party, quality: r.quality || '', unit: r.unit, thaans: r.thaans, meters: round(r.meters), dcNo: r.dcNo || '',
+    kind: KIND_TEXT[r.kind] || r.kind, reason: r.reason, deletedAt: new Date(r.deletedAt).toISOString(), deletedBy: r.deletedByName || '',
+    // the full record of the lot, for the detail view
+    id: r.id, customer: { id: r.customerId, name: r.party, code: r.partyCode }, qualityRef: { id: r.qualityId, name: r.quality }, totalYards: round(r.yards), partyRef: r.partyRef || '', vehicleNo: r.vehicleNo || '',
+    isReprocess: r.isReprocess, source: r.source === 'STORE' ? 'STORE' : 'MANUAL', deletedById: r.deletedById }));
+  return flat(respond('Grey: deleted / cancelled lots', f, [section('deleted-lots', 'Deleted / cancelled lots', columns, out, ['thaans', 'meters'])], f));
+}
+
+/** The lot numbers missing between the smallest and the largest lot number: the record of the deleted ones, or "No record". */
+async function greyLotGaps(req, f) {
+  await needAnyService(req, ['GREY_STORE', 'SO_CARD']);
+  const rep = { companyId: req.user.companyId };
+  const w = ['"companyId" = :companyId'];
+  if (f.dateFrom) { w.push('"inwardDate" >= :dateFrom'); rep.dateFrom = f.dateFrom; }
+  if (f.dateTo) { w.push('"inwardDate" <= :dateTo'); rep.dateTo = f.dateTo; }
+  const [range] = await q(`SELECT min("lotNo") AS lo, max("lotNo") AS hi FROM grey_lots WHERE ${w.join(' AND ')}`, rep);
+  const columns = [col('lotNo', 'Lot#', 'int'), col('status', 'Record'), col('inwardDate', 'Inward date', 'date'), col('party', 'Party'), col('quality', 'Quality'), col('meters', 'Meters', 'meters'), col('kind', 'What happened'), col('reason', 'Reason'), col('deletedAt', 'Date', 'datetime'), col('deletedBy', 'By')];
+  let rows = [];
+  if (range && range.lo != null && Number(range.hi) - Number(range.lo) < 200000) {
+    const found = await q(`SELECT n AS "lotNo", gl."inwardDate", cu.name AS party, qu.name AS quality, gl."inwardMeters"::float AS meters, gl."deleteKind", gl.source, gl."deleteReason" AS reason, gl."deletedAt", u.name AS "deletedByName"
+      FROM generate_series(:lo::int, :hi::int) n
+      LEFT JOIN grey_lots gl ON gl."companyId" = :companyId AND gl."lotNo" = n LEFT JOIN customers cu ON cu.id = gl."customerId" LEFT JOIN qualities qu ON qu.id = gl."qualityId" LEFT JOIN users u ON u.id = gl."deletedById"
+      WHERE gl.id IS NULL OR gl."deletedAt" IS NOT NULL ORDER BY n DESC`, { ...rep, lo: range.lo, hi: range.hi });
+    rows = found.map((r) => (r.deletedAt
+      ? { lotNo: r.lotNo, status: 'Deleted lot', inwardDate: r.inwardDate, party: r.party, quality: r.quality || '', meters: round(r.meters), kind: KIND_TEXT[r.deleteKind || (r.source === 'STORE' ? 'CANCELLED' : 'DELETED')], reason: r.reason || '', deletedAt: new Date(r.deletedAt).toISOString(), deletedBy: r.deletedByName || '' }
+      : { lotNo: r.lotNo, status: 'No record', inwardDate: null, party: '', quality: '', meters: 0, kind: '', reason: '', deletedAt: null, deletedBy: '' }));
+  }
+  return flat(respond('Grey: missing lot numbers', f, [section('lot-gaps', 'Missing lot numbers', columns, rows, ['meters'])], f));
+}
+
 /** SO cards with every lot and its thaans: one row per card and lot. */
 async function soCardLots(req, f) {
   await needAnyService(req, ['SO_CARD']);
@@ -177,4 +231,4 @@ async function soCardLots(req, f) {
   return respond('SO cards: lots and thaans', f, [section('lots', 'Lots and thaans', columns, data, ['thaans', 'meters'])], f);
 }
 
-module.exports = { index, overview, greyReturns, soCardLots, REPORTS };
+module.exports = { index, overview, greyDeletedLots, greyLotGaps, greyReturns, soCardLots, REPORTS };

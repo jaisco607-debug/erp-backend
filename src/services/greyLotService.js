@@ -361,13 +361,14 @@ async function setApproved(req, id, approved) {
  * Delete: the lot leaves the list but stays in the database, and its number is never reused.
  * Approved lots and lots that cloth has already gone out of cannot be deleted.
  */
-async function remove(req, id) {
+async function remove(req, id, reason) {
   return sequelize.transaction(async (transaction) => {
     const lot = await findOr404(req, id, transaction, true);
     notStoreLot(lot);
     if (lot.isApproved) throw AppError.rule('LOT_APPROVED', 'An approved lot cannot be deleted');
     if (lot.outwardMeters > 0) throw AppError.rule('LOT_IN_USE', 'Cloth has already gone out of this lot');
     const before = await load(lot.id, transaction);
+    await lot.update({ deletedById: req.user.id, deleteKind: 'DELETED', deleteReason: reason ? String(reason).trim().slice(0, 300) || null : null }, { transaction });
     await lot.destroy({ transaction });
     await audit.log(req, { action: 'GREY_LOT_DELETED', entityType: 'GreyLot', entityId: id, before }, { transaction });
   });

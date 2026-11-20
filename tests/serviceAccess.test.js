@@ -54,10 +54,10 @@ test('services list: kinds, menu groups, a module can be given to companies from
   expect((await sup('get', '/services?kind=REPORT')).body.data).toHaveLength(11);
   expect(all.find((s) => s.code === 'REPORTS')).toBeUndefined();
   // built-in services cannot be deleted (the screen hides their delete button)
-  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(32);
+  expect(all.filter((s) => s.isBuiltIn)).toHaveLength(34);
   expect(by('ACCOUNTS').sort()).toEqual(['ACC_BANK', 'ACC_COA', 'ACC_CONTRA', 'ACC_JOURNAL', 'ACC_PAYMENTS', 'ACC_PURCHASES', 'ACC_RECEIPTS', 'ACC_REPORTS', 'ACC_SALES']);
   expect(by('PAYROLL').sort()).toEqual(['PAYROLL_APPLICATIONS', 'PAYROLL_EMPLOYEES', 'PAYROLL_REPORTS', 'PAYROLL_SALARY']);
-  expect(by('WEAVING')).toEqual(['WEAVING_MASTERS']);
+  expect(by('WEAVING')).toEqual(['WEAVING_MASTERS', 'SIZING', 'WEAVING_PRODUCTION']);
   expect(all.filter((s) => s.menuGroup === 'PAYROLL').every((s) => s.kind === 'MODULE' && s.isBuiltIn)).toBe(true);
   expect(all.find((s) => s.code === 'DYEING').isBuiltIn).toBe(false);
 

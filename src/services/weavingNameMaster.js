@@ -14,8 +14,9 @@ const clean = (s) => String(s).trim().replace(/\s+/g, ' ');
  * @param label    lower case name for messages, e.g. 'yarn count'
  * @param action   audit action prefix, e.g. 'YARN_COUNT'
  * @param inUse    async (companyId, id, transaction) => number of records using it (0 = free to delete)
+ * @param usedBy   what uses it, for the message (default 'item card'); usedKey = the key of the count in the error details (default 'itemCards')
  */
-function nameMaster({ Model, entity, label, action, inUse }) {
+function nameMaster({ Model, entity, label, action, inUse, usedBy = 'item card', usedKey = 'itemCards' }) {
   const json = (y) => ({ id: y.id, code: y.code, name: y.name, isActive: y.isActive, createdAt: y.createdAt });
   const dup = (name) => AppError.rule('DUPLICATE_ENTRY', `Duplicate entry: ${label} "${name}" already exists`, { field: 'name' });
   const isDuplicate = (e) => e.name === 'SequelizeUniqueConstraintError';
@@ -83,7 +84,7 @@ function nameMaster({ Model, entity, label, action, inUse }) {
     return sequelize.transaction(async (transaction) => {
       const row = await findOr404(req, id, transaction);
       const used = inUse ? await inUse(req.user.companyId, id, transaction) : 0;
-      if (used) throw AppError.rule('IN_USE', `This ${label} is used by ${used} item card${used === 1 ? '' : 's'}. Switch it off instead of deleting it`, { itemCards: used });
+      if (used) throw AppError.rule('IN_USE', `This ${label} is used by ${used} ${usedBy}${used === 1 ? '' : 's'}. Switch it off instead of deleting it`, { [usedKey]: used });
       const before = json(row);
       await row.destroy({ transaction });
       await audit.log(req, { action: `${action}_DELETED`, entityType: entity, entityId: id, before }, { transaction });

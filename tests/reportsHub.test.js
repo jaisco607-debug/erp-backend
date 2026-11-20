@@ -92,7 +92,7 @@ test('reports hub: index, overview and all 15 urls answer, also for a report-onl
   expect((await get('/reports/gate-passes')).status).toBe(403);
   expect((await get('/reports/overview')).status).toBe(403);
   const ri = (await get('/reports')).body;
-  expect(ri.reports.map((x) => x.key)).toEqual(['grey-parties', 'grey-lots', 'grey-returns', 'ledger', 'daily-stock', 'ledger-lot', 'ledger-party']);
+  expect(ri.reports.map((x) => x.key)).toEqual(['grey-parties', 'grey-lots', 'grey-returns', 'grey-deleted-lots', 'grey-lot-gaps', 'ledger', 'daily-stock', 'ledger-lot', 'ledger-party']);
   // a user with nothing sees no menu
   const none = await makeUser({ userType: 'USER', companyId: company.id });
   expect((await request(app).get('/api/v1/reports').set({ Authorization: `Bearer ${(await loginAs(none)).accessToken}` })).status).toBe(403);

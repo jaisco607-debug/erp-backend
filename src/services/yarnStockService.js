@@ -16,12 +16,14 @@ async function list(req, { search, yarnCountId, brandId, itemId, type, dateTo, s
   if (dateTo) { where.push('i."inwardDate" <= :dateTo'); rep.dateTo = dateTo; }
   if (search) { where.push('(yc.name ILIKE :like OR yb.name ILIKE :like)'); rep.like = `%${search.replace(/[\\%_]/g, '\\$&')}%`; }
   const dateOut = dateTo ? ' AND o."outwardDate" <= :dateTo' : '';
+  const dateBack = dateTo ? ' AND sr."returnDate" <= :dateTo' : '';
   const rows = await sequelize.query(`
     SELECT yi.id AS "itemId", yi.code AS "itemCode", yc.id AS "yarnCountId", yc.name AS "yarnCount", yb.id AS "brandId", yb.name AS brand, yi.packing, yi.bags AS "cardBags",
            i."lbsPerBag"::float AS "lbsPerBag", SUM(i.bags)::int AS "inwardBags", SUM(i."totalLbs")::float AS "inwardLbs",
-           COALESCE(SUM(x.bags), 0)::int AS "outwardBags", COALESCE(SUM(x.lbs), 0)::float AS "outwardLbs"
+           (COALESCE(SUM(x.bags), 0) - COALESCE(SUM(rt.bags), 0))::int AS "outwardBags", (COALESCE(SUM(x.lbs), 0) - COALESCE(SUM(rt.lbs), 0))::float AS "outwardLbs"
     FROM yarn_inwards i
-    LEFT JOIN LATERAL (SELECT SUM(l.bags) AS bags, SUM(l.lbs) AS lbs FROM yarn_outward_lines l JOIN yarn_outwards o ON o.id = l."outwardId" AND o."deletedAt" IS NULL${dateOut} WHERE l."inwardId" = i.id) x ON true JOIN yarn_items yi ON yi.id = i."itemId" JOIN yarn_counts yc ON yc.id = yi."yarnCountId" JOIN yarn_brands yb ON yb.id = yi."brandId"
+    LEFT JOIN LATERAL (SELECT SUM(l.bags) AS bags, SUM(l.lbs) AS lbs FROM yarn_outward_lines l JOIN yarn_outwards o ON o.id = l."outwardId" AND o."deletedAt" IS NULL${dateOut} WHERE l."inwardId" = i.id) x ON true
+    LEFT JOIN LATERAL (SELECT SUM(ry.bags) AS bags, SUM(ry.lbs) AS lbs FROM sizing_return_yarns ry JOIN sizing_returns sr ON sr.id = ry."returnId"${dateBack} WHERE ry."inwardId" = i.id) rt ON true JOIN yarn_items yi ON yi.id = i."itemId" JOIN yarn_counts yc ON yc.id = yi."yarnCountId" JOIN yarn_brands yb ON yb.id = yi."brandId"
     WHERE ${where.join(' AND ')}
     GROUP BY yi.id, yi.code, yc.id, yc.name, yb.id, yb.name, yi.packing, yi.bags, i."lbsPerBag"
     ORDER BY yc.name, yb.name, yi.packing, i."lbsPerBag"`, { replacements: rep, type: sequelize.QueryTypes.SELECT });

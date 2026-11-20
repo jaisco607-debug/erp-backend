@@ -15,6 +15,10 @@ function init(sequelize) {
       itemId: { type: DataTypes.UUID, allowNull: false },
       // yarn the supplier delivered straight to this sizing party (never came to our factory)
       directVendorId: { type: DataTypes.UUID, allowNull: true },
+      // what the yarn is for: WEFT, WARP or BOTH (see migration 20261225000001)
+      purpose: { type: DataTypes.STRING(4), allowNull: false, defaultValue: 'BOTH' },
+      // the contract line this entry counts against (see migration 20261226000001): required for a customer (overhead) entry, optional for a vendor entry
+      contractLineId: { type: DataTypes.UUID, allowNull: true },
       bags: { type: DataTypes.INTEGER, allowNull: false },
       lbsPerBag: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
       totalLbs: { type: DataTypes.DECIMAL(16, 2), allowNull: false },

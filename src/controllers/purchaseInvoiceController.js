@@ -5,6 +5,7 @@ exports.credit = async (req, res) => res.json(await purchaseInvoiceService.credi
 exports.inwards = async (req, res) => res.json(await purchaseInvoiceService.inwards(req, req.validatedQuery));
 exports.sizingInwards = async (req, res) => res.json(await purchaseInvoiceService.sizingInwards(req, req.validatedQuery));
 exports.storeYarnInwards = async (req, res) => res.json(await purchaseInvoiceService.storeYarnInwards(req, req.validatedQuery));
+exports.sizingBatches = async (req, res) => res.json(await purchaseInvoiceService.sizingBatches(req, req.validatedQuery));
 exports.fabricInwards = async (req, res) => res.json(await purchaseInvoiceService.fabricInwards(req, req.validatedQuery));
 exports.yarnInwards = async (req, res) => res.json(await purchaseInvoiceService.yarnInwards(req, req.validatedQuery));
 exports.list = async (req, res) => res.json(await purchaseInvoiceService.list(req, req.validatedQuery));

@@ -16,6 +16,11 @@ function init(sequelize) {
       statusDate: { type: DataTypes.DATEONLY, allowNull: false },
       // the meters of sized yarn on a FULL beam (from the sizing inward)
       meters: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+      // the estimated meters left on a FULL beam that came back half cut from a loom (badge "Half cut")
+      halfCutM: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+      // the weight of the beam in kg, and the department it belongs to (Masters > Department); both optional
+      weightKg: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+      departmentId: { type: DataTypes.UUID, allowNull: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       createdById: { type: DataTypes.UUID, allowNull: true },
     },

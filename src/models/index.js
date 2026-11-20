@@ -16,6 +16,8 @@ const YarnItemModel = require('./YarnItem');
 const YarnInwardModel = require('./YarnInward');
 const YarnOutwardModel = require('./YarnOutward');
 const YarnBeamModel = require('./YarnBeam');
+const WeavingDepartmentModel = require('./WeavingDepartment');
+const WeavingQualityModel = require('./WeavingQuality');
 const YarnSizingInwardModel = require('./YarnSizingInward');
 const CompanyCounterModel = require('./CompanyCounter');
 const GreyLotModel = require('./GreyLot');
@@ -52,6 +54,9 @@ const YarnInward = YarnInwardModel.init(sequelize);
 YarnInward.belongsTo(YarnItem, { foreignKey: 'itemId', as: 'item' });
 const { YarnOutward, YarnOutwardLine, YarnOutwardBeam } = YarnOutwardModel.init(sequelize);
 const YarnBeam = YarnBeamModel.init(sequelize);
+const WeavingDepartment = WeavingDepartmentModel.init(sequelize);
+const WeavingQuality = WeavingQualityModel.init(sequelize);
+YarnBeam.belongsTo(WeavingDepartment, { foreignKey: 'departmentId', as: 'department' });
 const { YarnSizingInward, YarnSizingInwardBeam } = YarnSizingInwardModel.init(sequelize);
 YarnSizingInward.hasMany(YarnSizingInwardBeam, { foreignKey: 'inwardId', as: 'beamRows' });
 YarnSizingInwardBeam.belongsTo(YarnBeam, { foreignKey: 'beamId', as: 'beam' });
@@ -197,6 +202,8 @@ module.exports = {
   YarnInward,
   YarnOutward,
   YarnBeam,
+  WeavingDepartment,
+  WeavingQuality,
   YarnSizingInward,
   YarnSizingInwardBeam,
   YarnOutwardLine,

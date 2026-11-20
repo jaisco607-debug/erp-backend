@@ -1,6 +1,7 @@
 const { app, request, clean, makeUser, makeCompany, loginAs, sequelize } = require('./helpers');
 const { Service, CompanyService, UserService, Account } = require('../src/models');
 
+const { withContract } = require('./contractHelper');
 jest.setTimeout(240000);
 beforeEach(clean);
 
@@ -27,7 +28,7 @@ async function setup() {
   const buyer = (await api('post', '/weaving/customers', { name: 'Ali Traders', creditDays: 30 })).body;
   const buyer2 = (await api('post', '/weaving/customers', { name: 'Second Buyer' })).body;
   const owner = (await api('post', '/weaving/customers', { name: 'Own Yarn Party' })).body;
-  const inward = async (b) => (await api('post', '/weaving/yarn-inwards', { itemId: item.id, ...b })).body;
+  const inward = async (b) => (await api('post', '/weaving/yarn-inwards', await withContract(api, item, { itemId: item.id, ...b }))).body;
   const p1 = await inward({ vendorId: vendor.id, bags: 10, lbsPerBag: 100, ratePerLb: 300, inwardDate: '2026-11-01' });
   const p2 = await inward({ vendorId: vendor.id, bags: 5, lbsPerBag: 50, ratePerLb: 310, inwardDate: '2026-11-02' });
   const o1 = await inward({ customerId: owner.id, bags: 8, lbsPerBag: 100, inwardDate: '2026-11-03' });

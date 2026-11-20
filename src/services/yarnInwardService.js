@@ -7,6 +7,7 @@ const AppError = require('../utils/AppError');
 const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const { usedBags } = require('./yarnUsage');
+const contracts = require('./yarnContractService');
 
 /** Map inwardId -> the purchase invoice (accounts) the entry is on: { id, voucherNo, status }. */
 async function invoicesOf(ids, transaction) {
@@ -17,6 +18,10 @@ async function invoicesOf(ids, transaction) {
   for (const r of rows) map.set(r.inwardId, { id: r.id, voucherNo: r.voucherNo, voucherLabel: String(r.voucherNo).padStart(5, '0'), status: r.status });
   return map;
 }
+
+// what the yarn is for (the form asks for one of the three)
+const PURPOSES = ['WEFT', 'WARP', 'BOTH'];
+const PURPOSE_TEXT = { WEFT: 'For weft', WARP: 'For warp', BOTH: 'For both' };
 
 const INCLUDE = [
   { model: Customer, as: 'customer', paranoid: false, attributes: ['id', 'code', 'name'] },
@@ -31,11 +36,12 @@ const n2 = (v) => Math.round(Number(v) * 100) / 100;
 const num = (v) => (v == null ? null : Number(v));
 
 // `used` = bags of this entry that already went out on yarn outward challans
-const json = (e, used = 0, invoice = null) => {
+const json = (e, used = 0, invoice = null, contract = null) => {
   const party = e.vendor || e.customer;
   const it = e.item;
   return {
     id: e.id, code: e.code, inwardDate: e.inwardDate,
+    purpose: e.purpose, purposeText: PURPOSE_TEXT[e.purpose],
     type: e.vendorId ? 'PURCHASE' : 'OVERHEAD',
     party: { kind: e.vendorId ? 'VENDOR' : 'CUSTOMER', id: party.id, code: party.code, name: party.name },
     customerId: e.customerId, vendorId: e.vendorId,
@@ -44,6 +50,8 @@ const json = (e, used = 0, invoice = null) => {
     // yarn the supplier delivered straight to a sizing party: it never came to our factory, so it is not on the gate pass of the sizing challan
     sentDirect: Boolean(e.directVendorId), directVendorId: e.directVendorId || null, directVendor: e.directVendor ? { id: e.directVendor.id, code: e.directVendor.code, name: e.directVendor.name } : null,
     purchaseInvoice: invoice, invoiced: Boolean(invoice),
+    // the contract line the entry counts against ({ id, kind, code, codeLabel, status, lineId, lineNo }) or null
+    contractLineId: e.contractLineId || null, contract,
     bags: e.bags, outwardBags: used, balanceBags: e.bags - used, lbsPerBag: num(e.lbsPerBag), totalLbs: num(e.totalLbs), ratePerLb: num(e.ratePerLb), amount: num(e.amount),
     dcNo: e.dcNo, remarks: e.remarks, createdAt: e.createdAt,
   };
@@ -77,6 +85,25 @@ async function checkRefs(companyId, { customerId, vendorId, itemId, directVendor
   if (!it.isActive && itemId !== keep.itemId) throw AppError.rule('ITEM_INACTIVE', 'This item card is switched off', { field: 'itemId' });
 }
 
+/**
+ * The contract line of an entry: of this company, of the same kind and party (a vendor entry: a PURCHASE contract of that vendor; a customer entry: an OVERHEAD contract of that customer),
+ * for the same yarn count as the item card. A closed contract / line takes no new entry (an entry that already is on it may stay).
+ */
+async function checkContract(companyId, { contractLineId, customerId, vendorId, itemId }, keepLineId, transaction) {
+  const l = await contracts.lineInfo(companyId, contractLineId, transaction);
+  if (!l) throw AppError.rule('UNKNOWN_CONTRACT', 'This contract line does not exist', { field: 'contractLineId' });
+  if (vendorId ? l.kind !== 'PURCHASE' || l.vendorId !== vendorId : l.kind !== 'OVERHEAD' || l.customerId !== customerId) {
+    throw AppError.rule('CONTRACT_PARTY', vendorId ? 'This contract is not a purchase contract of this vendor' : 'This contract is not an overhead contract of this customer', { field: 'contractLineId' });
+  }
+  const it = await YarnItem.findOne({ where: { id: itemId, companyId }, transaction });
+  if (it && it.yarnCountId !== l.yarnCountId) throw AppError.rule('CONTRACT_YARN_COUNT', 'The yarn count of this item card is not the yarn quality of that contract line', { field: 'contractLineId' });
+  if (contractLineId !== keepLineId) {
+    if (l.status === 'CLOSED') throw AppError.rule('CONTRACT_CLOSED', `Contract ${String(l.code).padStart(4, '0')} is closed`, { field: 'contractLineId' });
+    if (l.isClosed) throw AppError.rule('CONTRACT_LINE_CLOSED', 'This contract line is closed', { field: 'contractLineId' });
+  }
+  return l;
+}
+
 /** The money and quantity of one entry: totalLbs = bags x lbsPerBag, amount = totalLbs x rate. */
 function work({ bags, lbsPerBag, ratePerLb }) {
   const totalLbs = n2(bags * lbsPerBag);
@@ -91,13 +118,20 @@ async function formData(req) {
     { model: YarnBrand, as: 'brand', paranoid: false, attributes: ['id', 'code', 'name'] }], order: [['code', 'ASC']] });
   return {
     date: today(),
+    // the three choices of "for" on the form (default BOTH)
+    purposes: PURPOSES.map((value) => ({ value, text: PURPOSE_TEXT[value] })), defaultPurpose: 'BOTH',
     // `lbsPerBag` is what the item card says a bag weighs (its `bags` field: 50 or 100): fill the form with it, the user may change it
     items: items.map((it) => ({ id: it.id, code: it.code, name: `${it.yarnCount.name} - ${it.brand.name} - ${it.packing} - ${it.bags}`, yarnCount: { id: it.yarnCount.id, name: it.yarnCount.name }, brand: { id: it.brand.id, name: it.brand.name }, packing: it.packing, bags: it.bags, lbsPerBag: it.bags })),
   };
 }
 
-async function list(req, { page, limit, search, type, customerId, vendorId, itemId, dateFrom, dateTo }) {
+async function list(req, { page, limit, search, type, purpose, usableFor, customerId, vendorId, itemId, contractId, contractLineId, noContract, dateFrom, dateTo }) {
   const where = { companyId: req.user.companyId };
+  if (contractLineId) where.contractLineId = contractLineId;
+  if (contractId) where.contractLineId = { [Op.in]: sequelize.literal('(SELECT id FROM yarn_contract_lines WHERE "contractId" = ' + sequelize.escape(contractId) + ')') };
+  if (noContract) where.contractLineId = null;
+  if (purpose) where.purpose = purpose; // exactly WEFT / WARP / BOTH
+  if (usableFor) where.purpose = { [Op.in]: [usableFor, 'BOTH'] }; // yarn that can be used for weft (or warp): its own entries and the ones for both
   if (type === 'PURCHASE') where.vendorId = { [Op.ne]: null };
   if (type === 'OVERHEAD') where.customerId = { [Op.ne]: null };
   if (customerId) where.customerId = customerId;
@@ -116,26 +150,34 @@ async function list(req, { page, limit, search, type, customerId, vendorId, item
   const totals = all.reduce((t, r) => ({ bags: t.bags + Number(r.bags), totalLbs: n2(t.totalLbs + Number(r.totalLbs)), amount: n2(t.amount + Number(r.amount || 0)) }), { bags: 0, totalLbs: 0, amount: 0 });
   const used = await usedBags(rows.map((r) => r.id));
   const invoices = await invoicesOf(rows.map((r) => r.id));
-  return { data: rows.map((r) => json(r, used.get(r.id) || 0, invoices.get(r.id) || null)), page, limit, total: count, totals };
+  const cons = await contracts.contractsOf(rows.map((r) => r.id));
+  return { data: rows.map((r) => json(r, used.get(r.id) || 0, invoices.get(r.id) || null, cons.get(r.id) || null)), page, limit, total: count, totals };
 }
 
 const get = async (req, id) => {
   const e = await findOr404(req, id);
-  return json(e, (await usedBags([id])).get(id) || 0, (await invoicesOf([id])).get(id) || null);
+  return json(e, (await usedBags([id])).get(id) || 0, (await invoicesOf([id])).get(id) || null, (await contracts.contractsOf([id])).get(id) || null);
 };
 
 async function create(req, data) {
   const { companyId } = req.user;
-  if (data.vendorId && (data.ratePerLb === undefined || data.ratePerLb === null)) throw AppError.rule('RATE_REQUIRED', 'The rate per lb is required for a purchase', { field: 'ratePerLb' });
+  // a customer's (overhead) yarn only comes in on a contract of that customer; a vendor's yarn may (contract optional)
+  if (data.customerId && !data.contractLineId) throw AppError.rule('CONTRACT_REQUIRED', 'Choose the overhead contract of this customer: his yarn cannot come in without one', { field: 'contractLineId' });
   return sequelize.transaction(async (transaction) => {
     await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`yarn-inward:${companyId}`], transaction });
     await checkRefs(companyId, data, {}, transaction);
+    if (data.contractLineId) {
+      const line = await checkContract(companyId, data, null, transaction);
+      // a purchase entry without a rate takes the rate of its contract line
+      if (data.vendorId && (data.ratePerLb === undefined || data.ratePerLb === null) && line.ratePerLb != null) data = { ...data, ratePerLb: Number(line.ratePerLb) };
+    }
+    if (data.vendorId && (data.ratePerLb === undefined || data.ratePerLb === null)) throw AppError.rule('RATE_REQUIRED', 'The rate per lb is required for a purchase', { field: 'ratePerLb' });
     const code = ((await YarnInward.max('code', { where: { companyId }, paranoid: false, transaction })) || 0) + 1;
     const row = await YarnInward.create({
-      companyId, code, inwardDate: data.inwardDate || today(), customerId: data.customerId || null, vendorId: data.vendorId || null, itemId: data.itemId, directVendorId: data.directVendorId || null,
-      bags: data.bags, lbsPerBag: data.lbsPerBag, ...work(data), dcNo: data.dcNo || null, remarks: data.remarks || null, createdById: req.user.id,
+      companyId, code, inwardDate: data.inwardDate || today(), customerId: data.customerId || null, vendorId: data.vendorId || null, itemId: data.itemId, directVendorId: data.directVendorId || null, contractLineId: data.contractLineId || null,
+      bags: data.bags, lbsPerBag: data.lbsPerBag, ...work(data), purpose: data.purpose || 'BOTH', dcNo: data.dcNo || null, remarks: data.remarks || null, createdById: req.user.id,
     }, { transaction });
-    const out = json(await load(companyId, row.id, transaction));
+    const out = json(await load(companyId, row.id, transaction), 0, null, (await contracts.contractsOf([row.id], transaction)).get(row.id) || null);
     await audit.log(req, { action: 'YARN_INWARD_CREATED', entityType: 'YarnInward', entityId: row.id, after: out }, { transaction });
     return out;
   });
@@ -148,9 +190,9 @@ async function update(req, id, changes) {
     const row = await findOr404(req, id, transaction);
     const used = (await usedBags([id], { transaction })).get(id) || 0;
     const invoice = (await invoicesOf([id], transaction)).get(id) || null;
-    // an entry on a purchase invoice feeds the books: only its DC no and remarks may change (delete the invoice first for the rest)
-    if (invoice && Object.keys(changes).some((k) => !['dcNo', 'remarks'].includes(k))) throw AppError.rule('ON_PURCHASE_INVOICE', `This entry is on purchase invoice ${invoice.voucherLabel}: delete that invoice first to change it (only the DC no and remarks can change)`, { invoiceId: invoice.id, voucherNo: invoice.voucherNo });
-    const before = json(row, used, invoice);
+    // an entry on a purchase invoice feeds the books: only its DC no, remarks and "for" may change (delete the invoice first for the rest)
+    if (invoice && Object.keys(changes).some((k) => !['dcNo', 'remarks', 'purpose', 'contractLineId'].includes(k))) throw AppError.rule('ON_PURCHASE_INVOICE', `This entry is on purchase invoice ${invoice.voucherLabel}: delete that invoice first to change it (only the DC no, remarks and "for" can change)`, { invoiceId: invoice.id, voucherNo: invoice.voucherNo });
+    const before = json(row, used, invoice, (await contracts.contractsOf([id], transaction)).get(id) || null);
     if (changes.vendorId && !row.vendorId) throw AppError.rule('TYPE_LOCKED', 'This is an overhead (customer) entry: choose a customer, not a vendor', { field: 'vendorId' });
     if (changes.customerId && !row.customerId) throw AppError.rule('TYPE_LOCKED', 'This is a purchase (vendor) entry: choose a vendor, not a customer', { field: 'customerId' });
     const next = {
@@ -168,10 +210,16 @@ async function update(req, id, changes) {
       if (changes.inwardDate && String(changes.inwardDate) > String(row.inwardDate)) throw AppError.rule('USED_IN_OUTWARD', 'Yarn of this entry already went out: the date cannot be moved later', { outwardBags: used });
     }
     await checkRefs(companyId, next, { customerId: row.customerId, vendorId: row.vendorId, itemId: row.itemId, directVendorId: row.directVendorId }, transaction);
+    // the contract: an overhead entry that has one cannot lose it; whenever the contract, party or item card changes the line is checked again
+    const nextLine = changes.contractLineId !== undefined ? changes.contractLineId : row.contractLineId;
+    if (row.customerId && row.contractLineId && !nextLine) throw AppError.rule('CONTRACT_REQUIRED', 'Choose the overhead contract of this customer: his yarn cannot come in without one', { field: 'contractLineId' });
+    if (nextLine && (changes.contractLineId !== undefined || changes.customerId || changes.vendorId || changes.itemId)) await checkContract(companyId, { ...next, contractLineId: nextLine }, row.contractLineId, transaction);
     const set = { customerId: next.customerId, vendorId: next.vendorId, itemId: next.itemId, directVendorId: next.directVendorId || null, bags: next.bags, lbsPerBag: next.lbsPerBag, ...work(next) };
     for (const f of ['inwardDate', 'dcNo', 'remarks']) if (changes[f] !== undefined) set[f] = changes[f] === '' ? null : changes[f];
+    if (changes.purpose !== undefined) set.purpose = changes.purpose;
+    if (changes.contractLineId !== undefined) set.contractLineId = changes.contractLineId;
     await YarnInward.update(set, { where: { id, companyId }, transaction });
-    const out = json(await load(companyId, id, transaction), used, invoice);
+    const out = json(await load(companyId, id, transaction), used, invoice, (await contracts.contractsOf([id], transaction)).get(id) || null);
     await audit.log(req, { action: 'YARN_INWARD_UPDATED', entityType: 'YarnInward', entityId: id, before, after: out }, { transaction });
     return out;
   });
@@ -182,6 +230,8 @@ async function remove(req, id) {
     const row = await findOr404(req, id, transaction);
     const invoice = (await invoicesOf([id], transaction)).get(id) || null;
     if (invoice) throw AppError.rule('ON_PURCHASE_INVOICE', `This entry is on purchase invoice ${invoice.voucherLabel}: delete that invoice first`, { invoiceId: invoice.id, voucherNo: invoice.voucherNo });
+    const [back] = await sequelize.query('SELECT COUNT(*)::int AS n FROM sizing_return_yarns WHERE "inwardId" = :id', { replacements: { id }, type: sequelize.QueryTypes.SELECT, transaction });
+    if (back.n) throw AppError.rule('IN_USE', 'Yarn of this entry came back from a sizing party on a sizing return: delete that return first', { sizingReturns: back.n });
     const used = (await usedBags([id], { transaction })).get(id) || 0;
     if (used) throw AppError.rule('IN_USE', `${used} bag${used === 1 ? '' : 's'} of this entry went out on a challan: delete or change that challan first`, { outwardBags: used });
     const before = json(row);
@@ -191,4 +241,4 @@ async function remove(req, id) {
   });
 }
 
-module.exports = { list, get, create, update, remove, formData, json, INCLUDE };
+module.exports = { list, get, create, update, remove, formData, json, INCLUDE, PURPOSES };
