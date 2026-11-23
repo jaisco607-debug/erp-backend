@@ -68,7 +68,9 @@ function respond(title, filters, sections, query = {}) {
   return { title, generatedAt: new Date().toISOString(), filters, sections, page, limit: query.export ? total : limit, total, export: Boolean(query.export) };
 }
 
-const LEFT_SQL = `(ji.meters - COALESCE((SELECT SUM(nx.meters) FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = ji.id AND nj.status <> 'REJECTED'), 0))`;
+// (a line whose thaans the department wrote and that was sent on has nothing left: the next department got the meters of the thaans)
+const LEFT_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM job_item_thaans tt WHERE tt."jobItemId" = ji.id) AND EXISTS (SELECT 1 FROM job_items n2 JOIN jobs nj2 ON nj2.id = n2."jobId" WHERE n2."sourceJobItemId" = ji.id AND nj2.status <> 'REJECTED') THEN 0
+  ELSE ji.meters - COALESCE((SELECT SUM(nx.meters) FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = ji.id AND nj.status <> 'REJECTED'), 0) END)`;
 
 /** Where all the cloth is right now: grey store, SO card desk (not sent), departments. One row per lot line. */
 // the widths of a lot (of its thaans, or the lot's own when it has no thaans), as "58, 60, 63": the Width column of the reports
@@ -177,8 +179,9 @@ async function jobCards(companyId, f = {}) {
            (SELECT count(DISTINCT p."thaanId")::int FROM so_card_lot_thaans p WHERE p."soCardLotId" IN (SELECT i2."soCardLotId" FROM job_items i2 WHERE i2."jobId" = j.id AND i2."soCardId" = sc.id)) AS thaans,
            (SELECT string_agg(DISTINCT svc_name(s2.id, nj."companyId", s2.name), ', ') FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN services s2 ON s2.id = nj."departmentId"
              WHERE nj.status <> 'REJECTED' AND nx."sourceJobItemId" IN (SELECT x.id FROM job_items x WHERE x."jobId" = j.id AND x."soCardId" = sc.id)) AS "sentTo",
-           (SELECT COALESCE(SUM(nx.meters), 0)::float FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId"
-             WHERE nj.status <> 'REJECTED' AND nx."sourceJobItemId" IN (SELECT x.id FROM job_items x WHERE x."jobId" = j.id AND x."soCardId" = sc.id)) AS "sentOnMeters"
+           (SELECT COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM job_item_thaans tt WHERE tt."jobItemId" = x.id) AND ns.n > 0 THEN x.meters ELSE ns.m END), 0)::float FROM job_items x
+             CROSS JOIN LATERAL (SELECT COALESCE(SUM(nx.meters), 0) AS m, COUNT(*) AS n FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nj.status <> 'REJECTED' AND nx."sourceJobItemId" = x.id) ns
+             WHERE x."jobId" = j.id AND x."soCardId" = sc.id) AS "sentOnMeters"
     FROM jobs j JOIN services s ON s.id = j."departmentId" LEFT JOIN services fs ON fs.id = j."fromDepartmentId"
     JOIN job_items ji ON ji."jobId" = j.id JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId"
     JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
@@ -443,7 +446,32 @@ async function soCardDetail(req, id) {
     statusText: (await cardPositions(req.user.companyId)).get(id)?.text || 'Fabric return', currentDepartment: c.currentDepartment, totalMeters: round(c.totalMeters), instructions: c.instructions, tag: c.isGreyReturn ? TAG : null,
     chemicalCost: round(mineChem.reduce((t, l) => t + l.amount, 0)), yarnCost: round(mineYarn.reduce((t, l) => t + l.amount, 0)) };
   head.totalCost = round(head.chemicalCost + head.yarnCost);
-  const out = respond(`SO card ${c.cardNo}`, { soCardId: id }, [lots, path, chemicals, yarnSection, where, packing], { export: true });
+  // thaans: what the SO card had, what every department received and made of it ("10 -> 1"), what Folding graded per category
+  const jt = require('./jobThaanService');
+  const leaves = await q(`SELECT ji.id, gl."lotNo", gl.id AS "lotId" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
+    WHERE ji."soCardId" = :id AND NOT EXISTS (SELECT 1 FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" AND nj.status <> 'REJECTED' WHERE nx."sourceJobItemId" = ji.id)`, { id });
+  const journeys = await jt.journeyOf(leaves.map((l) => l.id));
+  const splits = await jt.gradeSplit(id);
+  const trail = [];
+  const seen = new Set();
+  for (const lf of leaves.slice().sort((a, b) => a.lotNo - b.lotNo)) {
+    const jr = journeys.get(lf.id);
+    if (!jr) continue;
+    if (!seen.has(`${lf.lotNo}|so`)) { seen.add(`${lf.lotNo}|so`); trail.push({ lotNo: lf.lotNo, stage: 'SO card', jobNo: null, thaansIn: jr.original.thaans, metersIn: jr.original.meters, thaansOut: null, metersOut: null, change: '' }); }
+    for (const s of jr.steps) {
+      if (seen.has(s.jobItemId)) continue;
+      seen.add(s.jobItemId);
+      trail.push({ lotNo: lf.lotNo, stage: s.department, jobNo: s.jobNo, thaansIn: s.in.thaans, metersIn: s.in.meters, thaansOut: s.out ? s.out.thaans : null, metersOut: s.out ? s.out.meters : null, change: s.converted || '' });
+    }
+    const sp = splits.get(lf.lotId);
+    if (sp && !seen.has(`${lf.lotNo}|fold`)) {
+      seen.add(`${lf.lotNo}|fold`);
+      trail.push({ lotNo: lf.lotNo, stage: 'Folding graded', jobNo: null, thaansIn: jr.received.thaans, metersIn: jr.received.meters, thaansOut: sp.total.thaans, metersOut: sp.total.meters, change: `A ${sp.a.thaans} thaans ${sp.a.meters} m, B ${sp.b.thaans} thaans ${sp.b.meters} m, CP ${sp.cp.thaans} thaans ${sp.cp.meters} m` });
+    }
+  }
+  const thaanTrail = section('thaanTrail', 'Thaans: how they changed', [col('lotNo', 'Lot#', 'number'), col('stage', 'Stage'), col('jobNo', 'Job#', 'number'), col('thaansIn', 'Thaans in', 'number'), col('metersIn', 'Meters in', 'number'),
+    col('thaansOut', 'Thaans made', 'number'), col('metersOut', 'Meters made', 'number'), col('change', 'Change')], trail, []);
+  const out = respond(`SO card ${c.cardNo}`, { soCardId: id }, [lots, thaanTrail, path, chemicals, yarnSection, where, packing], { export: true });
   out.header = head;
   return out;
 }
@@ -696,7 +724,7 @@ async function packingLists(req, f) {
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'A') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "aMeters",
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'B') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "bMeters",
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'CP') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "cpMeters",
-      (SELECT count(DISTINCT (l."greyLotId", COALESCE(l."thaanId"::text, l.id::text))) FROM packing_list_lines l WHERE l."packingListId" = p.id)::int AS thaans,
+      (SELECT count(DISTINCT (l."greyLotId", COALESCE(l."thaanId"::text, l."deptThaanId"::text, l.id::text))) FROM packing_list_lines l WHERE l."packingListId" = p.id)::int AS thaans,
       (SELECT string_agg(DISTINCT gl."lotNo"::text, ', ') FROM packing_list_lines l JOIN grey_lots gl ON gl.id = l."greyLotId" WHERE l."packingListId" = p.id) AS lots
     ${head} WHERE ${where.join(' AND ')} ORDER BY p."listNo" DESC`, rep);
   const data = rows.map((r) => ({ listNo: r.listNo, listDate: r.listDate, statusText: r.status === 'FINAL' ? 'Final' : 'Draft', soNo: r.soNo, party: r.party, quality: r.quality, lots: r.lots, thaans: r.thaans,

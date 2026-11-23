@@ -132,3 +132,27 @@ A batch can be tagged to an **overhead contract** (Weaving > Contracts, `kind: O
 
 ## Database (update)
 Migration `20261228000001-sizing-batch-contract.js` (`sizing_batches.contractId`). Run `npm run db:migrate`.
+
+## Update — Sizing batches list (table of the reference screen)
+`GET /sizing/batches?status=&vendorId=&customerId=&contractId=&dateFrom=&dateTo=&search=&withoutYarn=&page=&limit=` (limit max 500; "Last 50" = `limit=50`, "Latest 300 sets" = `limit=300`). Tabs: **All outside batches** (no status) and **Drafts (n)** (`status=DRAFT`, n = `counts.drafts`). Nothing existing changed; fields were added.
+
+**Columns → fields (per row)**
+- BATCH `batchCode` ("0272"; `batchLabel` is the 5-digit form) · SET `setNo` · CONT `contract.codeLabel` ("0470", null when no contract) · DATE `batchDate` · SIZING `party.name` · ON ACCOUNT `onAccount.name` (customer of the contract)
+- ENDS `ends` · COUNT `yarnCount.name` · QUALITY `quality` (`qualityMaster.code` if you want the number)
+- YARN ISSUED **`yarnIssuedLbs`** = the yarn really sent to the sizing party for the tagged yarn (SIZING yarn challans of that party; yarn delivered straight to the party counts as sent)
+- YARN TAGGED `yarnTaggedLbs` + "n lot(s)" `yarnLots`; when `noYarnTagged` show the red **NO YARN** badge instead
+- WARP WT `warpWeightLbs` · C/CONES `coneKg` (kg of cut cones; `coneLbs` in lbs)
+- SIZING LENGTH **`sizingLengthM`** (the length the sizing party says it sized; if nobody typed it, it is the received length; `sizingLengthEntered` = true when typed)
+- BEAMS IN **`beamsIn`** · LENGTH IN **`receivedLengthM`** · TO RECEIVE **`toReceiveM`** = sizing length − length in, **only for closed (CONFIRMED) sets**, 0 for drafts (can be negative: more came than the party said) · BILLED `billedAmount` (amount of a set that is on a purchase invoice, else 0)
+- **Beam in** button: `canBeamIn` (drafts only) → `POST /sizing/batches/:id/receipts`.
+
+**Row colours:** red row when `noYarnTagged`; amber row when `yarnMismatch` (tagged lbs differ from `yarnIssuedLbs`).
+
+**Pills and footer — `totals` (all sets of the filter, not only the page)**
+- "50 sets" `totals.sets` · "34 without yarn tagged" `counts.withoutYarn` (click = `withoutYarn=true`) · "Sizing length 998,566" `totals.sizingLengthM` · "Received 1,008,166" `totals.receivedLengthM` · "To receive -9,600" `totals.toReceiveM` · "Billed 0" `totals.billedAmount`
+- Footer **Total (n)**: `yarnIssuedLbs`, `yarnTaggedLbs`, `warpWeightLbs`, `coneKg`, `sizingLengthM`, `beams`, `receivedLengthM`, `toReceiveM`, `billedAmount` from `totals`.
+- Footnote: "Red rows have no yarn tagged to the set; amber rows have a tagged quantity that differs from the yarn issued. 'To receive' counts closed sets only."
+
+**New optional field on the batch form:** `sizingLengthM` (number or null) on `POST /sizing/batches` and `PATCH /sizing/batches/:id` (draft only), "Sizing length (m)". Leave empty to use the received length.
+
+**Database:** migration `20270104000001-sizing-batch-sizing-length.js` (`sizing_batches.sizingLengthM`), then `npm run db:migrate`.

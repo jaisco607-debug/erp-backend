@@ -49,6 +49,7 @@ router.use('/v1/weaving', require('./weavingRoutes'));
 router.use('/v1/sizing', require('./sizingRoutes'));
 router.use('/v1/production', require('./productionRoutes'));
 router.use('/v1/department-settings', require('./departmentSettingsRoutes'));
+router.use('/v1/machine-settings', require('./machineSettingsRoutes'));
 router.use('/v1/processes', require('./processRoutes'));
 router.use('/v1/sales-invoices', require('./salesInvoiceRoutes'));
 router.use('/v1/purchase-invoices', require('./purchaseInvoiceRoutes'));

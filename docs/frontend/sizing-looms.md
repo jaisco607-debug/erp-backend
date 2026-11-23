@@ -104,3 +104,48 @@ When the beams are taken off a loom **before they are finished**, the user enter
 
 ## Update 5 — production figures on the K-ID (see `weaving-production.md`)
 The entry now has `units`, **`producedM`**, `balanceM`, `donePct`, `remainingPct`, `daysRun`, `perDayM`, `lastProductionDate`, `endsOn` (from the production register) and `GET /loom-beams/:id/production` lists its register rows. **Change:** the half-cut estimate that Update 4 called `producedM` is now **`estimatedProducedM`** (and the Completed tab test uses it); `producedM` is always the register figure. Prefill the half-cut "Length left" with `balanceM`.
+
+## Update 6 — Looms Status page: every column of the reference screen
+`GET /sizing/loom-beams?status=ACTIVE&departmentId=<Sulzer|Airjet>` (tabs "Sulzer / Airjet Loom Beam Tracking"). Nothing existing changed; new fields were added.
+
+**Columns → fields (per row)**
+- K# `kId` · LOOM `loom.loomNo` · BEAM / SET `beamNos` + "set" `setNos` (e.g. `S075|S076`, `12077|12077`)
+- ENDS / COUNT `ends` + `yarnCount` ("6930  60/s CTN") · LENGTH `netLengthM` "of" `beamLengthM` (4,050 of 8,100)
+- START `startDate` + `warps` ("1 warp" / "2 warps") · RPM / PICK `loomRpm` / `loomPick` · UNITS `units`
+- PRODUCED `producedM` + last update `lastProductionDate` ("17 Nov") · LEFT `balanceM` · DONE `donePct` (bar + %) · / DAY `perDayM`
+- ENDS ON `endsOn` + `endsInDays` ("in 5 days") · QUALITY `qualityText` = `quality` + `(qualityCode)`, e.g. `60X40/96X64=74" (2392)`. `qualityCode` is the number of the quality master (`quality`/`qualityCode` are also separate fields)
+- Buttons by flags: **Loom Cut-Off** `canCutOff`, **Update** (open the production register `weaving-production.md`).
+
+**New row flags**
+- `neverUpdated` (true = no units ever: show "never updated"), `isStale` (nothing for 3+ days: red **stale** badge), `staleDays` (days since the last update, or since the start when never updated).
+- `missingSetup` (no beam length / RPM / pick yet).
+- `endsInDays` is null until units exist.
+
+**Pills and footer — `totals` (all running entries of the filter, not only the page)**
+- `loomsRunning` ("46 looms running"), `beamLengthM` ("Beam length 229,551"), `producedM` ("produced 19,948"), `leftM` ("left 209,603 Mtr"), `netLengthM`, `units`
+- `notUpdated` ("38 not updated for 3+ days"), `missingSetup` ("8 without beam length / RPM / pick"), `idleLooms` count + `idleLooms[]` list (the "18 idle looms" dropdown).
+- Footer row "Total": `beamLengthM`, `producedM`, `leftM` from `totals`.
+- Tip: clicking the red / amber pill filters the table in the browser by `isStale` / `missingSetup`.
+
+**Quality summary button:** `GET /sizing/loom-beams/quality-summary?departmentId=` →
+```json
+{ "data": [ { "quality": "60X40/96X64=74\"", "qualityCode": 2392, "qualityText": "60X40/96X64=74\" (2392)", "looms": 31, "loomNos": ["001","003"], "beamLengthM": 120000, "netLengthM": 60000, "producedM": 9000, "leftM": 51000 } ],
+  "total": 4, "totals": { "looms": 46, "beamLengthM": 229551, "producedM": 19948, "leftM": 209603 } }
+```
+**Excel / PDF by quality:** build them in the browser from `GET /sizing/loom-beams?status=ACTIVE&departmentId=&limit=500` (group by `qualityText` for "PDF by quality").
+No database change.
+
+## Update 7 — PDF by quality and Quality summary (downloads from the server)
+Both buttons now download a PDF made by the server (A4 landscape, same layout as the old sample files: title, "As at", company name on the right, "printed dd-mm-yyyy hh:mm" and "Page n" in the footer). Use the **department of the open tab**:
+- **PDF by quality:** `GET /sizing/loom-beams/by-quality.pdf?departmentId=<Sulzer|Airjet>`
+- **Quality summary:** `GET /sizing/loom-beams/quality-summary.pdf?departmentId=<Sulzer|Airjet>`
+Both return `application/pdf` as an attachment (file names `loom-sulzer-by-quality-20261121.pdf`, `loom-sulzer-quality-summary-20261121.pdf`). They need the token like every call, so fetch with the Authorization header as a blob and save it (an `<a href>` link would not send the token). Needs only VIEW access.
+
+**What is in them (all running looms of the department, also looms with no beam yet)**
+- *Quality summary:* one line per quality (biggest beam length first): Quality · Looms · Beam length · Produced · Done % · Balance · Per day · Days to finish · First beam ends; a TOTAL line; and the line "Alerts: N looms with no production update for 3+ days, N beams nearly done (10% or less left), N without plan data (no end date)."
+- *PDF by quality:* a block per quality with its totals (looms | beam length | produced (%) | balance | per day), then its looms by loom no: K# · Loom · Beam · Count · Ends · Started · Beam length · Produced · Balance · Done % · Per day · Ends on · Alert (`no update 3d+`, `no plan data`); at the end ALL QUALITIES. Entries with no beam are under "No quality".
+
+**Changes in the list fields (same endpoints)**
+- `perDayM` is now filled also before any units: the plan of the loom `RPM × 1,440 ÷ (Pick × 39.3701)` (e.g. 400 / 56 = 261 m a day). `perDayIsPlanned` = true tells it is the plan; `plannedPerDayM` is always the plan. Once units exist `perDayM` is the real figure.
+- `endsOn` / `endsInDays` are now also given for a loom with no units yet (from today at the plan speed); `null` only when RPM / Pick are missing (`missingSetup`).
+No database change.

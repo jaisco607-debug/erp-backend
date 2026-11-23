@@ -6,6 +6,7 @@ const validate = require('../middlewares/validate');
 const authenticate = require('../middlewares/authenticate');
 const requireService = require('../middlewares/requireService');
 const requireAnyService = require('../middlewares/requireAnyService');
+const requireUserType = require('../middlewares/requireUserType');
 const v = require('../validators/payrollMasterValidator');
 const ev = require('../validators/payrollEmployeeValidator');
 const { masters, options } = require('../services/payrollMasterService');
@@ -108,7 +109,7 @@ router.patch('/applications/:id/review', read, validate(av.review), async (req, 
 router.post('/applications/:id/approve', read, validate(av.get), async (req, res) => res.json(await applications.approve(req, req.params.id)));
 router.post('/applications/:id/reject', read, validate(av.reject), async (req, res) => res.json(await applications.reject(req, req.params.id, req.body)));
 router.get('/approvers', read, async (req, res) => res.json(await approvers.list(req)));
-router.put('/approvers', write, validate(av.approvers), async (req, res) => res.json(await approvers.set(req, req.body.userIds)));
+router.put('/approvers', requireUserType('CLIENT_ADMIN'), validate(av.approvers), async (req, res) => res.json(await approvers.set(req, req.body.userIds)));
 router.put('/applications/:id/files/:kind', writeApplications, validate(av.file), rawFile,
   async (req, res) => res.json(await applications.saveFile(req, req.params.id, req.params.kind, { buffer: req.body, fileName: fileName(req) })));
 router.get('/applications/:id/files/:kind', read, validate(av.file), async (req, res) => {

@@ -27,6 +27,7 @@ const batchFields = {
   contractId: id.allow(null), // the overhead contract the batch is tagged to (optional)
   adjustmentLbs: Joi.number().precision(2).min(-batches.ADJ_LIMIT).max(batches.ADJ_LIMIT), // at most 10 lbs either way
   ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
+  sizingLengthM: Joi.number().precision(2).min(0).max(1000000000).allow(null), // the length the sizing party says it sized (optional; empty = the length received)
 };
 const beamRow = Joi.object({ beamId: id.required(), lengthM: Joi.number().precision(2).positive().max(1000000).required(), weightKg: Joi.number().precision(2).positive().max(100000).allow(null) });
 const coneRow = Joi.object({ type: Joi.string().trim().min(1).max(40), kg: Joi.number().precision(2).positive().max(1000000).required(), cones: Joi.number().integer().min(0).max(10000000), bags: Joi.number().integer().min(0).max(10000000) });
@@ -64,6 +65,11 @@ router.delete('/receipts/:id', full, validate({ params: uuidParam }), async (req
 // ---- Looms: beams put on a loom (Loom Beam Entry, one K-ID per entry) ----
 const loomFields = { factor: Joi.number().valid(1, 2, 3), loomRpm: Joi.number().integer().min(1).max(5000).allow(null), loomPick: Joi.number().integer().min(1).max(1000).allow(null), reedSpace: Joi.number().precision(2).positive().max(9999).allow(null), startDate: ymd };
 router.get('/loom-beams/form-data', view, async (req, res) => res.json(await loomBeams.formData(req)));
+const pdfs = require('../services/loomStatusPdfService');
+const sendPdf = (res, f) => { res.set({ 'Content-Type': 'application/pdf', 'Content-Length': String(f.buffer.length), 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename="${f.fileName}"` }); res.end(f.buffer); };
+router.get('/loom-beams/by-quality.pdf', view, validate({ query: Joi.object({ departmentId: id }) }), async (req, res) => sendPdf(res, await pdfs.byQualityPdf(req, req.validatedQuery)));
+router.get('/loom-beams/quality-summary.pdf', view, validate({ query: Joi.object({ departmentId: id }) }), async (req, res) => sendPdf(res, await pdfs.qualitySummaryPdf(req, req.validatedQuery)));
+router.get('/loom-beams/quality-summary', view, validate({ query: Joi.object({ departmentId: id }) }), async (req, res) => res.json(await loomBeams.qualitySummary(req, req.validatedQuery)));
 router.get('/loom-beams/available-beams', view, validate({ query: Joi.object({ search: Joi.string().trim().max(80) }) }), async (req, res) => res.json(await loomBeams.availableBeams(req, req.validatedQuery)));
 router.get('/loom-beams', view, validate({ query: Joi.object({ ...paging, limit, search: Joi.string().trim().max(80), status: Joi.string().uppercase().valid('ACTIVE', 'CUT_OFF', 'HALF_CUT', 'COMPLETED'), loomId: id, departmentId: id, confirmed: Joi.boolean(), dateFrom: ymd, dateTo: ymd }) }), async (req, res) => res.json(await loomBeams.list(req, req.validatedQuery)));
 router.post('/loom-beams', full, validate({ body: Joi.object({ ...loomFields, loomId: id.required(), beamIds: Joi.array().items(id).min(0).max(loomBeams.MAX_BEAMS).default([]) }) }), async (req, res) => res.status(201).json(await loomBeams.create(req, req.body)));

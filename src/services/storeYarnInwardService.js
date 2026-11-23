@@ -201,6 +201,8 @@ async function setApproved(req, id, approved) {
   return sequelize.transaction(async (transaction) => {
     const e = await findOr404(req, id, transaction, true);
     if (approved && !e.isActive) throw AppError.rule('INWARD_INACTIVE', 'Switch the entry on before approving it');
+    // without a rate the yarn would go out at value 0 and the entry could not be edited or billed any more
+    if (approved && e.ratePerLb == null) throw AppError.rule('RATE_REQUIRED', 'Enter the rate per lb before approving the entry', { field: 'ratePerLb' });
     if (!approved && e.outwardBags > 0) throw AppError.rule('INWARD_IN_USE', `${e.outwardBags} bags have already gone out of this entry`);
     if (!approved) {
       const inv = (await invoicesOf([e.id], transaction)).get(e.id);

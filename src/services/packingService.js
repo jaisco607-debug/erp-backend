@@ -104,13 +104,17 @@ async function form(req, code, soCardId, exceptListId) {
     WHERE l."soCardId" = :id GROUP BY gl.id, t.id, t."thaanNo", t.width, gl.width ORDER BY t."thaanNo"`, { id: soCardId });
   // what Folding sent to Packing, per lot / thaan and category
   const fold = await q(`
-    SELECT "greyLotId" AS "lotId", "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp
-    FROM folding_lines WHERE "soCardId" = :id GROUP BY "greyLotId", "thaanId"`, { id: soCardId });
+    SELECT "greyLotId" AS "lotId", COALESCE("thaanId", "deptThaanId") AS "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp
+    FROM folding_lines WHERE "soCardId" = :id GROUP BY "greyLotId", COALESCE("thaanId", "deptThaanId")`, { id: soCardId });
+  // the thaans the departments made that Folding graded (a lot of such thaans is packed per those thaans, not per its grey lot thaans)
+  const deptThaans = await q(`
+    SELECT DISTINCT fl."greyLotId" AS "lotId", jt.id AS "thaanId", jt."thaanNo", jt.meters::float AS meters FROM folding_lines fl JOIN job_item_thaans jt ON jt.id = fl."deptThaanId"
+    WHERE fl."soCardId" = :id ORDER BY jt."thaanNo"`, { id: soCardId });
   // already on other packing lists, per lot / thaan and category
   const packed = await q(`
-    SELECT x."greyLotId" AS "lotId", x."thaanId", x.grade, SUM(x.meters)::float AS meters, MIN(pk."listNo") AS "listNo"
+    SELECT x."greyLotId" AS "lotId", COALESCE(x."thaanId", x."deptThaanId") AS "thaanId", x.grade, SUM(x.meters)::float AS meters, MIN(pk."listNo") AS "listNo"
     FROM packing_list_lines x JOIN packing_lists pk ON pk.id = x."packingListId"
-    WHERE pk."soCardId" = :id AND pk.id <> :except GROUP BY x."greyLotId", x."thaanId", x.grade`,
+    WHERE pk."soCardId" = :id AND pk.id <> :except GROUP BY x."greyLotId", COALESCE(x."thaanId", x."deptThaanId"), x.grade`,
   { id: soCardId, except: exceptListId || '00000000-0000-0000-0000-000000000000' });
   const lineOf = (lotId, thaanId, thaanNo, meters, width = null) => {
     const f = fold.find((x) => x.lotId === lotId && (x.thaanId || null) === thaanId) || { a: 0, b: 0, cp: 0 };
@@ -130,11 +134,22 @@ async function form(req, code, soCardId, exceptListId) {
       alreadyPacked: !suggested.length && onLists.length > 0,
     };
   };
+  // the journey of each lot: SO card thaans, what every department made of them, what Folding received and graded
+  const jt = require('./jobThaanService');
+  const fItems = await q(`SELECT ji.id, gl.id AS "lotId" FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN so_card_lots scl ON scl.id = ji."soCardLotId" JOIN grey_lots gl ON gl.id = scl."greyLotId"
+    WHERE ji."soCardId" = :id AND ji."jobId" IN (SELECT "jobId" FROM folding_lines WHERE "soCardId" = :id)`, { id: soCardId });
+  const journeys = await jt.journeyOf(fItems.map((i) => i.id));
+  const splits = await jt.gradeSplit(soCardId);
   return {
     ...info,
     lots: lots.map((l) => {
-      const ts = thaans.filter((t) => t.lotId === l.id);
+      const dts = deptThaans.filter((t) => t.lotId === l.id).map((t) => ({ ...t, width: l.width }));
+      const ts = dts.length ? dts : thaans.filter((t) => t.lotId === l.id);
+      const own = fItems.find((i) => i.lotId === l.id);
+      const jr = own && journeys.get(own.id);
       return {
+        journey: jr ? { ...jr, foldingGrades: splits.get(l.id) || null } : null,
+        source: dts.length ? 'DEPARTMENT' : 'GREY',
         id: l.id, lotNo: l.lotNo, width: l.width ?? null, widths: [...new Set((ts.length ? ts.map((t) => t.width) : [l.width]).filter((w) => w != null))].sort((a, b) => a - b), meters: round(l.meters), hasThaans: ts.length > 0, thaanCount: ts.length,
         thaans: ts.length ? ts.map((t) => lineOf(l.id, t.thaanId, t.thaanNo, t.meters, t.width)) : [lineOf(l.id, null, null, round(l.meters), l.width)],
       };
@@ -165,7 +180,7 @@ async function load(req, depId, id, transaction) {
     FROM packing_lists p LEFT JOIN users cb ON cb.id = p."createdById" LEFT JOIN users ub ON ub.id = p."updatedById" LEFT JOIN users fb ON fb.id = p."finalizedById"
     WHERE p.id = :id AND p."companyId" = :companyId`, { id, companyId: req.user.companyId }, transaction);
   if (!p) throw AppError.notFound('Packing list');
-  const lines = (await q(`SELECT pl.*, pl.meters::float AS meters, gl."lotNo", COALESCE(t.width, gl.width)::float AS width FROM packing_list_lines pl JOIN grey_lots gl ON gl.id = pl."greyLotId" LEFT JOIN grey_lot_thaans t ON t.id = pl."thaanId"
+  const lines = (await q(`SELECT pl.*, COALESCE(pl."thaanId", pl."deptThaanId") AS tid, pl.meters::float AS meters, gl."lotNo", COALESCE(t.width, gl.width)::float AS width FROM packing_list_lines pl JOIN grey_lots gl ON gl.id = pl."greyLotId" LEFT JOIN grey_lot_thaans t ON t.id = pl."thaanId"
     WHERE pl."packingListId" = :id ORDER BY pl."lineNo"`, { id }, transaction));
   const info = (await cardInfo(req, depId, [p.soCardId], transaction)).get(p.soCardId);
   const rates = { A: Number(p.rateA), B: Number(p.rateB), CP: Number(p.rateCP) };
@@ -173,7 +188,7 @@ async function load(req, depId, id, transaction) {
   for (const l of lines) {
     let lot = lots.find((x) => x.id === l.greyLotId);
     if (!lot) lots.push(lot = { id: l.greyLotId, lotNo: l.lotNo, thaans: [] });
-    lot.thaans.push({ lineNo: l.lineNo, thaanId: l.thaanId, thaanNo: l.thaanNo, width: l.width ?? null, grade: l.grade, gradeText: GRADE_TEXT[l.grade], meters: l.meters, rate: rates[l.grade], amount: round(l.meters * rates[l.grade]) });
+    lot.thaans.push({ lineNo: l.lineNo, thaanId: l.tid, thaanNo: l.thaanNo, width: l.width ?? null, grade: l.grade, gradeText: GRADE_TEXT[l.grade], meters: l.meters, rate: rates[l.grade], amount: round(l.meters * rates[l.grade]) });
   }
   for (const lot of lots) lot.summary = summary(lot.thaans, rates);
   return {
@@ -198,21 +213,25 @@ async function checkLines(req, soCardId, lines, listId, transaction) {
   const thaans = await q(`
     SELECT t.id, t."thaanNo", l."greyLotId" FROM so_card_lots l JOIN so_card_lot_thaans p ON p."soCardLotId" = l.id JOIN grey_lot_thaans t ON t.id = p."thaanId"
     WHERE l."soCardId" = :id`, { id: soCardId }, transaction);
-  const packed = new Set((await q(`SELECT x."thaanId", x.grade FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
-    WHERE p."soCardId" = :id AND p.id <> :listId AND x."thaanId" IS NOT NULL`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction)).map((r) => `${r.thaanId}:${r.grade}`));
+  // the thaans the departments made and Folding graded for this card: a lot that has them is packed per those thaans
+  const deptThaans = await q('SELECT DISTINCT fl."greyLotId", jt.id, jt."thaanNo" FROM folding_lines fl JOIN job_item_thaans jt ON jt.id = fl."deptThaanId" WHERE fl."soCardId" = :id', { id: soCardId }, transaction);
+  const deptLots = new Set(deptThaans.map((t) => t.greyLotId));
+  const packed = new Set((await q(`SELECT COALESCE(x."thaanId", x."deptThaanId") AS "thaanId", x.grade FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
+    WHERE p."soCardId" = :id AND p.id <> :listId AND COALESCE(x."thaanId", x."deptThaanId") IS NOT NULL`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction)).map((r) => `${r.thaanId}:${r.grade}`));
   // what Folding sent, per lot / thaan / category; a line (all lines of the same thaan and category together) may not exceed it
-  const sent = await q(`SELECT "greyLotId" AS "lotId", "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp
-    FROM folding_lines WHERE "soCardId" = :id GROUP BY "greyLotId", "thaanId"`, { id: soCardId }, transaction);
-  const onOther = await q(`SELECT x."greyLotId" AS "lotId", x."thaanId", x.grade, SUM(x.meters)::float AS meters FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
-    WHERE p."soCardId" = :id AND p.id <> :listId GROUP BY x."greyLotId", x."thaanId", x.grade`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction);
+  const sent = await q(`SELECT "greyLotId" AS "lotId", COALESCE("thaanId", "deptThaanId") AS "thaanId", SUM("sentA")::float AS a, SUM("sentB")::float AS b, SUM("sentCP")::float AS cp
+    FROM folding_lines WHERE "soCardId" = :id GROUP BY "greyLotId", COALESCE("thaanId", "deptThaanId")`, { id: soCardId }, transaction);
+  const onOther = await q(`SELECT x."greyLotId" AS "lotId", COALESCE(x."thaanId", x."deptThaanId") AS "thaanId", x.grade, SUM(x.meters)::float AS meters FROM packing_list_lines x JOIN packing_lists p ON p.id = x."packingListId"
+    WHERE p."soCardId" = :id AND p.id <> :listId GROUP BY x."greyLotId", COALESCE(x."thaanId", x."deptThaanId"), x.grade`, { id: soCardId, listId: listId || '00000000-0000-0000-0000-000000000000' }, transaction);
   const used = new Map();
   const seen = new Set();
   const autoNo = new Map();
   return lines.map((l, i) => {
     if (!lotIds.has(l.greyLotId)) throw AppError.rule('UNKNOWN_LOT', 'This lot is not on the SO card', { line: i + 1 });
     let thaanNo = l.thaanNo;
+    const isDept = deptLots.has(l.greyLotId);
     if (l.thaanId) {
-      const t = thaans.find((x) => x.id === l.thaanId && x.greyLotId === l.greyLotId);
+      const t = (isDept ? deptThaans.map((x) => ({ id: x.id, thaanNo: x.thaanNo, greyLotId: x.greyLotId })) : thaans).find((x) => x.id === l.thaanId && x.greyLotId === l.greyLotId);
       if (!t) throw AppError.rule('UNKNOWN_THAAN', 'This thaan is not in this lot of the SO card', { line: i + 1 });
       // a thaan can be on the list once per category (A part, B part, CP part)
       const key = `${t.id}:${l.grade}`;
@@ -220,7 +239,7 @@ async function checkLines(req, soCardId, lines, listId, transaction) {
       if (packed.has(key)) throw AppError.rule('THAAN_ALREADY_PACKED', `Thaan ${t.thaanNo} ${GRADE_TEXT[l.grade]} is already on another packing list`, { line: i + 1 });
       seen.add(key);
       thaanNo = t.thaanNo;
-    } else if (thaans.some((x) => x.greyLotId === l.greyLotId)) {
+    } else if (isDept || thaans.some((x) => x.greyLotId === l.greyLotId)) {
       throw AppError.rule('THAAN_REQUIRED', 'This lot has thaans: choose the thaan', { line: i + 1 });
     }
     // AUD-05: no more meters than Folding sent in this category (old cards without Folding rows: no more than the thaan / lot itself)
@@ -232,15 +251,15 @@ async function checkLines(req, soCardId, lines, listId, transaction) {
     if (allowed !== null && total > allowed + 0.0051) throw AppError.rule('MORE_THAN_FOLDING_SENT', `Only ${round(Math.max(0, allowed - (total - l.meters)))} m of ${GRADE_TEXT[l.grade]} can still be packed for this thaan (Folding sent ${round(allowed)} m)`, { line: i + 1 });
     if (!thaanNo) thaanNo = (autoNo.get(l.greyLotId) || 0) + 1;
     autoNo.set(l.greyLotId, Math.max(autoNo.get(l.greyLotId) || 0, thaanNo));
-    return { lineNo: i + 1, greyLotId: l.greyLotId, thaanId: l.thaanId || null, thaanNo, grade: l.grade, meters: l.meters };
+    return { lineNo: i + 1, greyLotId: l.greyLotId, thaanId: isDept ? null : l.thaanId || null, deptThaanId: isDept ? l.thaanId || null : null, thaanNo, grade: l.grade, meters: l.meters };
   });
 }
 
 async function writeLines(listId, rows, transaction) {
   await sequelize.query('DELETE FROM packing_list_lines WHERE "packingListId" = :listId', { replacements: { listId }, transaction });
   for (const r of rows) {
-    await sequelize.query(`INSERT INTO packing_list_lines (id, "packingListId", "lineNo", "greyLotId", "thaanId", "thaanNo", grade, meters)
-      VALUES (gen_random_uuid(), :listId, :lineNo, :greyLotId, :thaanId, :thaanNo, :grade, :meters)`, { replacements: { listId, ...r }, transaction });
+    await sequelize.query(`INSERT INTO packing_list_lines (id, "packingListId", "lineNo", "greyLotId", "thaanId", "deptThaanId", "thaanNo", grade, meters)
+      VALUES (gen_random_uuid(), :listId, :lineNo, :greyLotId, :thaanId, :deptThaanId, :thaanNo, :grade, :meters)`, { replacements: { listId, ...r }, transaction });
   }
 }
 
@@ -249,7 +268,7 @@ const HEAD = ['description', 'madeFor', 'ctnQty', 'netWeight', 'grossWeight', 'r
 async function create(req, code, data) {
   return sequelize.transaction(async (transaction) => {
     const d = await packingDept(req, code, 'FULL', transaction);
-    await sequelize.query('SELECT id FROM so_cards WHERE id = :id FOR UPDATE', { replacements: { id: data.soCardId }, transaction });
+    await sequelize.query('SELECT id FROM so_cards WHERE id = :id AND "companyId" = :companyId FOR UPDATE', { replacements: { id: data.soCardId, companyId: req.user.companyId }, transaction });
     const info = (await cardInfo(req, d.id, [data.soCardId], transaction)).get(data.soCardId);
     if (!info) throw AppError.notFound('SO card');
     if (info.cloth.receivedMeters <= 0) throw AppError.rule('NOTHING_RECEIVED', 'Accept the cloth of this SO card from Folding first');

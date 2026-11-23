@@ -151,6 +151,11 @@ async function applyBeams(outward, inwardId, beams, date, transaction, excludeIn
 
 /** The lbs of the receipt must fit in what the challan sent. */
 async function checkYarn(outwardId, lbsUsed, excludeId, transaction) {
+  // the same yarn must not be counted twice: once it is tagged to a Sizing Batch or sent back in a Sizing Return, this old receipt cannot use it
+  const [tagged] = await q(`SELECT 1 AS x FROM yarn_outward_lines l
+    WHERE l."outwardId" = :outwardId AND (EXISTS (SELECT 1 FROM sizing_batch_yarns y JOIN sizing_batches b ON b.id = y."batchId" AND b."deletedAt" IS NULL WHERE y."inwardId" = l."inwardId")
+      OR EXISTS (SELECT 1 FROM sizing_return_yarns ry WHERE ry."inwardId" = l."inwardId")) LIMIT 1`, { outwardId }, transaction);
+  if (tagged && lbsUsed > 0) throw AppError.rule('YARN_IN_NEW_SIZING', 'The yarn of this challan is already tagged to a Sizing Batch or a Sizing Return: it cannot be received here again', { field: 'lbsUsed' });
   const y = await yarnOf(outwardId, excludeId, transaction);
   if (lbsUsed > y.remainingLbs + 0.0001) throw AppError.rule('MORE_THAN_SENT', `The challan sent ${y.sentLbs} lbs and ${y.usedLbs} lbs are already used: only ${y.remainingLbs} lbs are left to use`, { field: 'lbsUsed', sentLbs: y.sentLbs, usedLbs: y.usedLbs, remainingLbs: y.remainingLbs });
 }

@@ -26,6 +26,8 @@ const schema = Joi.object({
   // Login safety. Defaults are for real use; while testing you may shorten the minutes in .env.
   LOGIN_MAX_FAILED: Joi.number().integer().min(1).max(50).default(5),
   LOGIN_LOCK_MINUTES: Joi.number().integer().min(1).max(1440).default(15),
+  // true only when the API can be reached through Cloudflare only: then CF-Connecting-IP (else the first X-Forwarded-For) is the real client address
+  TRUST_CLIENT_IP_HEADER: Joi.boolean().default(false),
   LOGIN_IP_MAX: Joi.number().integer().min(1).max(1000).default(10),
   LOGIN_IP_WINDOW_MINUTES: Joi.number().integer().min(1).max(1440).default(15),
   // Requests per minute: a signed-in person has a bucket of their own, everyone else (login, public) shares one per IP address.
@@ -65,5 +67,6 @@ module.exports = {
     ipWindowMinutes: value.LOGIN_IP_WINDOW_MINUTES,
   },
   rateLimit: { userPerMinute: value.RATE_LIMIT_USER_PER_MINUTE, ipPerMinute: value.RATE_LIMIT_IP_PER_MINUTE },
+  trustClientIpHeader: value.TRUST_CLIENT_IP_HEADER,
   logLevel: value.LOG_LEVEL,
 };

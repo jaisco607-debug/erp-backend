@@ -76,6 +76,8 @@ async function rows(req, depId, extra, replacements, transaction) {
     JOIN so_card_lot_thaans p ON p."soCardLotId" = scl.id JOIN grey_lot_thaans t ON t.id = p."thaanId"
     WHERE ji."jobId" IN (:jobIds)`, { jobIds }, transaction);
   const graded = await q(`SELECT * FROM folding_lines WHERE "jobId" IN (:jobIds)`, { jobIds }, transaction);
+  const chains = await require('./jobThaanService').chainsOf(items.map((i) => i.id), transaction);
+  const journeys = await require('./jobThaanService').journeyOf(items.map((i) => i.id), transaction);
   const chem = await jobCost.chemicalsOf(jobIds.map((id) => ({ id })));
   const prev = await jobCost.previousCosts(items.map((i) => i.id));
   const yarnCost = require('./yarnCostService');
@@ -100,17 +102,21 @@ async function rows(req, depId, extra, replacements, transaction) {
       const lotItems = mine.filter((i) => i.lotId === lotId);
       const lotThaans = [...new Map(thaans.filter((t) => t.jobId === r.jobId && t.soCardId === r.soCardId && t.lotId === lotId).map((t) => [t.thaanId, t])).values()]
         .sort((a, b) => a.thaanNo - b.thaanNo);
-      const src = lotThaans.length
-        ? lotThaans.map((t) => ({ thaanId: t.thaanId, thaanNo: t.thaanNo, width: t.width, received: num(t.meters) }))
-        : [{ thaanId: null, thaanNo: null, width: lotItems[0].width, received: num(lotItems.reduce((t, i) => t + i.meters, 0)) }];
+      // the thaans the earlier departments made from this cloth (Process Management): Folding grades those; their id stands in `thaanId` (source DEPARTMENT)
+      const deptThaans = lotItems.flatMap((i) => (chains.get(i.id) && chains.get(i.id).inputFull) || []);
+      const src = deptThaans.length
+        ? deptThaans.map((t) => ({ thaanId: t.id, thaanNo: t.thaanNo, width: lotItems[0].width, received: num(t.meters), dept: true }))
+        : lotThaans.length
+          ? lotThaans.map((t) => ({ thaanId: t.thaanId, thaanNo: t.thaanNo, width: t.width, received: num(t.meters) }))
+          : [{ thaanId: null, thaanNo: null, width: lotItems[0].width, received: num(lotItems.reduce((t, i) => t + i.meters, 0)) }];
       const lines = src.map((s) => {
-        const g = graded.find((x) => x.jobId === r.jobId && x.soCardId === r.soCardId && x.greyLotId === lotId && (x.thaanId || null) === s.thaanId) || {};
+        const g = graded.find((x) => x.jobId === r.jobId && x.soCardId === r.soCardId && x.greyLotId === lotId && (x.thaanId || x.deptThaanId || null) === s.thaanId) || {};
         const grade = { a: num(g.aMeters), b: num(g.bMeters), cp: num(g.cpMeters) };
         const sent = { a: num(g.sentA), b: num(g.sentB), cp: num(g.sentCP) };
         const folded = sum3(grade);
         const inFolding = { a: round(grade.a - sent.a), b: round(grade.b - sent.b), cp: round(grade.cp - sent.cp) };
         return {
-          thaanId: s.thaanId, thaanNo: s.thaanNo, width: s.width ?? null, label: s.thaanId ? `Thaan ${s.thaanNo}` : 'Whole lot',
+          thaanId: s.thaanId, thaanNo: s.thaanNo, width: s.width ?? null, label: s.thaanId ? `Thaan ${s.thaanNo}` : 'Whole lot', source: s.dept ? 'DEPARTMENT' : s.thaanId ? 'GREY' : 'LOT',
           received: s.received, ...grade, folded,
           // gain / loss is known only when the whole thaan is graded or the row is closed;
           // cloth still waiting in Folding is not a loss (owner 2026-10-19)
@@ -127,8 +133,11 @@ async function rows(req, depId, extra, replacements, transaction) {
       });
       const t = (f) => round(lines.reduce((x, l) => x + f(l), 0));
       lots.push({
-        lotId, lotNo: lotItems[0].lotNo, width: lotItems[0].width ?? null, widths: [...new Set(lines.map((l) => l.width).filter((w) => w != null))].sort((a, b) => a - b), hasThaans: lotThaans.length > 0, thaanCount: lotThaans.length,
+        lotId, lotNo: lotItems[0].lotNo, width: lotItems[0].width ?? null, widths: [...new Set(lines.map((l) => l.width).filter((w) => w != null))].sort((a, b) => a - b), hasThaans: src.some((s) => s.thaanId), thaanCount: src.filter((s) => s.thaanId).length,
         jobItemIds: lotItems.map((i) => i.id),
+        // what Folding made of this lot, per category: how many thaans and meters (Folding turns the thaans it received into thaans of A / B / CP)
+        byGrade: Object.fromEntries([['a', 'a'], ['b', 'b'], ['cp', 'cp']].map(([k, f]) => [k, { thaans: lines.filter((l) => l[f] > 0).length, meters: t((l) => l[f]) }])),
+        gradedThaans: lines.filter((l) => l.folded > 0).length,
         received: t((l) => l.received), a: t((l) => l.a), b: t((l) => l.b), cp: t((l) => l.cp), folded: t((l) => l.folded),
         sent: t((l) => l.sent.total), inFolding: t((l) => l.inFolding.total), notGraded: t((l) => l.notGraded),
         lines,
@@ -156,6 +165,10 @@ async function rows(req, depId, extra, replacements, transaction) {
       // unprocessed cloth going back to the party: no grading, only Send to Packing
       isGreyReturn: Boolean(r.isGreyReturn), tagText: r.isGreyReturn ? 'Fabric return grey (not processed)' : null,
       lots, totals,
+      // the thaans the earlier departments made from this cloth (Process Management > thaans of the departments), per cloth line: the thaans Folding received
+      receivedThaans: mine.filter((i) => chains.get(i.id) && chains.get(i.id).input).map((i) => { const c = chains.get(i.id); return { jobItemId: i.id, lotNo: i.lotNo, from: c.from, thaans: c.input, count: c.input.length, meters: round(c.input.reduce((t, x) => t + x.meters, 0)) }; }),
+      // per cloth line: the SO card thaans / meters, then every department with the thaans it received and made ("10 -> 1"), `received` = what Folding got; Folding's own grading is in lots[].byGrade
+      journey: mine.map((i) => ({ jobItemId: i.id, lotNo: i.lotNo, ...(journeys.get(i.id) || {}) })).sort((a, b) => a.lotNo - b.lotNo),
       leftInFolding,
       isClosed: closed, closeNote: r.closeNote || null, closedAt: r.closedAt || null,
       closedBy: r.closedById ? { id: r.closedById, name: r.closedByName } : null,
@@ -247,12 +260,13 @@ async function saveGrades(req, code, jobId, soCardId, { pageNo, lines }) {
       const a = round(line.sent.a + (l.a ?? line.inFolding.a));
       const b = round(line.sent.b + (l.b ?? line.inFolding.b));
       const cp = round(line.sent.cp + (l.cp ?? line.inFolding.cp));
+      const dept = line.source === 'DEPARTMENT';
       await sequelize.query(`
-        INSERT INTO folding_lines (id, "companyId", "jobId", "soCardId", "greyLotId", "thaanId", "aMeters", "bMeters", "cpMeters", "updatedById")
-        VALUES (gen_random_uuid(), :companyId, :jobId, :soCardId, :lotId, :thaanId, :a, :b, :cp, :userId)
-        ON CONFLICT ("jobId", "soCardId", "greyLotId", COALESCE("thaanId", '${NO_THAAN}'))
+        INSERT INTO folding_lines (id, "companyId", "jobId", "soCardId", "greyLotId", "thaanId", "deptThaanId", "aMeters", "bMeters", "cpMeters", "updatedById")
+        VALUES (gen_random_uuid(), :companyId, :jobId, :soCardId, :lotId, :thaanId, :deptThaanId, :a, :b, :cp, :userId)
+        ON CONFLICT ("jobId", "soCardId", "greyLotId", COALESCE("thaanId", '${NO_THAAN}'), COALESCE("deptThaanId", '${NO_THAAN}'))
         DO UPDATE SET "aMeters" = EXCLUDED."aMeters", "bMeters" = EXCLUDED."bMeters", "cpMeters" = EXCLUDED."cpMeters", "updatedById" = EXCLUDED."updatedById", "updatedAt" = now()`,
-      { replacements: { companyId: req.user.companyId, jobId, soCardId, lotId: l.greyLotId, thaanId: l.thaanId || null, a, b, cp, userId: req.user.id }, transaction });
+      { replacements: { companyId: req.user.companyId, jobId, soCardId, lotId: l.greyLotId, thaanId: dept ? null : l.thaanId || null, deptThaanId: dept ? l.thaanId : null, a, b, cp, userId: req.user.id }, transaction });
     }
     const entry = await entryOf(req, jobId, soCardId, transaction);
     const after0 = await findRow(req, d.id, jobId, soCardId, transaction);
@@ -281,10 +295,10 @@ async function sendToPacking(req, code, jobId, soCardId, { keepRemaining = true,
         for (const l of lot.lines) {
           if (l.folded > 0) continue;
           await sequelize.query(`
-            INSERT INTO folding_lines (id, "companyId", "jobId", "soCardId", "greyLotId", "thaanId", "aMeters", "bMeters", "cpMeters", "updatedById")
-            VALUES (gen_random_uuid(), :companyId, :jobId, :soCardId, :lotId, :thaanId, :a, 0, 0, :userId)
-            ON CONFLICT ("jobId", "soCardId", "greyLotId", COALESCE("thaanId", '${NO_THAAN}')) DO UPDATE SET "aMeters" = EXCLUDED."aMeters", "updatedAt" = now()`,
-          { replacements: { companyId: req.user.companyId, jobId, soCardId, lotId: lot.lotId, thaanId: l.thaanId, a: l.received, userId: req.user.id }, transaction });
+            INSERT INTO folding_lines (id, "companyId", "jobId", "soCardId", "greyLotId", "thaanId", "deptThaanId", "aMeters", "bMeters", "cpMeters", "updatedById")
+            VALUES (gen_random_uuid(), :companyId, :jobId, :soCardId, :lotId, :thaanId, :deptThaanId, :a, 0, 0, :userId)
+            ON CONFLICT ("jobId", "soCardId", "greyLotId", COALESCE("thaanId", '${NO_THAAN}'), COALESCE("deptThaanId", '${NO_THAAN}')) DO UPDATE SET "aMeters" = EXCLUDED."aMeters", "updatedAt" = now()`,
+          { replacements: { companyId: req.user.companyId, jobId, soCardId, lotId: lot.lotId, thaanId: l.source === 'DEPARTMENT' ? null : l.thaanId, deptThaanId: l.source === 'DEPARTMENT' ? l.thaanId : null, a: l.received, userId: req.user.id }, transaction });
         }
       }
       row = await findRow(req, d.id, jobId, soCardId, transaction);
@@ -296,7 +310,17 @@ async function sendToPacking(req, code, jobId, soCardId, { keepRemaining = true,
     const items = [];
     for (const lot of row.lots) {
       if (lot.inFolding <= 0) continue;
-      items.push({ jobItemId: lot.jobItemIds[0], meters: lot.inFolding });
+      // a lot can sit in two cloth lines of the job: fill the lines one after the other (what each already sent on is not offered again), not all on the first
+      const ids = lot.jobItemIds;
+      const own = await sequelize.query(`SELECT ji.id, ji.meters::float AS meters, COALESCE((SELECT SUM(nx.meters) FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" WHERE nx."sourceJobItemId" = ji.id AND nj.status <> 'REJECTED'), 0)::float AS sent FROM job_items ji WHERE ji.id IN (:ids)`, { replacements: { ids }, type: sequelize.QueryTypes.SELECT, transaction });
+      let left = lot.inFolding;
+      for (const id of ids) {
+        if (left <= 0) break;
+        const o = own.find((x) => x.id === id);
+        const take = ids.length === 1 ? left : Math.min(left, round(Math.max(0, (o ? o.meters - o.sent : 0))));
+        if (take > 0) { items.push({ jobItemId: id, meters: take }); left = round(left - take); }
+      }
+      if (left > 0) items.push({ jobItemId: ids[0], meters: left });
     }
     const job = await jobCost.create(req, {
       fromDepartmentId: d.id, departmentId: packing.id, jobDate, sentThrough, remarks, items, partial: true,

@@ -38,7 +38,7 @@ module.exports = {
         soCardLotId: Joi.string().guid(),
         meters: Joi.number().precision(2).positive().max(99999999),
         jobItemId: Joi.string().guid(),
-      }).xor('soCardLotId', 'jobItemId')).min(1).max(100).required(),
+      }).xor('soCardLotId', 'jobItemId')).unique((a, b) => (a.soCardLotId || a.jobItemId) === (b.soCardLotId || b.jobItemId)).messages({ 'array.unique': 'The same row is in the list twice' }).min(1).max(100).required(),
     }),
   },
   status: { params: uuidParam, body: Joi.object({ status: Joi.string().uppercase().valid(...STATUSES).required(), reason: Joi.string().trim().max(300).allow('', null) }) },

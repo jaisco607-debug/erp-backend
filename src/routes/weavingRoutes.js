@@ -99,9 +99,9 @@ router.delete('/yarn-inwards/:id', full, validate({ params: uuidParam }), async 
 
 // ---- Masters > Loom: a loom no and the department it belongs to (Masters > Department: e.g. Sulzer, Airjet) ----
 router.get('/looms', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(80), departmentId: id, isActive: Joi.boolean(), running: Joi.boolean() }) }), async (req, res) => res.json(await looms.list(req, req.validatedQuery)));
-router.post('/looms', full, validate({ body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20).required(), departmentId: id.required(), isActive: Joi.boolean() }) }), async (req, res) => res.status(201).json(await looms.create(req, req.body)));
+router.post('/looms', full, validate({ body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20).required(), loomType: Joi.string().trim().max(20).allow('', null), departmentId: id.required(), isActive: Joi.boolean() }) }), async (req, res) => res.status(201).json(await looms.create(req, req.body)));
 router.get('/looms/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await looms.get(req, req.params.id)));
-router.patch('/looms/:id', full, validate({ params: uuidParam, body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20), departmentId: id, isActive: Joi.boolean() }).min(1) }), async (req, res) => res.json(await looms.update(req, req.params.id, req.body)));
+router.patch('/looms/:id', full, validate({ params: uuidParam, body: Joi.object({ loomNo: Joi.string().trim().min(1).max(20), loomType: Joi.string().trim().max(20).allow('', null), departmentId: id, isActive: Joi.boolean() }).min(1) }), async (req, res) => res.json(await looms.update(req, req.params.id, req.body)));
 router.delete('/looms/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await looms.remove(req, req.params.id)));
 
 // ---- Sizing Return: yarn and / or empty beams sent to a sizing party are called back WITHOUT sizing (an In Pass); beams go back to Empty, the yarn back into the stock ----

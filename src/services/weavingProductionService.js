@@ -478,4 +478,4 @@ async function entryRegister(req, entryId) {
     data: rows.map((r) => ({ loomNo: e.loomNo, date: r.date, shift: r.shift, units: Number(r.units), meters: unitsToMeters(r.units, e.loomPick), kId: e.kId, weaver: r.weaver ? { name: r.weaver, code: r.weaverCode } : null })) };
 }
 
-module.exports = { SHIFTS, formData, periods, period, day, saveDay, clearDay, check, weavers, employees, addWeavers, setLooms, removeWeavers, copyWeavers, sampleWeavers, sampleUnits, dayCsv, importUnits, importWeavers, entryRegister };
+module.exports = { SHIFTS, periodOf, department, natural, formData, periods, period, day, saveDay, clearDay, check, weavers, employees, addWeavers, setLooms, removeWeavers, copyWeavers, sampleWeavers, sampleUnits, dayCsv, importUnits, importWeavers, entryRegister };

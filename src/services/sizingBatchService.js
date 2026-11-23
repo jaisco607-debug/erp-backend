@@ -35,7 +35,10 @@ const nominalOf = (name) => { const m = /(\d+(?:\.\d+)?)/.exec(name || ''); retu
 const HEAD_SQL = `SELECT b.*, to_char(b."batchDate", 'YYYY-MM-DD') AS "batchDay", v.code AS "vendorCode", v.name AS "vendorName", yc.name AS "yarnCountName",
     p.id AS "invoiceId", p."voucherNo" AS "invoiceVoucherNo", p.status AS "invoiceStatus",
     wq.code AS "qualityCode", wq.name AS "qualityName",
-    yct.code AS "contractCode", yct.status AS "contractStatus", cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName"
+    yct.code AS "contractCode", yct.status AS "contractStatus", cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName",
+    -- the yarn really sent to the sizing party for the tagged yarn: per tagged entry the lbs of its SIZING challans to this party (yarn that came straight to the party counts as sent)
+    (SELECT COALESCE(SUM(LEAST(y.lbs, CASE WHEN yi."directVendorId" = b."vendorId" THEN y.lbs ELSE COALESCE((SELECT SUM(l.lbs) FROM yarn_outward_lines l JOIN yarn_outwards o ON o.id = l."outwardId" AND o.type = 'SIZING' AND o."vendorId" = b."vendorId" AND o."deletedAt" IS NULL WHERE l."inwardId" = y."inwardId"), 0) END)), 0)
+       FROM sizing_batch_yarns y JOIN yarn_inwards yi ON yi.id = y."inwardId" WHERE y."batchId" = b.id) AS "yarnIssuedLbs"
   FROM sizing_batches b JOIN vendors v ON v.id = b."vendorId" JOIN yarn_counts yc ON yc.id = b."yarnCountId"
   LEFT JOIN yarn_contracts yct ON yct.id = b."contractId" LEFT JOIN customers cu ON cu.id = yct."customerId" LEFT JOIN weaving_qualities wq ON wq.id = b."qualityId"
   LEFT JOIN purchase_invoice_sizing_batches pl ON pl."batchId" = b.id LEFT JOIN purchase_invoices p ON p.id = pl."invoiceId"`;
@@ -65,6 +68,11 @@ function headJson(b) {
     ratePerLb: num(b.ratePerLb), adjustmentLbs: n2(b.adjustmentLbs), amount: n2(b.amount),
     purchaseInvoice: invoice, invoiced: Boolean(invoice), billedAmount: invoice ? n2(b.amount) : 0,
     noYarnTagged: b.yarnLots === 0,
+    // the list columns: yarn issued (sent to the party) next to yarn tagged (amber when they differ), sizing length (the party's figure, else what came in), to receive (closed sets only)
+    yarnIssuedLbs: n2(b.yarnIssuedLbs), yarnMismatch: b.yarnLots > 0 && Math.abs(n2(b.yarnIssuedLbs) - n2(b.yarnLbs)) > 0.005,
+    sizingLengthM: n2(b.sizingLengthM == null ? b.lengthM : b.sizingLengthM), sizingLengthEntered: b.sizingLengthM != null, receivedLengthM: n2(b.lengthM), beamsIn: b.beamCount,
+    toReceiveM: b.status === 'CONFIRMED' ? n2((b.sizingLengthM == null ? Number(b.lengthM) : Number(b.sizingLengthM)) - Number(b.lengthM)) : 0,
+    batchCode: String(b.batchNo).padStart(4, '0'), canBeamIn: draft,
     canEdit: draft, canConfirm: draft, canReopen: !draft && !invoice, canDelete: draft && b.beamCount === 0,
     canInvoice: !draft && !invoice && n2(b.amount) > 0,
     createdAt: b.createdAt,
@@ -160,8 +168,12 @@ async function list(req, { page, limit, search, status, vendorId, contractId, cu
     COALESCE(SUM(b."coneLbs") FILTER (WHERE :status::text IS NULL OR b.status = :status), 0) AS cones, COALESCE(SUM(b."lengthM") FILTER (WHERE :status::text IS NULL OR b.status = :status), 0) AS len,
     COALESCE(SUM(b."beamCount") FILTER (WHERE :status::text IS NULL OR b.status = :status), 0)::int AS beams, COALESCE(SUM(b.amount) FILTER (WHERE :status::text IS NULL OR b.status = :status), 0) AS amount
     FROM sizing_batches b JOIN vendors v ON v.id = b."vendorId" JOIN yarn_counts yc ON yc.id = b."yarnCountId" LEFT JOIN yarn_contracts yct ON yct.id = b."contractId" LEFT JOIN customers cu ON cu.id = yct."customerId" LEFT JOIN weaving_qualities wq ON wq.id = b."qualityId" WHERE ${where}`, st);
+  // the pills and the footer over every set of the filter: sizing length, received, to receive (closed sets), billed, yarn issued
+  const every = (await q(`${HEAD_SQL} WHERE ${where} AND (:status::text IS NULL OR b.status = :status)`, st)).map(headJson);
+  const sum = (k) => n2(every.reduce((s, b) => s + (Number(b[k]) || 0), 0));
+  const extra = { sizingLengthM: sum('sizingLengthM'), receivedLengthM: sum('receivedLengthM'), toReceiveM: sum('toReceiveM'), billedAmount: sum('billedAmount'), yarnIssuedLbs: sum('yarnIssuedLbs'), coneKg: sum('coneKg'), withoutYarnShown: every.filter((b) => b.noYarnTagged).length };
   return { data: rows.map(headJson), page, limit, total: t.total, counts: { all: t.all, drafts: t.drafts, confirmed: t.confirmed, withoutYarn: t.withoutYarn },
-    totals: { sets: t.total, yarnTaggedLbs: n2(t.yarn), warpWeightLbs: n2(t.warp), coneLbs: n2(t.cones), lengthM: n2(t.len), beams: t.beams, amount: n2(t.amount) } };
+    totals: { sets: t.total, ...extra, yarnTaggedLbs: n2(t.yarn), warpWeightLbs: n2(t.warp), coneLbs: n2(t.cones), lengthM: n2(t.len), beams: t.beams, amount: n2(t.amount) } };
 }
 
 /** Dropdown help for the form (the Sizing user may have no access to the weaving masters, so the lists come here). */
@@ -210,7 +222,8 @@ const needDraft = (b) => {
 /** The yarn that went to this party on SIZING challans, per weaving yarn inward entry: sent, tagged to other batches of the party, available. `excludeBatchId` leaves the batch being edited out of "tagged". */
 async function yarnPool(companyId, vendorId, { inwardIds, excludeBatchId = null, excludeReturnId = null, contractId = null } = {}, transaction) {
   const rows = await q(`SELECT i.id AS "inwardId", i.code, to_char(i."inwardDate", 'YYYY-MM-DD') AS "inwardDate", i."dcNo", it."yarnCountId", yc.name AS "yarnCountName", br.name AS "brandName", it.packing, it.bags AS "itemBags",
-      sent.lbs AS sent, COALESCE(t.lbs, 0) AS tagged, COALESCE(rt.lbs, 0) AS returned, i."lbsPerBag" AS "lbsPerBag"
+      sent.lbs AS sent, COALESCE(t.lbs, 0) AS tagged, COALESCE(rt.lbs, 0) AS returned, i."lbsPerBag" AS "lbsPerBag",
+      EXISTS (SELECT 1 FROM yarn_outward_lines l2 JOIN yarn_sizing_inwards si ON si."outwardId" = l2."outwardId" AND si."deletedAt" IS NULL AND si."lbsUsed" > 0 WHERE l2."inwardId" = i.id) AS "oldUsed"
     FROM yarn_inwards i JOIN yarn_items it ON it.id = i."itemId" JOIN yarn_counts yc ON yc.id = it."yarnCountId" JOIN yarn_brands br ON br.id = it."brandId"
     JOIN (SELECT l."inwardId", SUM(l.lbs) AS lbs FROM yarn_outward_lines l JOIN yarn_outwards o ON o.id = l."outwardId" AND o.type = 'SIZING' AND o."deletedAt" IS NULL AND o."vendorId" = :vendorId GROUP BY 1) sent ON sent."inwardId" = i.id
     LEFT JOIN (SELECT y."inwardId", SUM(y.lbs) AS lbs FROM sizing_batch_yarns y JOIN sizing_batches b ON b.id = y."batchId" AND b."deletedAt" IS NULL AND b."vendorId" = :vendorId
@@ -220,7 +233,7 @@ async function yarnPool(companyId, vendorId, { inwardIds, excludeBatchId = null,
   { companyId, vendorId, ex: excludeBatchId, exr: excludeReturnId, inwardIds, contractId }, transaction);
   return rows.map((r) => ({
     inwardId: r.inwardId, inwardCode: r.code, inwardDate: r.inwardDate, dcNo: r.dcNo, yarnCountId: r.yarnCountId, yarnCount: sizeOf({ id: r.yarnCountId, name: r.yarnCountName }),
-    name: `${r.yarnCountName} - ${r.brandName} - ${r.packing} - ${r.itemBags}`, sentLbs: n2(r.sent), taggedLbs: n2(r.tagged), returnedLbs: n2(r.returned), lbsPerBag: Number(r.lbsPerBag), availableLbs: n2(Number(r.sent) - Number(r.tagged) - Number(r.returned)),
+    name: `${r.yarnCountName} - ${r.brandName} - ${r.packing} - ${r.itemBags}`, sentLbs: n2(r.sent), taggedLbs: n2(r.tagged), returnedLbs: n2(r.returned), lbsPerBag: Number(r.lbsPerBag), availableLbs: r.oldUsed ? 0 : n2(Number(r.sent) - Number(r.tagged) - Number(r.returned)), usedInOldSizingInward: Boolean(r.oldUsed),
   }));
 }
 
@@ -304,10 +317,10 @@ async function create(req, data) {
     if (data.qualityId) await checkQuality(companyId, data.qualityId, null, transaction);
     const [{ next }] = await q('SELECT COALESCE(MAX("batchNo"), 0) + 1 AS next FROM sizing_batches WHERE "companyId" = :companyId', { companyId }, transaction);
     const id = crypto.randomUUID();
-    await exec(`INSERT INTO sizing_batches (id, "companyId", "batchNo", "batchDate", "vendorId", "setNo", ends, "yarnCountId", "contractId", "qualityId", notes, "adjustmentLbs", "ratePerLb", "createdById")
-      VALUES (:id, :companyId, :batchNo, :batchDate, :vendorId, :setNo, :ends, :yarnCountId, :contractId, :qualityId, :notes, :adjustmentLbs, :ratePerLb, :createdById)`,
+    await exec(`INSERT INTO sizing_batches (id, "companyId", "batchNo", "batchDate", "vendorId", "setNo", ends, "yarnCountId", "contractId", "qualityId", notes, "adjustmentLbs", "ratePerLb", "sizingLengthM", "createdById")
+      VALUES (:id, :companyId, :batchNo, :batchDate, :vendorId, :setNo, :ends, :yarnCountId, :contractId, :qualityId, :notes, :adjustmentLbs, :ratePerLb, :sizingLengthM, :createdById)`,
     { id, companyId, batchNo: Number(next), batchDate: data.batchDate || today(), vendorId: data.vendorId, setNo: data.setNo, ends: data.ends, yarnCountId: data.yarnCountId, contractId: data.contractId || null, qualityId: data.qualityId || null,
-      notes: data.notes || null, adjustmentLbs: data.adjustmentLbs || 0, ratePerLb: data.ratePerLb === undefined ? null : data.ratePerLb, createdById: req.user.id }, transaction);
+      notes: data.notes || null, adjustmentLbs: data.adjustmentLbs || 0, ratePerLb: data.ratePerLb === undefined ? null : data.ratePerLb, sizingLengthM: data.sizingLengthM == null ? null : data.sizingLengthM, createdById: req.user.id }, transaction);
     const [batch] = await q('SELECT * FROM sizing_batches WHERE id = :id', { id }, transaction);
     for (const y of data.yarns || []) {
       if ((data.yarns || []).filter((x) => x.inwardId === y.inwardId).length > 1) throw AppError.rule('ALREADY_TAGGED', 'The same yarn is listed twice', { field: 'yarns' });
@@ -336,7 +349,7 @@ async function update(req, id, changes) {
     if (changes.yarnCountId && changes.yarnCountId !== b.yarnCountId) { await checkCount(companyId, changes.yarnCountId, b.yarnCountId, transaction); set.yarnCountId = changes.yarnCountId; }
     if (changes.contractId !== undefined) { if (changes.contractId) await checkContract(companyId, changes.contractId, b.contractId, transaction); set.contractId = changes.contractId; }
     if (changes.qualityId !== undefined) { if (changes.qualityId) await checkQuality(companyId, changes.qualityId, b.qualityId, transaction); set.qualityId = changes.qualityId; }
-    for (const f of ['batchDate', 'setNo', 'ends', 'notes', 'adjustmentLbs', 'ratePerLb']) if (changes[f] !== undefined) set[f] = changes[f] === '' ? null : changes[f];
+    for (const f of ['batchDate', 'setNo', 'ends', 'notes', 'adjustmentLbs', 'ratePerLb', 'sizingLengthM']) if (changes[f] !== undefined) set[f] = changes[f] === '' ? null : changes[f];
     const keys = Object.keys(set);
     if (keys.length) await exec(`UPDATE sizing_batches SET ${keys.map((k) => `"${k}" = :${k}`).join(', ')}, "updatedAt" = now() WHERE id = :id`, { ...set, id }, transaction);
     await recalc(id, transaction);

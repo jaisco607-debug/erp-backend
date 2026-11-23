@@ -168,6 +168,11 @@ async function update(req, id, changes) {
       const used = await activeCount(companyId, transaction);
       if (used >= company.processLimit) throw limitError(company.processLimit, used);
     }
+    // switching OFF with jobs on the way or in work would strand them: nobody could accept, finish or send them any more
+    if (changes.isActive === false && was) {
+      const [live] = await sequelize.query("SELECT COUNT(*)::int AS n FROM jobs WHERE \"companyId\" = :companyId AND \"departmentId\" = :id AND status IN ('IN_WAY', 'QUEUE', 'PENDING', 'PROCESSING')", { replacements: { companyId, id }, type: sequelize.QueryTypes.SELECT, transaction });
+      if (live.n) throw AppError.rule('PROCESS_HAS_LIVE_JOBS', `This process has ${live.n} job(s) that are not finished: finish or send them before switching it off`, { jobs: live.n });
+    }
     const before = json(s, { isActive: was });
     if (isOwn) {
       if (changes.name !== undefined) { await assertNameFree(companyId, changes.name, id, transaction); s.name = clean(changes.name); }

@@ -135,6 +135,13 @@ async function departmentLedger(req, f) {
       WHERE pj."departmentId" IN (:ids)${cond} GROUP BY pj."departmentId", ps.id, ps.name, cj.id, cs.id, cs.name, sc.id, cu.id`, rep)) {
     rows.push({ date: ymd(r.date), order: 2, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: 'Sent on', ref: `Job# ${r.jobNo}`, inMeters: 0, outMeters: r.meters, detail: `To ${r.toDepartment}` });
   }
+  // the thaans a department wrote: what it sent on can differ from what it received (cut, shrink): the difference is a line of its own, so the balance stays right
+  for (const r of await q(`SELECT pj."departmentId", svc_name(ps.id, sc."companyId", ps.name) AS department, cj."jobDate" AS date, cj."jobNo", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, SUM(pi.meters - ci.meters)::float AS diff
+      FROM job_items ci JOIN jobs cj ON cj.id = ci."jobId" AND cj.status <> 'REJECTED' JOIN job_items pi ON pi.id = ci."sourceJobItemId" JOIN jobs pj ON pj.id = pi."jobId" AND pj.status <> 'REJECTED'
+      JOIN services ps ON ps.id = pj."departmentId" JOIN so_cards sc ON sc.id = ci."soCardId" JOIN customers cu ON cu.id = sc."customerId"
+      WHERE pj."departmentId" IN (:ids)${cond} AND EXISTS (SELECT 1 FROM job_item_thaans t WHERE t."jobItemId" = pi.id) GROUP BY pj."departmentId", ps.id, ps.name, cj.id, sc.id, cu.id HAVING ABS(SUM(pi.meters - ci.meters)) > 0.004`, rep)) {
+    rows.push({ date: ymd(r.date), order: 3, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: r.diff > 0 ? 'Process loss (thaans)' : 'Process gain (thaans)', ref: `Job# ${r.jobNo}`, inMeters: r.diff < 0 ? -r.diff : 0, outMeters: r.diff > 0 ? r.diff : 0, detail: 'Thaans made by the department' });
+  }
   const ledger = runLedger(rows, f, { group: (r) => r.departmentId, delta: (r) => r.inMeters - r.outMeters, label: (r) => ({ department: r.department }) })
     .sort((a, b) => a.department.localeCompare(b.department) || a.date.localeCompare(b.date) || (a.order || 0) - (b.order || 0));
   const data = ledger.map((r) => ({ date: r.date, department: r.department, type: r.type, ref: r.ref || '', soNo: r.soNo ?? null, party: r.party || '', inMeters: round(nz(r.inMeters)), outMeters: round(nz(r.outMeters)), balance: r.balance, detail: r.detail || '' }));

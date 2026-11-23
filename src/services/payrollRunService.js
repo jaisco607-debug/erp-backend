@@ -248,7 +248,8 @@ async function addEmployees(req, r, transaction, onlyIds = null) {
   let extra = '';
   if (onlyIds) { extra = ' AND e.id IN (:onlyIds)'; repl.onlyIds = onlyIds; }
   const emps = await q(`SELECT ${EMPLOYEE_SELECT} FROM ${EMPLOYEE_FROM} WHERE e."companyId" = :companyId AND e."groupId" = :groupId AND e.status = 'CONFIRMED' AND e."joiningDate" <= :last
-    AND (NOT e."isClosed" OR e."leavingDate" >= :first) AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s."runId" = :runId AND s."employeeId" = e.id)${extra} ORDER BY e.code`, repl, transaction);
+    AND (NOT e."isClosed" OR e."leavingDate" >= :first) AND NOT EXISTS (SELECT 1 FROM payroll_slips s WHERE s."runId" = :runId AND s."employeeId" = e.id)
+    AND NOT EXISTS (SELECT 1 FROM payroll_slips s2 JOIN payroll_runs r2 ON r2.id = s2."runId" WHERE s2."employeeId" = e.id AND r2."companyId" = :companyId AND r2.id <> :runId AND r2.month = (SELECT month FROM payroll_runs WHERE id = :runId))${extra} ORDER BY e.code`, repl, transaction);
   if (!emps.length) return 0;
   const ids = emps.map((e) => e.id);
   const until = today();

@@ -26,14 +26,14 @@ const exec = (sql, replacements, transaction) => sequelize.query(sql, { replacem
 
 // a beam with where it came from: its latest sized beam receipt (batch, set, ends, count, quality, In Pass) — a beam without one is not from a batch
 const BEAM_SQL = `SELECT b.id, b."beamNo", b.name, b.status, b.meters, b."halfCutM", to_char(b."statusDate", 'YYYY-MM-DD') AS "statusDate", b."weightKg",
-    r."receiptNo", to_char(r."receiptDate", 'YYYY-MM-DD') AS "receiptDate", sb.id AS "batchId", sb."batchNo", sb."setNo", sb.ends, yc.name AS "yarnCount", COALESCE(wq.name, sb.quality) AS quality
+    r."receiptNo", to_char(r."receiptDate", 'YYYY-MM-DD') AS "receiptDate", sb.id AS "batchId", sb."batchNo", sb."setNo", sb.ends, yc.name AS "yarnCount", COALESCE(wq.name, sb.quality) AS quality, wq.code AS "qualityCode"
   FROM yarn_beams b LEFT JOIN LATERAL (SELECT r2.* FROM sizing_receipt_beams rb JOIN sizing_receipts r2 ON r2.id = rb."receiptId" WHERE rb."beamId" = b.id ORDER BY r2."receiptDate" DESC, r2."receiptNo" DESC LIMIT 1) r ON true
   LEFT JOIN sizing_batches sb ON sb.id = r."batchId" LEFT JOIN yarn_counts yc ON yc.id = sb."yarnCountId" LEFT JOIN weaving_qualities wq ON wq.id = sb."qualityId"`;
 
 const beamJson = (b, lengthM) => ({
   id: b.id, beamNo: b.beamNo, beamLabel: label(b.beamNo), name: b.name, status: b.status, statusText: BEAM_TEXT[b.status], statusDate: b.statusDate,
   lengthM: lengthM != null ? n2(lengthM) : num(b.meters) == null ? 0 : n2(b.meters), weightKg: num(b.weightKg),
-  setNo: b.setNo || null, ends: b.ends || null, yarnCount: b.yarnCount || null, quality: b.quality || null, date: b.receiptDate || b.statusDate,
+  setNo: b.setNo || null, ends: b.ends || null, yarnCount: b.yarnCount || null, quality: b.quality || null, qualityCode: b.qualityCode ?? null, date: b.receiptDate || b.statusDate,
   batch: b.batchId ? { id: b.batchId, batchNo: b.batchNo, batchLabel: label(b.batchNo) } : null, inPassNo: b.receiptNo || null,
   // "os" = sized outside (it came back on a sizing batch receipt)
   type: b.batchId ? 'os' : null,
@@ -68,11 +68,17 @@ async function entriesOf(where, replacements, transaction) {
     const balanceM = Math.max(0, n2(net - producedM));
     const donePct = net ? Math.min(100, n2((producedM / net) * 100)) : 0;
     const daysRun = p ? p.days : 0;
-    const perDayM = daysRun ? n2(producedM / daysRun) : null;
+    // metres per day: what the loom really made per working day; before any units, the plan of the loom (RPM x 1,440 minutes / (pick x 39.3701))
+    const plannedPerDayM = e.loomRpm && e.loomPick ? n2((e.loomRpm * 1440) / (e.loomPick * 39.3701)) : null;
+    const perDayM = daysRun ? n2(producedM / daysRun) : plannedPerDayM;
     let endsOn = null;
-    if (e.status === 'ACTIVE' && perDayM > 0 && p.last) { const d = new Date(`${p.last}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + Math.ceil(balanceM / perDayM)); endsOn = d.toISOString().slice(0, 10); }
+    if (e.status === 'ACTIVE' && perDayM > 0 && balanceM > 0) { const d = new Date(`${(p && p.last) || today()}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + Math.ceil(balanceM / perDayM)); endsOn = d.toISOString().slice(0, 10); }
     const ready = { rpm: e.loomRpm != null, pick: e.loomPick != null, reedSpace: e.reedSpace != null };
     const active = e.status === 'ACTIVE';
+    // the status list: when the units were last updated (never = since the start), stale = nothing for 3+ days, the days left at this pace, a loom without length / RPM / pick
+    const ref = (p && p.last) || e.startDay;
+    const staleDays = active ? Math.max(0, Math.round((new Date(`${today()}T00:00:00Z`) - new Date(`${ref}T00:00:00Z`)) / 86400000)) : null;
+    const endsInDays = endsOn ? Math.round((new Date(`${endsOn}T00:00:00Z`) - new Date(`${today()}T00:00:00Z`)) / 86400000) : null;
     return {
       id: e.id, kId: e.kId, kLabel: String(e.kId), loom: { id: e.loomId, loomNo: e.loomNo, department: { id: e.deptId, code: e.deptCode, name: e.deptName } }, loomId: e.loomId,
       factor: e.factor, factorText: FACTOR_TEXT[e.factor], loomRpm: e.loomRpm, loomPick: e.loomPick, reedSpace: num(e.reedSpace), startDate: e.startDay, endDate: e.endDay,
@@ -81,7 +87,9 @@ async function entriesOf(where, replacements, transaction) {
       beamLengthM: lengthM, netLengthM: beams.length ? n2(lengthM / beams.length) : 0,
       leftM: leftTotal, leftNetM: leftNet, estimatedProducedM: halfCut && beams.length ? n2(lengthM / beams.length - leftNet) : null,
       // production register: units, cloth made (m), balance (m), % done / remaining, days run, metres per day, the day the beam is expected to finish
-      units, producedM, balanceM, donePct, remainingPct: n2(100 - donePct), daysRun, perDayM, lastProductionDate: p ? p.last : null, endsOn,
+      units, producedM, balanceM, donePct, remainingPct: n2(100 - donePct), daysRun, perDayM, plannedPerDayM, perDayIsPlanned: !daysRun && perDayM != null, lastProductionDate: p ? p.last : null, endsOn, endsInDays,
+      neverUpdated: active && !p, staleDays, isStale: active && staleDays >= 3, missingSetup: active && !(lengthM > 0 && e.loomRpm != null && e.loomPick != null),
+      qualityCode: first.qualityCode ?? null, qualityText: first.quality ? (first.qualityCode != null ? `${first.quality} (${first.qualityCode})` : first.quality) : null,
       // what the beams are (from their batches); `mixed` = the two beams are not of the same count / ends / quality
       yarnCount: first.yarnCount || null, ends: first.ends || null, quality: first.quality || null, mixed: !same('yarnCount') || !same('ends') || !same('quality'),
       readiness: ready, canEdit: active, canConfirm: active && !e.isConfirmed && beams.length > 0 && Object.values(ready).every(Boolean), canAddBeams: active && beams.length < MAX_BEAMS, canRemoveBeams: active && !e.isConfirmed && beams.length > 0, canDelete: active && !e.isConfirmed, canCutOff: active && e.isConfirmed, canHalfCut: active && e.isConfirmed, canReopen: !active,
@@ -120,8 +128,32 @@ async function list(req, { page, limit, search, status, loomId, departmentId, co
   const idle = await q(`SELECT l.id, l."loomNo", d.id AS "deptId", d.name AS "deptName" FROM looms l JOIN weaving_departments d ON d.id = l."departmentId" WHERE l."companyId" = :companyId AND l."deletedAt" IS NULL AND l."isActive"
     ${departmentId ? 'AND l."departmentId" = :departmentId' : ''} AND NOT EXISTS (SELECT 1 FROM loom_entries e WHERE e."loomId" = l.id AND e.status = 'ACTIVE' AND EXISTS (SELECT 1 FROM loom_entry_beams x WHERE x."entryId" = e.id)) ORDER BY d.name, l."loomNo"`, r);
   return { data, page, limit, total: t.total, counts: { active: t.active, completed: t.completed, cutOff: t.cutOff, halfCut: t.halfCut, notConfirmed: t.notConfirmed },
-    totals: { loomsRunning: t.loomsRunning, idleLooms: idle.length, beamLengthM: n2(t.len) },
+    totals: { loomsRunning: t.loomsRunning, idleLooms: idle.length, beamLengthM: n2(t.len), ...(await runningTotals(from, st)) },
     idleLooms: idle.map((l) => ({ id: l.id, loomNo: l.loomNo, department: { id: l.deptId, name: l.deptName } })) };
+}
+
+/** The pills and the footer of the status list: all running entries of the filter (not only the page): produced, left, not updated for 3+ days, without length / RPM / pick. */
+async function runningTotals(from, st) {
+  const ids = (await q(`SELECT e.id ${from} AND e.status = 'ACTIVE' AND EXISTS (SELECT 1 FROM loom_entry_beams x WHERE x."entryId" = e.id)`, st)).map((x) => x.id);
+  const all = ids.length ? await entriesOf('e.id IN (:ids)', { ids }) : [];
+  return { producedM: n2(all.reduce((t, e) => t + e.producedM, 0)), leftM: n2(all.reduce((t, e) => t + e.balanceM, 0)), netLengthM: n2(all.reduce((t, e) => t + e.netLengthM, 0)), units: n2(all.reduce((t, e) => t + e.units, 0)), notUpdated: all.filter((e) => e.isStale).length, missingSetup: all.filter((e) => e.missingSetup).length };
+}
+
+/** GET /loom-beams/quality-summary: the running looms grouped by quality (the Quality summary button). */
+async function qualitySummary(req, { departmentId }) {
+  const r = { companyId: req.user.companyId }; let dept = '';
+  if (departmentId) { dept = ' AND l."departmentId" = :departmentId'; r.departmentId = departmentId; }
+  const ids = (await q(`SELECT e.id FROM loom_entries e JOIN looms l ON l.id = e."loomId" WHERE e."companyId" = :companyId AND e.status = 'ACTIVE' AND EXISTS (SELECT 1 FROM loom_entry_beams x WHERE x."entryId" = e.id)${dept}`, r)).map((x) => x.id);
+  const all = ids.length ? await entriesOf('e.id IN (:ids)', { ids }) : [];
+  const by = new Map();
+  for (const e of all) {
+    const k = e.qualityText || 'No quality';
+    const g = by.get(k) || { quality: e.quality || 'No quality', qualityCode: e.qualityCode, qualityText: k, looms: 0, loomNos: [], beamLengthM: 0, netLengthM: 0, producedM: 0, leftM: 0 };
+    g.looms += 1; g.loomNos.push(e.loom.loomNo); g.beamLengthM += e.beamLengthM; g.netLengthM += e.netLengthM; g.producedM += e.producedM; g.leftM += e.balanceM;
+    by.set(k, g);
+  }
+  const data = [...by.values()].map((g) => ({ ...g, beamLengthM: n2(g.beamLengthM), netLengthM: n2(g.netLengthM), producedM: n2(g.producedM), leftM: n2(g.leftM) })).sort((a, b) => b.looms - a.looms);
+  return { data, total: data.length, totals: { looms: all.length, beamLengthM: n2(data.reduce((t, g) => t + g.beamLengthM, 0)), producedM: n2(data.reduce((t, g) => t + g.producedM, 0)), leftM: n2(data.reduce((t, g) => t + g.leftM, 0)) } };
 }
 
 /** Dropdown help: the factors, today and the looms (switched on) with the room they have for beams. */
@@ -380,4 +412,4 @@ async function remove(req, id) {
   });
 }
 
-module.exports = { list, get, create, update, confirm, cutOff, reopen, halfCut, remove, addBeams, removeBeam, formData, availableBeams, MAX_BEAMS };
+module.exports = { entriesOf, list, get, create, update, confirm, cutOff, reopen, halfCut, remove, addBeams, removeBeam, formData, availableBeams, qualitySummary, MAX_BEAMS };

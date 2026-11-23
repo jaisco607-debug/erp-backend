@@ -22,6 +22,7 @@ const moduleOf = (kind, req) => {
   return m === 'ALL' ? {} : { module: m };
 };
 
+const Model_TABLE = { customer: 'customers', quality: 'qualities' };
 const KINDS = {
   customer: { Model: Customer, json: customerJSON, entity: 'Customer', label: 'Customer', fields: ['name', 'phone', 'address', 'isActive', ...CUSTOMER_FIELDS, ...CREDIT_FIELDS] },
   quality: { Model: Quality, json: qualityJSON, entity: 'Quality', label: 'Quality', fields: ['name', 'isActive'] },
@@ -99,11 +100,25 @@ async function update(kind, req, id, changes) {
   });
 }
 
-/** Delete: hidden from lists and dropdowns, kept in the database (old lots still show it). */
+/** Is the record used by anything (a table with a foreign key to it holds a live row that points at it)? Returns the first table found, else null. */
+async function usedBy(table, id, transaction) {
+  const fks = await sequelize.query(`SELECT c.conrelid::regclass::text AS tbl, a.attname AS col FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+    WHERE c.contype = 'f' AND c.confrelid = :table::regclass`, { replacements: { table }, type: sequelize.QueryTypes.SELECT, transaction });
+  for (const f of fks) {
+    const [soft] = await sequelize.query("SELECT 1 AS x FROM information_schema.columns WHERE table_name = :t AND column_name = 'deletedAt'", { replacements: { t: f.tbl.replace(/"/g, '') }, type: sequelize.QueryTypes.SELECT, transaction });
+    const [hit] = await sequelize.query(`SELECT 1 AS x FROM ${f.tbl} WHERE "${f.col}" = :id${soft ? ' AND "deletedAt" IS NULL' : ''} LIMIT 1`, { replacements: { id }, type: sequelize.QueryTypes.SELECT, transaction });
+    if (hit) return f.tbl.replace(/"/g, '');
+  }
+  return null;
+}
+
+/** Delete: hidden from lists and dropdowns, kept in the database. Not while lots, invoices, vouchers ... use it (switch it off instead). */
 async function remove(kind, req, id) {
-  const { json, entity } = KINDS[kind];
+  const { json, entity, label } = KINDS[kind];
   return sequelize.transaction(async (transaction) => {
     const row = await findOr404(kind, req, id, transaction);
+    const used = Model_TABLE[kind] ? await usedBy(Model_TABLE[kind], id, transaction) : null;
+    if (used) throw AppError.rule('IN_USE', `This ${label.toLowerCase()} is used (${used.replace(/_/g, ' ')}): switch it off instead of deleting it`, { usedIn: used });
     const before = json(row);
     await row.destroy({ transaction });
     await audit.log(req, { action: `${entity.toUpperCase()}_DELETED`, entityType: entity, entityId: id, before }, { transaction });

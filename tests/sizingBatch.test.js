@@ -139,6 +139,12 @@ test('sizing batch: yarn tagged, beams + cut cones received, billing, confirm, i
   // lists
   const l = (await w.api('get', '/sizing/batches')).body;
   expect(l).toMatchObject({ total: 1, counts: { all: 1, drafts: 1, confirmed: 0, withoutYarn: 0 } });
+  // the list columns of the Sizing batches table
+  expect(l.data[0]).toMatchObject({ batchCode: '0001', sizingLengthM: 10430, sizingLengthEntered: false, receivedLengthM: 10430, toReceiveM: 0, beamsIn: 2, canBeamIn: true });
+  expect(typeof l.data[0].yarnIssuedLbs).toBe('number');
+  expect(l.totals).toMatchObject({ sets: 1, sizingLengthM: 10430, receivedLengthM: 10430, toReceiveM: 0, billedAmount: 0 });
+  expect((await w.api('patch', `/sizing/batches/${id}`, { sizingLengthM: 11000 })).body).toMatchObject({ sizingLengthM: 11000, sizingLengthEntered: true, toReceiveM: 0 }); // not closed: nothing to receive yet
+  await w.api('patch', `/sizing/batches/${id}`, { sizingLengthM: null });
   const rl = (await w.api('get', '/sizing/receipts')).body;
   expect(rl.data.map((x) => [x.receiptNo, x.batch.setNo, x.beams, x.lengthM, x.coneKg])).toEqual([[1, '12331', 2, 10430, 152]]);
   expect((await w.api('get', '/sizing/batches?search=12331')).body.total).toBe(1);

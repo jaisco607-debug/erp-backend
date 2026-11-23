@@ -139,6 +139,8 @@ async function release(req, lockId) {
 }
 
 async function current(req, { resourceType, resourceId }) {
+  // the service locks of a company are the super admin's: nobody else may look at another company's id
+  if (resourceType === 'company_services' && req.user.userType !== 'SUPER_ADMIN') throw AppError.forbidden('Only the super admin can see this lock');
   const l = await liveLock(scopeOf(req, resourceType, resourceId), resourceType, resourceId);
   return l ? { lockId: l.id, holder: { id: l.userId, name: l.holderName }, acquiredAt: l.acquiredAt, expiresAt: l.expiresAt } : null;
 }

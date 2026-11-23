@@ -17,7 +17,7 @@ const notWhileCompanyOpened = (req, res, next) => (req.impersonator
 const router = express.Router();
 
 router.post('/login', loginLimiter, validate(v.login), c.login);
-router.post('/refresh', loginLimiter, validate(v.refresh), c.refresh);
+router.post('/refresh', validate(v.refresh), c.refresh);
 router.post('/logout', validate(v.refresh), c.logout);
 router.post('/logout-all', authenticate, notWhileCompanyOpened, c.logoutAll);
 router.get('/me', authenticate, c.me);

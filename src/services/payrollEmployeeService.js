@@ -230,6 +230,11 @@ async function update(req, id, changes) {
     const before = json(await loadRow(companyId, id, transaction));
     since = ['shiftId', 'groupId', 'joiningDate'].some((k) => changes[k] !== undefined) ? before.joiningDate : null;
     const v = clean(changes);
+    // a payslip exists: the class and the joining date stay (else the same month could get a second payslip in another class)
+    if ((v.groupId !== undefined && v.groupId !== cur.groupId) || (v.joiningDate !== undefined && String(v.joiningDate).slice(0, 10) !== String(before.joiningDate).slice(0, 10))) {
+      const [slip] = await q('SELECT 1 AS x FROM payroll_slips WHERE "employeeId" = :id LIMIT 1', { id }, transaction);
+      if (slip) throw AppError.rule('HAS_PAYSLIPS', 'This employee already has payslips: the class and the joining date cannot be changed');
+    }
     const merged = { ...cur, ...v };
     await checkRefs(companyId, merged, new Set(Object.keys(v)), transaction);
     const bankChanged = ['bankId', 'accountNo', 'paymentMethod'].some((k) => v[k] !== undefined);

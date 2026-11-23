@@ -317,6 +317,7 @@ async function setApproved(req, id, approved) {
   return sequelize.transaction(async (transaction) => {
     const e = await findOr404(req, id, transaction, true);
     if (approved && !e.isActive) throw AppError.rule('INWARD_INACTIVE', 'Switch the entry on before approving it');
+    if (approved && e.rate == null) throw AppError.rule('RATE_REQUIRED', 'Enter the rate before approving the entry', { field: 'rate' });
     if (!approved && e.outwardMeters > 0) throw AppError.rule('INWARD_IN_USE', `${e.outwardMeters} m have already gone out of this entry`);
     if (!approved) {
       const inv = (await invoicesOf([e.id], transaction)).get(e.id);

@@ -22,6 +22,8 @@ const audit = require('./auditService');
 const counters = require('./counterService');
 const { soLabel, parseCardSearch } = require('../utils/soLabel');
 const { companyServices, userServices } = require('./accessService');
+const jobThaans = require('./jobThaanService');
+const machines = require('./machineService');
 
 const JOB = 'job_no';
 const DEPARTMENT_KINDS = ['PROCESS', 'FOLDING', 'PACKING'];
@@ -111,7 +113,7 @@ async function available(req, fromDepartmentId, transaction) {
   const rows = await sequelize.query(`
     SELECT ji.id AS "jobItemId", j.id AS "jobId", j."jobNo", j."jobDate", COALESCE(ic.name, co.name) AS "colour",
            sc.id AS "soCardId", sc."cardNo", sc."idNo", sc."isGreyReturn", cu.id AS "customerId", cu.code AS "customerCode", cu.name AS "customerName",
-           q.name AS "quality", gl."lotNo", gl."isReprocess", ji.meters, g.id AS "groupId", g.code AS "groupCode", g.label AS "groupLabel"
+           q.name AS "quality", gl."lotNo", gl."isReprocess", COALESCE((SELECT SUM(tt.meters) FROM job_item_thaans tt WHERE tt."jobItemId" = ji.id), ji.meters) AS meters, g.id AS "groupId", g.code AS "groupCode", g.label AS "groupLabel"
     FROM job_items ji
     JOIN jobs j ON j.id = ji."jobId"
     JOIN so_cards sc ON sc.id = ji."soCardId"
@@ -324,7 +326,9 @@ function json(j) {
   };
 }
 
-const load = async (id, transaction) => json(await Job.findByPk(id, { include, transaction }));
+/** The job with the thaans of the departments and its machine runs (Process Management > Machines). */
+const withMachines = async (x, transaction) => { await jobThaans.overlay([x], transaction); x.machines = (await machines.runsOfJobs([x.id], transaction)).get(x.id) || []; return x; };
+const load = async (id, transaction) => withMachines(json(await Job.findByPk(id, { include, transaction })), transaction);
 
 /**
  * Chemicals of these jobs, for the list columns. Counts what left the Chemical Store
@@ -562,6 +566,10 @@ async function list(req, q) {
     const canEditOperator = !['IN_WAY', 'QUEUE', 'REJECTED'].includes(j.status) && !x.items.some((i) => i.sentTo);
     return withTotals({ ...x, ...trailCols(x, trails.get(j.id) || []), canEditOperator, firstJobNos: firstNos(x.items), ...chemicalCols(chem.get(j.id), j.totalMeters), ...require('./yarnCostService').yarnCols(yarnUses.get(j.id), j.totalMeters, null), ...flow }, j.totalMeters);
   });
+  // the thaans the departments made, and the machines the jobs run on
+  await jobThaans.overlay(jobs);
+  const runs = await machines.runsOfJobs(jobs.map((j) => j.id));
+  for (const j of jobs) j.machines = runs.get(j.id) || [];
   if (q.view !== 'so') return { data: jobs, page: q.page, limit: q.limit, total: count };
 
   // SO Wise: one row per SO card inside each job, meters added up per card
@@ -581,7 +589,8 @@ async function list(req, q) {
       data.push(withTotals({
         ...flowCols(r.parts, next, prev, prevYarn),
         firstJobNos: firstNos(r.parts),
-        thaans: r.thaans, thaanCount: r.thaans.length, itemIds: r.parts.map((i) => i.id),
+        thaans: r.thaans, thaanCount: r.thaans.length, itemIds: r.parts.map((i) => i.id), machines: j.machines,
+        inputThaanCount: r.parts.reduce((t, i) => t + i.inputThaanCount, 0), outputThaans: r.parts.flatMap((i) => i.outputThaans), outputThaanCount: r.parts.reduce((t, i) => t + i.outputThaanCount, 0), outputMeters: round(r.parts.reduce((t, i) => t + i.outputMeters, 0)), thaansRecorded: r.parts.some((i) => i.thaansRecorded),
         colourSetBy: r.colourSetBy, colourSetAt: r.colourSetAt,
         isGreyReturn: Boolean(r.soCard.isGreyReturn),
         jobId: j.id, jobNo: j.jobNo, jobDate: j.jobDate, soCard: r.soCard, customer: r.customer, quality: r.quality,
@@ -658,6 +667,9 @@ async function create(req, { fromDepartmentId, departmentId, jobDate, colourId, 
     if (colourId && from && !COLOUR_DEPARTMENTS.includes(from.code)) throw AppError.rule('COLOUR_ONLY_DYEING', 'Only Dyeing gives the colour');
     if (colourId && !(await Colour.findOne({ where: { id: colourId, companyId }, transaction }))) throw AppError.rule('UNKNOWN_COLOUR', 'Colour not found');
 
+    // the same row twice would be compared with the same unchanged left-over and send it twice
+    const rowKeys = items.map((i) => i.soCardLotId || i.jobItemId);
+    if (new Set(rowKeys).size !== rowKeys.length) throw AppError.rule('DUPLICATE_ROW', 'The same row is in the list twice: send it once');
     // lock what is being sent, then read what is left
     const lines = [];
     if (!fromDepartmentId) {
@@ -822,6 +834,7 @@ async function setStatus(req, id, status, reason) {
       if (resent.length) throw AppError.rule('ALREADY_RESENT', 'The sender has already sent this cloth again in another job');
     }
     if (job.status === status) return load(id, transaction);
+    if (status === 'COMPLETE' && (await machines.hasOpenRun(id, transaction))) throw AppError.rule('MACHINE_STILL_RUNNING', 'A machine is still running this job: finish its run (enter the cloth made) before completing the job');
     const sentOn = await sequelize.query(`
       SELECT 1 FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN job_items ji ON ji.id = nx."sourceJobItemId"
       WHERE ji."jobId" = :id AND nj.status <> 'REJECTED' LIMIT 1`, { replacements: { id }, type: QueryTypes.SELECT, transaction });

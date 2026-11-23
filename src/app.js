@@ -16,6 +16,8 @@ const app = express();
 // We run behind one proxy (nginx / load balancer): trust it for the real client IP.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// the real client address (Cloudflare header) for the rate limits and the audit log: req.ip
+app.use(require('./middlewares/clientIp').middleware);
 
 app.use(requestLogger); // 1. request id + one log line per request
 app.use(helmet()); // 2. browser security headers

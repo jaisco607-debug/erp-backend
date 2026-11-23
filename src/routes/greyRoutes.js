@@ -21,20 +21,20 @@ const view = requireService(SERVICE, 'VIEW');
 const full = requireService(SERVICE, 'FULL');
 const admin = requireUserType('CLIENT_ADMIN');
 
-function masterRouter(rules, ctl) {
+function masterRouter(rules, ctl, beforeId) {
   const r = express.Router();
   r.use(authenticate);
   r.get('/', view, validate(rules.list), ctl.list);
   r.post('/', full, validate(rules.create), ctl.create);
+  if (beforeId) beforeId(r); // fixed paths such as /options must come before '/:id'
   r.get('/:id', view, validate(rules.get), ctl.get);
   r.patch('/:id', full, validate(rules.update), ctl.update);
   r.delete('/:id', full, validate(rules.get), ctl.remove);
   return r;
 }
 
-const customers = masterRouter(v.customer, c.customer);
 // dropdown values of the customer form (same lists as the vendor form)
-customers.get('/options', view, (req, res) => res.json({ statuses: v.CUSTOMER_STATUS, types: v.CUSTOMER_TYPES, payments: v.CUSTOMER_PAYMENT, provinces: ['Sindh', 'Punjab', 'Khyber Pakhtunkhwa', 'Balochistan', 'Islamabad', 'Gilgit-Baltistan', 'Azad Kashmir'] }));
+const customers = masterRouter(v.customer, c.customer, (r) => r.get('/options', view, (req, res) => res.json({ statuses: v.CUSTOMER_STATUS, types: v.CUSTOMER_TYPES, payments: v.CUSTOMER_PAYMENT, provinces: ['Sindh', 'Punjab', 'Khyber Pakhtunkhwa', 'Balochistan', 'Islamabad', 'Gilgit-Baltistan', 'Azad Kashmir'] })));
 
 const lots = express.Router();
 lots.use(authenticate);

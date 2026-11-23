@@ -7,6 +7,9 @@ const authenticate = require('../middlewares/authenticate');
 const requireService = require('../middlewares/requireService');
 const { Joi, uuidParam } = require('../validators/common');
 const svc = require('../services/weavingProductionService');
+const billing = require('../services/weavingBillingService');
+const efficiency = require('../services/weavingEfficiencyService');
+const billSvc = require('../services/weavingBillService');
 const { ymdDate } = require('../utils/dates');
 
 const router = express.Router();
@@ -36,6 +39,29 @@ router.post('/units/import', full, validate({ body: uploadSchema }), async (req,
   const { departmentId, ...input } = req.body;
   res.json(await svc.importUnits(req, { departmentId, input }));
 });
+
+// ---- weaver wise & attendance billing (a 15 day period), the loom policy ----
+const sendFile = (res, f, type) => { res.set({ 'Content-Type': type, 'Content-Length': String(f.buffer.length), 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename="${f.fileName}"` }); res.end(f.buffer); };
+const periodQ = Joi.object({ ...dept, from: ymd.required() });
+router.get('/billing/weavers', view, validate({ query: periodQ }), async (req, res) => res.json(await billing.sheet(req, req.validatedQuery)));
+router.get('/billing/weavers.pdf', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await billing.pdf(req, req.validatedQuery), 'application/pdf'));
+router.get('/billing/weavers.xlsx', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await billing.xlsx(req, req.validatedQuery), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+router.get('/billing/weavers/:employeeId', view, validate({ params: Joi.object({ employeeId: id.required() }), query: periodQ }), async (req, res) => res.json(await billing.attendance(req, { ...req.validatedQuery, employeeId: req.params.employeeId })));
+// ---- production bill / wages ----
+router.get('/bill', view, validate({ query: periodQ }), async (req, res) => res.json(await billSvc.bill(req, req.validatedQuery)));
+router.get('/bill.pdf', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await billSvc.pdf(req, req.validatedQuery), 'application/pdf'));
+router.get('/bill.xlsx', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await billSvc.xlsx(req, req.validatedQuery), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+router.get('/bill/stoppage', view, validate({ query: periodQ }), async (req, res) => res.json(await billSvc.stoppageDetail(req, req.validatedQuery)));
+router.get('/bill/stoppage.xlsx', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await billSvc.stoppageXlsx(req, req.validatedQuery), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+
+// ---- depart wise & efficiency report ----
+router.get('/efficiency', view, validate({ query: periodQ }), async (req, res) => res.json(await efficiency.report(req, req.validatedQuery)));
+router.get('/efficiency.pdf', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await efficiency.pdf(req, req.validatedQuery), 'application/pdf'));
+router.get('/efficiency.xlsx', view, validate({ query: periodQ }), async (req, res) => sendFile(res, await efficiency.xlsx(req, req.validatedQuery), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+router.get('/efficiency/basis', view, validate({ query: Joi.object({ ...dept }) }), async (req, res) => res.json(await efficiency.getBasis(req, req.validatedQuery)));
+router.put('/efficiency/basis', full, validate({ body: Joi.object({ ...dept, blocks: Joi.array().max(30).items(Joi.object({ from: Joi.number().integer().min(0).max(1000000).required(), to: Joi.number().integer().min(0).max(1000000).required() })), minRunUnits: Joi.number().precision(2).min(0).max(99999), defaultRpm: Joi.number().integer().min(1).max(5000) }) }), async (req, res) => res.json(await efficiency.setBasis(req, req.body)));
+router.get('/policy', view, validate({ query: Joi.object({ ...dept }) }), async (req, res) => res.json(await billing.getPolicy(req, req.validatedQuery)));
+router.put('/policy', full, validate({ body: Joi.object({ ...dept, ranges: Joi.array().max(20).items(Joi.object({ from: Joi.number().integer().min(0).max(1000000).required(), to: Joi.number().integer().min(0).max(1000000).required(), loomsPerWeaver: Joi.number().integer().min(1).max(50).required() })), otherLooms: Joi.number().integer().min(1).max(50), stopBelowUnits: Joi.number().precision(2).min(0).max(99999), ratePerDay: Joi.number().precision(4).min(0).max(1000000).allow(null), rates: Joi.object().pattern(Joi.string().max(20), Joi.number().precision(4).min(0).max(1000000).allow(null)), ratesFrom: ymd }) }), async (req, res) => res.json(await billing.setPolicy(req, req.body)));
 
 // ---- the weavers (attendance of the looms) ----
 router.get('/weavers', view, validate({ query: Joi.object({ ...dept, date: ymd.required() }) }), async (req, res) => res.json(await svc.weavers(req, req.validatedQuery)));

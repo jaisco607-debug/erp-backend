@@ -9,13 +9,13 @@ const q = (sql, replacements, transaction) => sequelize.query(sql, { replacement
 const exec = (sql, replacements, transaction) => sequelize.query(sql, { replacements, transaction });
 const clean = (s) => String(s).trim().replace(/\s+/g, ' ');
 
-const SQL = `SELECT l.id, l.code, l."loomNo", l."isActive", l."departmentId", l."createdAt", d.code AS "deptCode", d.name AS "deptName",
+const SQL = `SELECT l.id, l.code, l."loomNo", l."loomType", l."isActive", l."departmentId", l."createdAt", d.code AS "deptCode", d.name AS "deptName",
     (SELECT COUNT(*)::int FROM loom_entry_beams eb JOIN loom_entries e ON e.id = eb."entryId" WHERE e."loomId" = l.id AND e.status = 'ACTIVE') AS "beamsOnLoom",
     (SELECT COALESCE(array_agg(e."kId" ORDER BY e."kId"), '{}') FROM loom_entries e WHERE e."loomId" = l.id AND e.status = 'ACTIVE') AS "activeKIds"
   FROM looms l JOIN weaving_departments d ON d.id = l."departmentId"`;
 
 const json = (r) => ({
-  id: r.id, code: r.code, loomNo: r.loomNo, isActive: r.isActive, departmentId: r.departmentId, department: { id: r.departmentId, code: r.deptCode, name: r.deptName },
+  id: r.id, code: r.code, loomNo: r.loomNo, loomType: r.loomType || null, isActive: r.isActive, departmentId: r.departmentId, department: { id: r.departmentId, code: r.deptCode, name: r.deptName },
   // is a beam entry running on it: the loom is "running", else "idle"
   beamsOnLoom: r.beamsOnLoom, running: r.beamsOnLoom > 0, activeKIds: r.activeKIds, canTakeBeams: r.isActive && r.beamsOnLoom < 2, createdAt: r.createdAt,
 });
@@ -60,8 +60,8 @@ async function create(req, data) {
     await checkDepartment(companyId, data.departmentId, null, transaction);
     const [{ next }] = await q('SELECT COALESCE(MAX(code), 0) + 1 AS next FROM looms WHERE "companyId" = :companyId', { companyId }, transaction);
     const id = crypto.randomUUID();
-    await exec('INSERT INTO looms (id, "companyId", code, "loomNo", "departmentId", "isActive", "createdById") VALUES (:id, :companyId, :code, :loomNo, :departmentId, :isActive, :userId)',
-      { id, companyId, code: Number(next), loomNo, departmentId: data.departmentId, isActive: data.isActive !== false, userId: req.user.id }, transaction);
+    await exec('INSERT INTO looms (id, "companyId", code, "loomNo", "loomType", "departmentId", "isActive", "createdById") VALUES (:id, :companyId, :code, :loomNo, :loomType, :departmentId, :isActive, :userId)',
+      { id, companyId, code: Number(next), loomNo, loomType: data.loomType ? clean(data.loomType) : null, departmentId: data.departmentId, isActive: data.isActive !== false, userId: req.user.id }, transaction);
     const out = json(await load(companyId, id, transaction));
     await audit.log(req, { action: 'LOOM_CREATED', entityType: 'Loom', entityId: id, after: { loomNo: out.loomNo, department: out.department.name } }, { transaction });
     return out;
@@ -76,6 +76,7 @@ async function update(req, id, changes) {
     const before = json(row);
     const set = {};
     if (changes.loomNo !== undefined) { const loomNo = clean(changes.loomNo); await checkNo(companyId, loomNo, id, transaction); set.loomNo = loomNo; }
+    if (changes.loomType !== undefined) set.loomType = changes.loomType ? clean(changes.loomType) : null;
     if (changes.departmentId && changes.departmentId !== row.departmentId) { await checkDepartment(companyId, changes.departmentId, row.departmentId, transaction); set.departmentId = changes.departmentId; }
     if (changes.isActive !== undefined) {
       if (changes.isActive === false && row.beamsOnLoom > 0) throw AppError.rule('LOOM_RUNNING', 'Beams are running on this loom: cut it off before switching it off', { beamsOnLoom: row.beamsOnLoom });
