@@ -104,8 +104,11 @@ async function rows(req, depId, extra, replacements, transaction) {
         .sort((a, b) => a.thaanNo - b.thaanNo);
       // the thaans the earlier departments made from this cloth (Process Management): Folding grades those; their id stands in `thaanId` (source DEPARTMENT)
       const deptThaans = lotItems.flatMap((i) => (chains.get(i.id) && chains.get(i.id).inputFull) || []);
+      // a second line of the same lot without thaans of its own is graded as one piece, so its cloth is not lost
+      const noThaanM = lotItems.filter((i) => !((chains.get(i.id) && chains.get(i.id).inputFull) || []).length).reduce((t, i) => t + num(i.meters), 0);
       const src = deptThaans.length
-        ? deptThaans.map((t) => ({ thaanId: t.id, thaanNo: t.thaanNo, width: lotItems[0].width, received: num(t.meters), dept: true }))
+        ? [...deptThaans.map((t) => ({ thaanId: t.id, thaanNo: t.thaanNo, width: lotItems[0].width, received: num(t.meters), dept: true })),
+          ...(noThaanM > 0 ? [{ thaanId: null, thaanNo: null, width: lotItems[0].width, received: round(noThaanM) }] : [])]
         : lotThaans.length
           ? lotThaans.map((t) => ({ thaanId: t.thaanId, thaanNo: t.thaanNo, width: t.width, received: num(t.meters) }))
           : [{ thaanId: null, thaanNo: null, width: lotItems[0].width, received: num(lotItems.reduce((t, i) => t + i.meters, 0)) }];

@@ -373,7 +373,7 @@ router.patch('/:code/machine-runs/:runId', validate({ params: runKey, body: Joi.
 router.delete('/:code/machine-runs/:runId', validate({ params: runKey }), async (req, res) => res.json(await machineSvc.removeRun(req, req.params.code, req.params.runId)));
 router.get('/:code/jobs/:jobId/thaans', validate({ params: jobKey }), async (req, res) => res.json(await jobThaanSvc.get(req, req.params.code, req.params.jobId)));
 router.put('/:code/jobs/:jobId/thaans', validate({ params: jobKey, body: Joi.object({
-  items: Joi.array().min(1).max(200).items(Joi.object({ jobItemId: Joi.string().guid().required(), thaans: Joi.array().max(500).items(Joi.alternatives(Joi.number().precision(2).positive().max(99999999), Joi.object({ meters: Joi.number().precision(2).positive().max(99999999).required() }))).required() })).required(),
+  items: Joi.array().min(1).max(50).unique('jobItemId').items(Joi.object({ jobItemId: Joi.string().guid().required(), thaans: Joi.array().max(300).items(Joi.alternatives(Joi.number().precision(2).positive().max(99999999), Joi.object({ meters: Joi.number().precision(2).positive().max(99999999).required() }))).required() })).required(),
 }) }), async (req, res) => res.json(await jobThaanSvc.set(req, req.params.code, req.params.jobId, req.body)));
 
 module.exports = router;

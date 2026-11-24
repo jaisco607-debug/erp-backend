@@ -834,6 +834,7 @@ async function setStatus(req, id, status, reason) {
       if (resent.length) throw AppError.rule('ALREADY_RESENT', 'The sender has already sent this cloth again in another job');
     }
     if (job.status === status) return load(id, transaction);
+    if (['REJECTED', 'QUEUE', 'PENDING'].includes(status) && (await machines.hasOpenRun(id, transaction))) throw AppError.rule('MACHINE_STILL_RUNNING', 'A machine is still running this job: finish or remove its run first');
     if (status === 'COMPLETE' && (await machines.hasOpenRun(id, transaction))) throw AppError.rule('MACHINE_STILL_RUNNING', 'A machine is still running this job: finish its run (enter the cloth made) before completing the job');
     const sentOn = await sequelize.query(`
       SELECT 1 FROM job_items nx JOIN jobs nj ON nj.id = nx."jobId" JOIN job_items ji ON ji.id = nx."sourceJobItemId"
@@ -1045,6 +1046,7 @@ async function returnToSoCard(req, departmentId, { jobId, jobItemIds, soCardIds,
       if (job.departmentId !== departmentId) throw AppError.rule('JOB_WRONG_DEPARTMENT', `Job# ${job.jobNo} was not sent to this department`);
       if (job.fromDepartmentId) throw AppError.rule('NOT_FROM_SO_CARD', `Job# ${job.jobNo} came from another department, not from an SO card: reject it instead`, { jobNo: job.jobNo });
       if (!RETURNABLE.includes(job.status)) throw AppError.rule('CANNOT_RETURN', `Job# ${job.jobNo}: cloth already in processing cannot be returned to the SO card`, { jobNo: job.jobNo });
+      if (await machines.hasOpenRun(job.id, transaction)) throw AppError.rule('MACHINE_STILL_RUNNING', `Job# ${job.jobNo}: a machine is still running this job, finish or remove its run first`, { jobNo: job.jobNo });
       if ((await sequelize.query('SELECT 1 FROM chemical_requests WHERE "jobId" = :id LIMIT 1', { replacements: { id: job.id }, type: QueryTypes.SELECT, transaction })).length) {
         throw AppError.rule('CANNOT_RETURN', `Job# ${job.jobNo}: chemicals were already requested for this job, so it cannot be returned`, { jobNo: job.jobNo });
       }

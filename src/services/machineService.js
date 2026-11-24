@@ -342,6 +342,9 @@ async function updateRun(req, code, runId, changes) {
   const jobId = await sequelize.transaction(async (transaction) => {
     const d = await deptByCode(req, code, transaction);
     await need(req, d, 'FULL', transaction);
+    // the job row first (as assign does), then the run: two edits of the same job cannot both pass the meters check
+    const [peek] = await q('SELECT "jobId" FROM machine_runs WHERE id = :runId AND "companyId" = :companyId', { runId, companyId: req.user.companyId }, transaction);
+    if (peek) await q('SELECT id FROM jobs WHERE id = :jobId AND "companyId" = :companyId FOR UPDATE', { jobId: peek.jobId, companyId: req.user.companyId }, transaction);
     const r = await runOr404(req, d, runId, transaction);
     if (await sentOn(r.jobId, transaction)) throw AppError.rule('ALREADY_SENT_ON', 'This cloth has already been sent on to the next department');
     const set = {};
