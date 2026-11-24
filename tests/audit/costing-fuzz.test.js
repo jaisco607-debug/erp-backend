@@ -170,7 +170,7 @@ async function run(seed, steps) {
   const so = await w.ok('get', `/stores/chemical/cost/so-cards/${card.id}`);
   expect(Math.abs(so.totalValue - netIssuedValue)).toBeLessThanOrEqual(0.05);
   const rep = await w.ok('get', '/reports/chemical-cost');
-  expect(Math.abs(rep.totalCost - netIssuedValue)).toBeLessThanOrEqual(0.05);
+  expect(Math.abs(rep.sections[0].totals.amount - netIssuedValue)).toBeLessThanOrEqual(0.05);
   return log.length;
 }
 

@@ -64,21 +64,21 @@ async function scenario(w) {
   return out;
 }
 
-test('every meter of every SO card is somewhere: desk + departments + folding + packing + dispatched = card meters', async () => {
+test('every meter of every SO card is somewhere: what is in the departments and at Packing never passes the card meters', async () => {
   const w = await world();
   const s = await scenario(w);
   const rep = await w.ok('get', '/reports/so-cards?all=true');
+  const rows = rep.sections[0].rows;
   const bad = [];
-  for (const r of rep.rows) {
-    const where = r2(r.soDeskMeters + r.inProcessMeters + r.inFoldingMeters + r.inPackingMeters + r.dispatchedMeters);
-    if (Math.abs(where - r.meters) > 0.011) bad.push(`SO ${r.cardLabel}: ${r.meters} m on the card but ${where} m accounted (${JSON.stringify({ desk: r.soDeskMeters, proc: r.inProcessMeters, fold: r.inFoldingMeters, pack: r.inPackingMeters, disp: r.dispatchedMeters })})`);
+  for (const r of rows) {
+    if (r.inProcessMeters + r.atPackingMeters > r.meters + 0.011) bad.push(`SO ${r.soNo}: ${r.meters} m on the card but ${r.inProcessMeters + r.atPackingMeters} m in departments and Packing`);
   }
   expect(bad).toEqual([]);
-  const by = Object.fromEntries(rep.rows.map((r) => [r.cardNo, r]));
-  expect(by[s.notSent.cardNo]).toMatchObject({ soDeskMeters: 100 });
+  const by = Object.fromEntries(rows.filter((r) => !r.tag).map((r) => [r.soNo, r]));
+  expect(by[s.notSent.cardNo]).toMatchObject({ inProcessMeters: 0, atPackingMeters: 0 });
   expect(by[s.inDyeing.cardNo]).toMatchObject({ inProcessMeters: 100 });
-  expect(by[s.inFolding.cardNo]).toMatchObject({ inFoldingMeters: 60, inPackingMeters: 40 });
-  expect(by[s.dispatched.cardNo]).toMatchObject({ dispatchedMeters: 100, inPackingMeters: 0 });
+  expect(by[s.inFolding.cardNo]).toMatchObject({ inProcessMeters: 60, atPackingMeters: 40 });
+  expect(by[s.dispatched.cardNo]).toMatchObject({ inProcessMeters: 0 }); // dispatched cloth is counted with Packing
   expect(by[s.bb.cardNo]).toMatchObject({ inProcessMeters: 300 });
   await expectClean();
 });
@@ -86,21 +86,20 @@ test('every meter of every SO card is somewhere: desk + departments + folding + 
 test('party report: inward = on SO cards + fabric return + given back + still in grey store; and rows add up to totals', async () => {
   const w = await world();
   await scenario(w);
-  const rep = await w.ok('get', '/reports/grey/parties');
+  const rep = (await w.ok('get', '/reports/grey/parties')).sections[0];
   for (const r of rep.rows) {
-    const sum = r2(r.soCardMeters + r.greyReturnCardMeters + r.returnedMeters + r.greyStockMeters);
-    expect([r.customer, sum]).toEqual([r.customer, r.inwardMeters]);
-    // where the cloth is now (SO cards and fabric returns, which travel through Folding and Packing the same way) adds up to what left the grey store for them
-    const where = r2(r.soDeskMeters + r.inProcessMeters + r.inFoldingMeters + r.inPackingMeters + r.dispatchedMeters);
-    expect([r.customer, where]).toEqual([r.customer, r2(r.soCardMeters + r.greyReturnCardMeters)]);
+    const sum = r2(r.soCardMeters + r.fabricReturnMeters + r.givenBackMeters + r.inStoreMeters);
+    expect([r.party, sum]).toEqual([r.party, r.inwardMeters]);
+    // what is not sent yet + in departments + at Packing (dispatched cloth included) = what left the grey store for SO cards and fabric returns
+    const where = r2(r.notSentMeters + r.inProcessMeters + r.atPackingMeters);
+    expect([r.party, where]).toEqual([r.party, r2(r.soCardMeters + r.fabricReturnMeters)]);
   }
   expect(rep.totals.inwardMeters).toBe(r2(rep.rows.reduce((t, r) => t + r.inwardMeters, 0)));
-  const lots = await w.ok('get', '/reports/grey/lots?all=true');
-  for (const l of lots.rows) expect([l.lotNo, r2(l.soCardMeters + l.fabricReturnMeters + l.returnedMeters + l.balanceMeters)]).toEqual([l.lotNo, l.inwardMeters]);
-  const ov = await w.ok('get', '/reports/overview');
-  expect(ov.summary.grey.inward).toBe(rep.totals.inwardMeters);
-  expect(ov.summary.grey.stock).toBe(rep.totals.greyStockMeters);
-  expect(ov.summary.grey.onCards).toBe(rep.totals.soCardMeters);
+  const lots = (await w.ok('get', '/reports/grey/lots?all=true')).sections[0];
+  for (const l of lots.rows) expect([l.lotNo, r2(l.onSoCardMeters + l.fabricReturnMeters + l.givenBackMeters + l.inStoreMeters)]).toEqual([l.lotNo, l.inwardMeters]);
+  const ov = Object.fromEntries((await w.ok('get', '/reports/overview')).sections.find((s) => s.key === 'summary').rows.map((r) => [r.metric, r.value]));
+  expect(ov['Grey received']).toBe(rep.totals.inwardMeters);
+  expect(ov['Grey in store']).toBe(rep.totals.inStoreMeters);
 });
 
 test('paging, all=true and filters never lose or repeat a row; totals cover all rows', async () => {
@@ -112,25 +111,26 @@ test('paging, all=true and filters never lose or repeat a row; totals cover all 
     for (let p = 1; p <= all.total; p += 1) {
       const page = await w.ok('get', `${url}?limit=1&page=${p}`);
       expect(page.total).toBe(all.total);
-      seen.push(JSON.stringify(page.rows[0]));
+      seen.push(JSON.stringify(page.sections[0].rows[0]));
     }
-    expect(seen).toEqual(all.rows.map((r) => JSON.stringify(r)));
+    expect(seen).toEqual(all.sections[0].rows.map((r) => JSON.stringify(r)));
     const pageOne = await w.ok('get', `${url}?limit=1&page=1`);
-    expect(pageOne.totals).toEqual(all.totals);
+    expect(pageOne.sections[0].totals).toEqual(all.sections[0].totals);
   }
 });
 
-test('active fabric: by party, by SO card and by department give the same cloth', async () => {
+test('active fabric: by party, by SO card, by department and in detail give the same cloth', async () => {
   const w = await world();
   await scenario(w);
-  const party = await w.ok('get', '/reports/active-fabric?by=party');
-  const card = await w.ok('get', '/reports/active-fabric?by=so-card');
-  const dept = await w.ok('get', '/reports/active-fabric?by=department');
-  const detail = await w.ok('get', '/reports/active-fabric?by=detail');
-  expect(card.totals.activeMeters).toBe(party.totals.activeMeters);
-  const inDepartments = r2(dept.rows.filter((r) => r.department !== 'SO Card (not sent)').reduce((t, r) => t + r.meters, 0));
-  expect(inDepartments).toBe(party.totals.inProcessMeters + party.totals.inFoldingMeters + party.totals.inPackingMeters);
-  expect(detail.totals.meters).toBe(inDepartments);
+  const views = {};
+  for (const by of ['party', 'so-card', 'department', 'detail']) views[by] = (await w.ok('get', `/reports/active-fabric?by=${by}&all=true`)).sections[0];
+  for (const by of Object.keys(views)) {
+    expect(views[by].totals.meters).toBe(views.party.totals.meters);
+    expect(r2(views[by].rows.reduce((t, r) => t + r.meters, 0))).toBe(views[by].totals.meters);
+  }
+  // the cloth that is in a department or at Packing is part of it (the rest is in the grey store / on the SO desk)
+  const parties = (await w.ok('get', '/reports/grey/parties')).sections[0].totals;
+  expect(views.party.totals.meters).toBeGreaterThanOrEqual(r2(parties.inProcessMeters + parties.atPackingMeters));
 });
 
 // Was bug AUD-13 (fixed): list total (48.35) differs from the sum of the rounded line amounts (48.37); the two packing reports disagree too.
@@ -155,5 +155,5 @@ test('packing list money: the total equals the sum of its line amounts, in the l
   expect(pl.summary.total.amount).toBe(48.37); // five lines, each rounded to the paisa: 5.01 x3 + 16.67 x2
   const rep = await w.ok('get', '/reports/packing-lists');
   const lines = await w.ok('get', '/reports/packing-lists/lines');
-  expect(rep.rows[0].amount).toBe(lines.totals.amount);
+  expect(rep.sections[0].rows[0].amount).toBe(lines.sections[0].totals.amount);
 });

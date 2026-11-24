@@ -17,6 +17,8 @@ const RULES = [
   { key: 'SYSTEM_ACCOUNT_MISSING', severity: 'WARNING', label: 'An account the software needs does not exist yet' },
   { key: 'EMPTY_FOLDER', severity: 'INFO', label: 'A folder with nothing inside it' },
 ];
+// accounts of payroll and sizing: no template has them, the software makes each one by itself with the first voucher / invoice that needs it: not a problem to warn about
+const MADE_ON_FIRST_USE = new Set(['SIZING_CHARGES', 'EMPLOYEE_LOANS', 'EMPLOYEE_ADVANCES', 'SALARY_EXPENSE', 'SALARIES_PAYABLE', 'EOBI_PAYABLE', 'SALARY_TAX_PAYABLE', 'EMPLOYEE_DEDUCTIONS', 'EOBI_EMPLOYER_EXPENSE']);
 const severity = (key) => RULES.find((r) => r.key === key).severity;
 
 async function list(req) {
@@ -58,7 +60,7 @@ async function list(req) {
   // the accounts the software relies on: only worth saying once the chart has something in it
   if (ctx.rows.length) {
     for (const [key, v] of Object.entries(catalog.SYSTEM_KEYS)) {
-      if (ctx.rows.some((r) => r.systemKey === key)) continue;
+      if (ctx.rows.some((r) => r.systemKey === key) || MADE_ON_FIRST_USE.has(key)) continue;
       issues.push({
         accountId: null, ruleKey: 'SYSTEM_ACCOUNT_MISSING', severity: severity('SYSTEM_ACCOUNT_MISSING'),
         message: `There is no "${v.label}" account (${key}). It is made by a template, or when the first invoice needs it`,

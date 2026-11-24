@@ -34,16 +34,15 @@ test('B7: GET /customers/options answers', async () => {
   expect(r.body.provinces).toContain('Sindh');
 });
 
-test('B6: a customer / quality that lots use cannot be deleted; an unused one can', async () => {
+test('B6: a customer with an invoice or voucher cannot be deleted (lots do not stop it, old lots keep the name); a quality can be deleted', async () => {
   const t = await setup();
   const cu = (await request(app).post('/api/v1/customers').set(t.auth).send({ code: 130, name: 'AZ Textiles' })).body;
   const cu2 = (await request(app).post('/api/v1/customers').set(t.auth).send({ code: 131, name: 'Unused' })).body;
   const ql = (await request(app).post('/api/v1/qualities').set(t.auth).send({ name: 'SHEETING' })).body;
   await request(app).post('/api/v1/grey-lots').set(t.auth).send({ inwardDate: '2026-10-10', customerId: cu.id, qualityId: ql.id, inwardMeters: 100, pieces: 1 });
-  const d1 = await request(app).delete(`/api/v1/customers/${cu.id}`).set(t.auth);
-  expect(d1.status).toBe(422);
-  expect(d1.body.error.code).toBe('IN_USE');
-  expect((await request(app).delete(`/api/v1/qualities/${ql.id}`).set(t.auth)).body.error.code).toBe('IN_USE');
+  // lots do not stop the delete: the customer / quality is hidden and the old lot keeps its name
+  expect((await request(app).delete(`/api/v1/customers/${cu.id}`).set(t.auth)).status).toBe(204);
+  expect((await request(app).delete(`/api/v1/qualities/${ql.id}`).set(t.auth)).status).toBe(204);
   expect((await request(app).delete(`/api/v1/customers/${cu2.id}`).set(t.auth)).status).toBe(204);
 });
 

@@ -724,11 +724,12 @@ async function packingLists(req, f) {
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'A') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "aMeters",
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'B') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "bMeters",
       COALESCE((SELECT SUM(l.meters) FILTER (WHERE l.grade = 'CP') FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "cpMeters",
+      COALESCE((SELECT SUM(ROUND(l.meters::numeric * (CASE l.grade WHEN 'A' THEN p."rateA" WHEN 'B' THEN p."rateB" ELSE p."rateCP" END)::numeric, 2)) FROM packing_list_lines l WHERE l."packingListId" = p.id), 0)::float AS "lineAmount",
       (SELECT count(DISTINCT (l."greyLotId", COALESCE(l."thaanId"::text, l."deptThaanId"::text, l.id::text))) FROM packing_list_lines l WHERE l."packingListId" = p.id)::int AS thaans,
       (SELECT string_agg(DISTINCT gl."lotNo"::text, ', ') FROM packing_list_lines l JOIN grey_lots gl ON gl.id = l."greyLotId" WHERE l."packingListId" = p.id) AS lots
     ${head} WHERE ${where.join(' AND ')} ORDER BY p."listNo" DESC`, rep);
   const data = rows.map((r) => ({ listNo: r.listNo, listDate: r.listDate, statusText: r.status === 'FINAL' ? 'Final' : 'Draft', soNo: r.soNo, party: r.party, quality: r.quality, lots: r.lots, thaans: r.thaans,
-    aMeters: round(r.aMeters), bMeters: round(r.bMeters), cpMeters: round(r.cpMeters), meters: round(r.aMeters + r.bMeters + r.cpMeters), amount: round(r.aMeters * r.rateA + r.bMeters * r.rateB + r.cpMeters * r.rateCP),
+    aMeters: round(r.aMeters), bMeters: round(r.bMeters), cpMeters: round(r.cpMeters), meters: round(r.aMeters + r.bMeters + r.cpMeters), amount: round(r.lineAmount), // the sum of the line amounts, each rounded to the paisa (as on the packing list and its paper)
     gatePassNo: r.gatePassNo, vehicleNo: r.vehicleNo, tag: r.isGreyReturn ? TAG : '' }));
   const columns = [col('listNo', 'List#', 'number'), col('listDate', 'Date', 'date'), col('statusText', 'Status'), col('soNo', 'SO#', 'number'), col('party', 'Party'), col('quality', 'Quality'), col('lots', 'Lot#s', 'list'),
     col('thaans', 'Thaans', 'number'), col('aMeters', 'A (m)', 'number'), col('bMeters', 'B (m)', 'number'), col('cpMeters', 'CP (m)', 'number'), col('meters', 'Total (m)', 'number'), col('amount', 'Amount', 'money'),

@@ -13,7 +13,8 @@ test('Urdu and emoji names can be saved, shown and searched in every master and 
   await w.ok('post', '/colours', { name: 'نیلا' }, 201);
   await w.ok('post', '/vendors', { name: 'علی کیمیکل' }, 201);
   const red = await w.ok('post', '/stores/chemical/items', { name: 'سرخ رنگ 😀', unit: 'KG' }, 201);
-  await w.ok('post', '/grey-lots', { inwardDate: '2026-10-10', customerId: cu.id, qualityId: q.id, inwardMeters: 100, pieces: 1, remarks: 'خراب مال نہیں' }, 201);
+  const lot = await w.ok('post', '/grey-lots', { inwardDate: '2026-10-10', customerId: cu.id, qualityId: q.id, inwardMeters: 100, pieces: 1, remarks: 'خراب مال نہیں' }, 201);
+  await w.api('post', `/grey-lots/${lot.id}/approve`); // the reports count approved lots only
   const enc = encodeURIComponent;
   for (const [url, term] of [['/customers', 'علی'], ['/qualities', 'ٹوئل'], ['/colours', 'نیلا'], ['/vendors', 'کیمیکل'], ['/stores/chemical/items', '😀'], ['/grey-lots', 'ٹیکسٹائل'], ['/so-cards', 'علی'], ['/stores/chemical/stock', 'سرخ'], ['/reports/grey/lots', 'علی'], ['/reports/so-cards', 'علی'], ['/departments/DYEING/incoming', 'علی']]) {
     const res = await w.api('get', `${url}?search=${enc(term)}`);
@@ -26,7 +27,7 @@ test('Urdu and emoji names can be saved, shown and searched in every master and 
   expect((await w.api('post', '/customers', { name: urdu })).status).toBeGreaterThanOrEqual(400);
   // the reports carry the Urdu text unchanged
   const parties = await w.ok('get', '/reports/grey/parties');
-  expect(parties.rows[0].customer).toBe(urdu);
+  expect(parties.sections[0].rows[0].party).toBe(urdu);
   expect(red.name).toBe('سرخ رنگ 😀');
   await expectClean();
 });

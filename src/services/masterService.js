@@ -22,7 +22,10 @@ const moduleOf = (kind, req) => {
   return m === 'ALL' ? {} : { module: m };
 };
 
-const Model_TABLE = { customer: 'customers', quality: 'qualities' };
+// A deleted customer / quality only hides: old lots and SO cards keep showing its name (owner's rule). What must NOT lose its customer is the money side: invoices and vouchers
+// would return 404 and the balance could never be collected. Only those tables stop the delete ("switch it off instead").
+const Model_TABLE = { customer: 'customers' };
+const BLOCKING = new Set(['sales_invoices', 'receipt_vouchers', 'contra_vouchers']);
 const KINDS = {
   customer: { Model: Customer, json: customerJSON, entity: 'Customer', label: 'Customer', fields: ['name', 'phone', 'address', 'isActive', ...CUSTOMER_FIELDS, ...CREDIT_FIELDS] },
   quality: { Model: Quality, json: qualityJSON, entity: 'Quality', label: 'Quality', fields: ['name', 'isActive'] },
@@ -104,7 +107,7 @@ async function update(kind, req, id, changes) {
 async function usedBy(table, id, transaction) {
   const fks = await sequelize.query(`SELECT c.conrelid::regclass::text AS tbl, a.attname AS col FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
     WHERE c.contype = 'f' AND c.confrelid = :table::regclass`, { replacements: { table }, type: sequelize.QueryTypes.SELECT, transaction });
-  for (const f of fks) {
+  for (const f of fks.filter((x) => BLOCKING.has(x.tbl.replace(/"/g, '')))) {
     const [soft] = await sequelize.query("SELECT 1 AS x FROM information_schema.columns WHERE table_name = :t AND column_name = 'deletedAt'", { replacements: { t: f.tbl.replace(/"/g, '') }, type: sequelize.QueryTypes.SELECT, transaction });
     const [hit] = await sequelize.query(`SELECT 1 AS x FROM ${f.tbl} WHERE "${f.col}" = :id${soft ? ' AND "deletedAt" IS NULL' : ''} LIMIT 1`, { replacements: { id }, type: sequelize.QueryTypes.SELECT, transaction });
     if (hit) return f.tbl.replace(/"/g, '');

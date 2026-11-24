@@ -116,14 +116,13 @@ test('the cost of one request shared between SO cards adds up to the request, in
   const byJob = (await w.ok('get', '/stores/chemical/cost/jobs')).rows || (await w.ok('get', '/stores/chemical/cost/jobs')).data;
   expect(byJob[0].value).toBe(total);
   const rep = await w.ok('get', '/reports/chemical-cost');
-  expect(rep.totalCost).toBeCloseTo(total, 1);
-  expect(Math.abs(rep.totals.value - total)).toBeLessThanOrEqual(0.02);
+  expect(Math.abs(rep.sections[0].totals.amount - total)).toBeLessThanOrEqual(0.02);
   const so = await w.ok('get', '/reports/so-cards?all=true');
-  expect(Math.abs(so.totals.chemicalCost - total)).toBeLessThanOrEqual(0.02);
+  expect(Math.abs(so.sections[0].totals.chemicalCost - total)).toBeLessThanOrEqual(0.02);
   const ov = await w.ok('get', '/reports/overview');
-  expect(ov.summary.chemicalCost).toBeCloseTo(total, 1);
+  expect(ov.sections.find((s) => s.key === 'summary').rows.find((r) => r.metric === 'Chemical cost').value).toBeCloseTo(total, 1);
   const dept = await w.ok('get', '/reports/departments');
-  expect(Math.abs(dept.totals.chemicalCost - total)).toBeLessThanOrEqual(0.02);
+  expect(Math.abs(dept.sections[0].totals.chemicalCost - total)).toBeLessThanOrEqual(0.02);
   const list = (await w.ok('get', '/departments/DYEING/incoming?view=job')).data[0];
   expect(list.chemicalAmount).toBe(total);
   await expectClean();

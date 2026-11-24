@@ -160,7 +160,8 @@ test('ROLES: a Dyeing-only employee reaches nothing outside Dyeing; the client-a
   }
   console.log('GET routes open to a Dyeing-only employee:\n  ' + open.join('\n  '));
   // allowed: Dyeing screens, the colour list and the SO card road of a job. Everything else must be closed.
-  const allowed = [/^\/so-cards\/departments$/, /^\/colours/, /^\/departments$/, /^\/departments\/DYEING/, /^\/jobs/];
+  // the overviews and the reports show only what his own service gives (reports are scoped to his departments, the overviews come back empty for what he has no service of)
+  const allowed = [/^\/so-cards\/departments$/, /^\/colours/, /^\/departments$/, /^\/departments\/overview$/, /^\/departments\/DYEING/, /^\/jobs/, /^\/stores\/overview$/, /^\/accounting\/overview$/, /^\/reports/];
   const surprise = open.filter((u) => !allowed.some((a) => a.test(u)));
   expect(surprise).toEqual([]);
   // he cannot look at another department

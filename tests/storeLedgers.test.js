@@ -62,7 +62,7 @@ test('inward correction and store ledgers / reports', async () => {
   expect(await on('2026-10-12')).toMatchObject({ qty: 20, value: 800 });
   expect((await on('2026-10-14')).qty).toBe(20);
   expect((await on('2026-10-15')).qty).toBeGreaterThanOrEqual(115 - 55 + 0);
-  const sum = (await rep('stock-summary', `&dateFrom=2026-10-13&dateTo=2026-10-31&itemId=${sulphur.id}`)).body.sections[0].rows[0];
+  const sum = (await rep('stock-summary', `&dateFrom=2026-10-13&dateTo=2099-12-31&itemId=${sulphur.id}`)).body.sections[0].rows[0];
   expect(sum).toMatchObject({ openingQty: 20, purchased: 95, closingQty: 60 });
   const pur = (await rep('purchases')).body;
   expect(pur.sections[1].rows[0]).toMatchObject({ item: 'SULPHUR SPECIAL', vendors: 2, differentRates: 'Yes', minRate: 40, maxRate: 45 });

@@ -87,5 +87,5 @@ test('the duplicate error says which field / index clashed (details), so it can 
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
   errorHandler(err, { log: { warn: jest.fn(), error: jest.fn() }, headers: {} }, res, jest.fn());
   expect(res.status).toHaveBeenCalledWith(409);
-  expect(res.json).toHaveBeenCalledWith({ error: { code: 'DUPLICATE', message: 'A record with the same value already exists', details: { fields: ['soCardId'], constraint: 'so_card_moves_one_open', table: 'so_card_moves' } } });
+  expect(res.json).toHaveBeenCalledWith({ error: { code: 'DUPLICATE', message: 'A record with the same value already exists', details: { fields: ['soCardId'] } } });
 });

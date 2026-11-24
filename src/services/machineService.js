@@ -395,12 +395,12 @@ async function report(req, code, { dateFrom, dateTo, machineId, operator } = {})
   const group = (keyOf, labelOf) => {
     const m = new Map();
     for (const r of runs) {
-      const k = keyOf(r); const g = m.get(k) || { key: k, name: labelOf(r), runs: 0, jobs: new Set(), inMeters: 0, outMeters: 0, running: 0, others: new Set() };
-      g.runs += 1; g.jobs.add(r.job.id); g.inMeters += r.inMeters; g.outMeters += r.outMeters || 0; if (r.status === 'RUNNING') g.running += 1;
+      const k = keyOf(r); const g = m.get(k) || { key: k, name: labelOf(r), runs: 0, jobs: new Set(), inMeters: 0, outMeters: 0, lossMeters: 0, running: 0, others: new Set() };
+      g.runs += 1; g.jobs.add(r.job.id); g.inMeters += r.inMeters; g.outMeters += r.outMeters || 0; g.lossMeters += r.lossMeters || 0; if (r.status === 'RUNNING') g.running += 1;
       g.others.add(keyOf === opKey ? r.machine.name : r.operatorName);
       m.set(k, g);
     }
-    return [...m.values()].map((g) => ({ key: g.key, name: g.name, runs: g.runs, jobs: g.jobs.size, running: g.running, inMeters: n2(g.inMeters), outMeters: n2(g.outMeters), lossMeters: n2(g.inMeters - g.outMeters), [keyOf === opKey ? 'machines' : 'operators']: [...g.others].sort() }))
+    return [...m.values()].map((g) => ({ key: g.key, name: g.name, runs: g.runs, jobs: g.jobs.size, running: g.running, inMeters: n2(g.inMeters), outMeters: n2(g.outMeters), lossMeters: n2(g.lossMeters), [keyOf === opKey ? 'machines' : 'operators']: [...g.others].sort() }))
       .sort((a, b) => b.inMeters - a.inMeters);
   };
   const opKey = (r) => r.operatorName.trim().toLowerCase();

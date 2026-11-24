@@ -255,7 +255,8 @@ test('issues: the system accounts the software needs, and the fix applies a temp
   await ok(s.accounts('post', '', { name: 'Stock', parentId: (await Account.findOne({ where: { companyId: s.company.id } })).id }), 201);
   const issues = await ok(s.accounts('get', '/issues'));
   const missing = issues.data.filter((i) => i.ruleKey === 'SYSTEM_ACCOUNT_MISSING');
-  expect(missing.map((i) => i.systemKey).sort()).toEqual(['AP_CONTROL', 'AR_CONTROL', 'CURRENT_YEAR_EARNINGS', 'CUSTOMER_ADVANCES', 'DEFAULT_PURCHASES', 'DEFAULT_SALES', 'EMPLOYEE_ADVANCES', 'EMPLOYEE_DEDUCTIONS', 'EMPLOYEE_LOANS', 'EOBI_EMPLOYER_EXPENSE', 'EOBI_PAYABLE', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'INPUT_TAX', 'OPENING_BALANCE_EQUITY', 'OUTPUT_TAX', 'RETAINED_EARNINGS', 'ROUNDING', 'SALARIES_PAYABLE', 'SALARY_EXPENSE', 'SALARY_TAX_PAYABLE', 'SIZING_CHARGES', 'SUPPLIER_ADVANCES']);
+  // the payroll and sizing accounts are made by the software with the first voucher / invoice that needs them: not listed here
+  expect(missing.map((i) => i.systemKey).sort()).toEqual(['AP_CONTROL', 'AR_CONTROL', 'CURRENT_YEAR_EARNINGS', 'CUSTOMER_ADVANCES', 'DEFAULT_PURCHASES', 'DEFAULT_SALES', 'INCOME_TAX_CUSTOMERS', 'INCOME_TAX_VENDORS', 'INPUT_TAX', 'OPENING_BALANCE_EQUITY', 'OUTPUT_TAX', 'RETAINED_EARNINGS', 'ROUNDING', 'SUPPLIER_ADVANCES']);
   expect(missing[0]).toMatchObject({ accountId: null, severity: 'WARNING', suggestedFix: { action: 'APPLY_TEMPLATE', payload: { templateKey: 'other' } } });
   await ok(s.accounts('post', '/apply-template', missing[0].suggestedFix.payload));
   expect((await ok(s.accounts('get', '/issues'))).data.filter((i) => i.ruleKey === 'SYSTEM_ACCOUNT_MISSING')).toEqual([]);

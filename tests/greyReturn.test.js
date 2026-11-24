@@ -205,18 +205,21 @@ test('10 thaans: 3 go back as a fabric return, the other 7 get a normal SO card 
   // reports: SO card reports count only the SO card; the fabric return is shown separately
   const rep = await api('get', '/reports/so-cards');
   expect(rep.status).toBe(200);
-  expect(rep.body.rows.map((r) => r.cardLabel)).toEqual(['1']);
-  expect((await api('get', '/reports/so-cards?isGreyReturn=true')).body.rows.map((r) => r.cardLabel)).toEqual(['FR-1']);
-  expect((await api('get', '/reports/so-cards/lots')).body.rows.map((r) => r.cardLabel)).toEqual(['1']);
-  const parties = (await api('get', '/reports/grey/parties')).body.rows[0];
-  expect(parties).toMatchObject({ inwardMeters: 1000, soCardMeters: 700, greyReturnCardMeters: 300 });
-  const lots = (await api('get', '/reports/grey/lots')).body.rows[0];
-  expect(lots).toMatchObject({ soCardMeters: 700, fabricReturnMeters: 300, soCards: String(card.cardNo) });
-  const ov = (await api('get', '/reports/overview')).body.summary;
-  expect(ov.soCards.cards).toBe(1);
-  expect(ov.grey).toMatchObject({ onCards: 700, fabricReturn: 300 });
-  // the SO # column of the reports shows the label
-  expect(rep.body.columns.find((c) => c.label === 'SO #')).toMatchObject({ key: 'cardLabel' });
+  // both cards are listed (the fabric return carries the tag); the isGreyReturn filter separates them
+  expect(rep.body.sections[0].rows.filter((r) => !r.tag).map((r) => r.soNo)).toEqual([1]);
+  expect(rep.body.sections[0].rows.filter((r) => r.tag).map((r) => r.statusText)).toEqual(['Fabric return']);
+  expect((await api('get', '/reports/so-cards?isGreyReturn=true')).body.sections[0].rows.map((r) => r.tag)).toEqual(['Fabric return grey']);
+  expect((await api('get', '/reports/so-cards?isGreyReturn=false')).body.sections[0].rows.map((r) => r.soNo)).toEqual([1]);
+  expect((await api('get', '/reports/so-cards/lots')).body.sections[0].rows.filter((r) => !r.tag).map((r) => r.soNo)).toEqual([1]);
+  const parties = (await api('get', '/reports/grey/parties')).body.sections[0].rows[0];
+  expect(parties).toMatchObject({ inwardMeters: 1000, soCardMeters: 700, fabricReturnMeters: 300 });
+  const lots = (await api('get', '/reports/grey/lots')).body.sections[0].rows[0];
+  expect(lots).toMatchObject({ onSoCardMeters: 700, fabricReturnMeters: 300, soCards: 2 }); // the lot is on the SO card and on the fabric return card
+  const ov = Object.fromEntries((await api('get', '/reports/overview')).body.sections.find((s) => s.key === 'summary').rows.map((r) => [r.metric, r.value]));
+  expect(ov['SO cards']).toBe(1);
+  expect(ov['Fabric returns (grey)']).toBe(1);
+  // the SO # column of the reports shows the number; the fabric return carries the tag column
+  expect(rep.body.sections[0].columns.find((c) => c.key === 'tag')).toMatchObject({ label: 'Tag' });
 
   // a second lot: fabric return FR-2, and the next SO card is SO# 2 (two separate, gap-free series)
   const lot2 = (await api('post', '/grey-lots', { inwardDate: '2026-10-11', customerId: cu.id, qualityId: q.id, thaans: [50, 50] })).body;
