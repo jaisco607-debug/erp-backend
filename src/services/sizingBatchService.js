@@ -19,7 +19,7 @@ const M_TO_YD = 1.0936133;
 const ADJ_LIMIT = 10;
 const COUNT_WARNING_PERCENT = 10;
 const CONE_TYPES = ['CutCone'];
-const n2 = (v) => Math.round(Number(v) * 100) / 100;
+const n2 = (v) => require('../utils/money').round(v);
 const num = (v) => (v == null ? null : Number(v));
 const label = (n) => String(n).padStart(5, '0');
 const STATUS_TEXT = { DRAFT: 'Draft', CONFIRMED: 'Confirmed' };
@@ -259,6 +259,8 @@ async function checkVendorExists(companyId, vendorId) {
 }
 
 async function tagYarn(companyId, batch, { inwardId, lbs }, transaction, existingId) {
+  // one at a time per company: two people tagging the same yarn wait for each other (the pool is read after the lock)
+  if (transaction) await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`sizing-yarn-pool:${companyId}`], transaction });
   const [p] = await yarnPool(companyId, batch.vendorId, { inwardIds: [inwardId], excludeBatchId: batch.id }, transaction);
   if (!p) throw AppError.rule('YARN_NOT_SENT', 'This yarn was not sent to this sizing party on a sizing challan', { field: 'inwardId', inwardId });
   if (Number(lbs) > p.availableLbs + 0.0001) throw AppError.rule('MORE_THAN_AVAILABLE', `${p.sentLbs} lbs of this yarn went to the party and ${p.taggedLbs} lbs are tagged to other batches: only ${p.availableLbs} lbs can be tagged`, { field: 'lbs', sentLbs: p.sentLbs, taggedLbs: p.taggedLbs, availableLbs: p.availableLbs });

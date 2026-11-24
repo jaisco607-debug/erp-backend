@@ -11,7 +11,7 @@ const { today } = require('../utils/dates');
 const audit = require('./auditService');
 
 const KG_TO_LB = 2.20462262;
-const n2 = (v) => Math.round(Number(v) * 100) / 100;
+const n2 = (v) => require('../utils/money').round(v);
 const text = (n) => String(n).padStart(5, '0');
 const q = (sql, replacements, transaction) => sequelize.query(sql, { replacements, type: sequelize.QueryTypes.SELECT, transaction });
 

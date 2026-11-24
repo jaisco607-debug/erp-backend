@@ -11,6 +11,11 @@ async function start() {
   // Edit locks that ran out long ago are removed every 10 minutes (an expired lock is already free; this only tidies the table).
   setInterval(() => require('./services/lockService').cleanup().catch((err) => logger.warn({ err }, 'Lock cleanup failed')), 10 * 60 * 1000).unref();
 
+  // Refresh tokens that expired more than a week ago are of no use: removed at start and then every day.
+  const tidyTokens = () => sequelize.query(`DELETE FROM refresh_tokens WHERE "expiresAt" < now() - interval '7 days'`).catch((err) => logger.warn({ err }, 'Refresh token cleanup failed'));
+  tidyTokens();
+  setInterval(tidyTokens, 24 * 60 * 60 * 1000).unref();
+
   // On shutdown, stop taking new requests, let running ones finish, then close the database.
   const stop = (signal) => {
     logger.info(`${signal} received, shutting down`);

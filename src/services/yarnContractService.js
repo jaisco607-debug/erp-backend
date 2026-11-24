@@ -12,7 +12,7 @@ const KINDS = ['PURCHASE', 'OVERHEAD'];
 const KIND_TEXT = { PURCHASE: 'Contract Yarn Purchase', OVERHEAD: 'Weaving Overhead Sell Contract' };
 const STATUS_TEXT = { OPEN: 'Open', CLOSED: 'Closed' };
 const DEFAULT_TAX = 18;
-const n2 = (v) => Math.round(Number(v) * 100) / 100;
+const n2 = (v) => require('../utils/money').round(v);
 const num = (v) => (v == null ? null : Number(v));
 const label = (code) => String(code).padStart(4, '0');
 const QT = sequelize.QueryTypes.SELECT;

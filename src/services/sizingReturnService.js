@@ -167,6 +167,7 @@ async function release(returnId, transaction) {
 
 /** Takes the beams back (AT_SIZING -> EMPTY, dated like the return) and the yarn bags (checked against what can come back). */
 async function apply(companyId, vendorId, returnId, date, beamIds, lines, transaction) {
+  await sequelize.query('SELECT pg_advisory_xact_lock(hashtext($1))', { bind: [`sizing-yarn-pool:${companyId}`], transaction });
   const pending = new Map((await batches.pendingBeamRows(companyId, vendorId, transaction)).map((b) => [b.id, b]));
   if (new Set(beamIds).size !== beamIds.length) throw AppError.rule('DUPLICATE_BEAM', 'The same beam is listed twice', { field: 'beamIds' });
   if (beamIds.length) await q('SELECT id FROM yarn_beams WHERE id IN (:ids) ORDER BY id FOR UPDATE', { ids: beamIds }, transaction);

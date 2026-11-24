@@ -131,6 +131,9 @@ async function cancel(req, id) {
     const [head] = await q('SELECT id, "requestId" FROM store_yarn_outwards WHERE id = :id AND "companyId" = :cid FOR UPDATE', { id, cid: req.user.companyId }, transaction);
     if (!head) throw AppError.notFound('Yarn outward');
     if (head.requestId) throw AppError.rule('OUTWARD_FROM_REQUEST', 'This outward was made by a yarn request: it belongs to that request');
+    // lock the yarn entries first, then read what was used (a department using the yarn at the same moment waits)
+    const lockIds = (await q('SELECT DISTINCT "inwardId" FROM store_yarn_outward_lines WHERE "outwardId" = :id ORDER BY 1', { id }, transaction)).map((r) => r.inwardId);
+    if (lockIds.length) await StoreYarnInward.findAll({ where: { id: lockIds }, order: [['id', 'ASC']], lock: transaction.LOCK.UPDATE, paranoid: false, transaction });
     const before = await load(req, id, transaction);
     const used = before.lines.filter((l) => l.usedBags > 0);
     if (used.length) throw AppError.rule('OUTWARD_IN_USE', `The department has already used the yarn of ${used.map((l) => l.title).join(', ')}`, { lines: used.map((l) => ({ id: l.id, title: l.title, usedBags: l.usedBags })) });

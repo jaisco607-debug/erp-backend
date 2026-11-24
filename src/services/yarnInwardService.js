@@ -32,7 +32,7 @@ const INCLUDE = [
     { model: YarnBrand, as: 'brand', paranoid: false, attributes: ['id', 'code', 'name'] },
   ] },
 ];
-const n2 = (v) => Math.round(Number(v) * 100) / 100;
+const n2 = (v) => require('../utils/money').round(v);
 const num = (v) => (v == null ? null : Number(v));
 
 // `used` = bags of this entry that already went out on yarn outward challans
@@ -188,6 +188,7 @@ async function update(req, id, changes) {
   const { companyId } = req.user;
   return sequelize.transaction(async (transaction) => {
     const row = await findOr404(req, id, transaction);
+    await sequelize.query('SELECT id FROM yarn_inwards WHERE id = :id FOR UPDATE', { replacements: { id }, transaction }); // a concurrent outward waits: no negative balance
     const used = (await usedBags([id], { transaction })).get(id) || 0;
     const invoice = (await invoicesOf([id], transaction)).get(id) || null;
     // an entry on a purchase invoice feeds the books: only its DC no, remarks and "for" may change (delete the invoice first for the rest)
@@ -228,6 +229,7 @@ async function update(req, id, changes) {
 async function remove(req, id) {
   return sequelize.transaction(async (transaction) => {
     const row = await findOr404(req, id, transaction);
+    await sequelize.query('SELECT id FROM yarn_inwards WHERE id = :id FOR UPDATE', { replacements: { id }, transaction });
     const invoice = (await invoicesOf([id], transaction)).get(id) || null;
     if (invoice) throw AppError.rule('ON_PURCHASE_INVOICE', `This entry is on purchase invoice ${invoice.voucherLabel}: delete that invoice first`, { invoiceId: invoice.id, voucherNo: invoice.voucherNo });
     const [back] = await sequelize.query('SELECT COUNT(*)::int AS n FROM sizing_return_yarns WHERE "inwardId" = :id', { replacements: { id }, type: sequelize.QueryTypes.SELECT, transaction });

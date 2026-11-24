@@ -13,7 +13,7 @@ const inwards = require('./yarnInwardService');
 const sizingBatches = require('./sizingBatchService');
 const sizingReturns = require('./sizingReturnService');
 
-const n2 = (v) => Math.round(Number(v) * 100) / 100;
+const n2 = (v) => require('../utils/money').round(v);
 const challanText = (n) => String(n).padStart(5, '0');
 // run inside the caller's transaction (the yarn sale makes the challan and the invoice in one), or in a transaction of its own
 const inTx = (outer, fn) => (outer ? fn(outer) : sequelize.transaction(fn));
