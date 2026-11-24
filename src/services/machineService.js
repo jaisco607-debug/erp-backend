@@ -108,7 +108,7 @@ async function settings(req) {
   for (const d of depts) {
     const f = flags.get(d.id) || { enabled: false, prefix: null };
     const [c] = await q(`SELECT COUNT(*) FILTER (WHERE "deletedAt" IS NULL)::int AS n, COUNT(*) FILTER (WHERE "deletedAt" IS NULL AND "isActive")::int AS active,
-        COUNT(*)::int AS "ever", (SELECT COUNT(*)::int FROM machine_runs r WHERE r."departmentId" = :d AND r.status = 'RUNNING') AS running
+        COUNT(*)::int AS "ever", (SELECT COUNT(*)::int FROM machine_runs r WHERE r."companyId" = :companyId AND r."departmentId" = :d AND r.status = 'RUNNING') AS running
       FROM machines WHERE "companyId" = :companyId AND "departmentId" = :d`, { companyId, d: d.id });
     out.push({
       id: d.id, code: d.code, name: d.name, machinesEnabled: f.enabled, prefix: f.prefix, suggestedPrefix: f.prefix || suggestPrefix(d.name, takenPrefixes(flags, d.id)),
@@ -139,7 +139,7 @@ async function setDepartment(req, code, { machinesEnabled, prefix }) {
     let enabled = f.enabled;
     if (machinesEnabled !== undefined) {
       if (machinesEnabled === false && f.enabled) {
-        const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM machine_runs WHERE "departmentId" = :d AND status = 'RUNNING'`, { d: d.id }, transaction);
+        const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM machine_runs WHERE "companyId" = :companyId AND "departmentId" = :d AND status = 'RUNNING'`, { companyId, d: d.id }, transaction);
         if (n) throw AppError.rule('MACHINES_RUNNING', `${n} machine(s) are running: finish their work before switching the machines off`, { running: n });
       }
       enabled = machinesEnabled;
@@ -416,9 +416,9 @@ async function report(req, code, { dateFrom, dateTo, machineId, operator } = {})
 async function operators(req, code) {
   const d = await deptByCode(req, code);
   await need(req, d, 'VIEW');
-  const rows = await q(`SELECT name FROM (SELECT trim("operatorName") AS name, MAX("startedAt") AS at FROM machine_runs WHERE "departmentId" = :d GROUP BY trim("operatorName")
-      UNION ALL SELECT trim("operatorName"), MAX("operatorSetAt") FROM jobs WHERE "departmentId" = :d AND "operatorName" IS NOT NULL GROUP BY trim("operatorName")) x
-    GROUP BY name ORDER BY MAX(at) DESC NULLS LAST LIMIT 50`, { d: d.id });
+  const rows = await q(`SELECT name FROM (SELECT trim("operatorName") AS name, MAX("startedAt") AS at FROM machine_runs WHERE "companyId" = :companyId AND "departmentId" = :d GROUP BY trim("operatorName")
+      UNION ALL SELECT trim("operatorName"), MAX("operatorSetAt") FROM jobs WHERE "companyId" = :companyId AND "departmentId" = :d AND "operatorName" IS NOT NULL GROUP BY trim("operatorName")) x
+    GROUP BY name ORDER BY MAX(at) DESC NULLS LAST LIMIT 50`, { companyId: req.user.companyId, d: d.id });
   return { data: rows.map((r) => r.name) };
 }
 

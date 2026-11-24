@@ -122,24 +122,24 @@ async function departmentLedger(req, f) {
   const ids = (f.departmentId ? deps.filter((d) => d.id === f.departmentId) : deps).map((d) => d.id);
   if (!ids.length) return respond('Department ledger', f, [section('dept', 'Department ledger', [], [])], f);
   const cond = (f.customerId ? ' AND sc."customerId" = :customerId' : '') + (f.soNo ? ' AND sc."cardNo" = :soNo' : '');
-  const rep = { ids, customerId: f.customerId, soNo: f.soNo };
+  const rep = { ids, cid, customerId: f.customerId, soNo: f.soNo };
   const rows = [];
   for (const r of await q(`SELECT j."departmentId", svc_name(s.id, sc."companyId", s.name) AS department, j."jobDate" AS date, j."jobNo", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, svc_name(fs.id, sc."companyId", fs.name) AS "fromDepartment", SUM(ji.meters)::float AS meters
       FROM job_items ji JOIN jobs j ON j.id = ji."jobId" AND j.status <> 'REJECTED' JOIN services s ON s.id = j."departmentId" LEFT JOIN services fs ON fs.id = j."fromDepartmentId"
-      JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId" WHERE j."departmentId" IN (:ids)${cond} GROUP BY j.id, s.id, s.name, fs.id, fs.name, sc.id, cu.id`, rep)) {
+      JOIN so_cards sc ON sc.id = ji."soCardId" JOIN customers cu ON cu.id = sc."customerId" WHERE j."companyId" = :cid AND sc."companyId" = :cid AND j."departmentId" IN (:ids)${cond} GROUP BY j.id, s.id, s.name, fs.id, fs.name, sc.id, cu.id`, rep)) {
     rows.push({ date: ymd(r.date), order: 1, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: 'Received', ref: `Job# ${r.jobNo}`, inMeters: r.meters, outMeters: 0, detail: `From ${r.fromDepartment || 'SO card'}` });
   }
   for (const r of await q(`SELECT pj."departmentId", svc_name(ps.id, sc."companyId", ps.name) AS department, cj."jobDate" AS date, cj."jobNo", svc_name(cs.id, sc."companyId", cs.name) AS "toDepartment", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, SUM(ci.meters)::float AS meters
       FROM job_items ci JOIN jobs cj ON cj.id = ci."jobId" AND cj.status <> 'REJECTED' JOIN job_items pi ON pi.id = ci."sourceJobItemId" JOIN jobs pj ON pj.id = pi."jobId" AND pj.status <> 'REJECTED'
       JOIN services ps ON ps.id = pj."departmentId" JOIN services cs ON cs.id = cj."departmentId" JOIN so_cards sc ON sc.id = ci."soCardId" JOIN customers cu ON cu.id = sc."customerId"
-      WHERE pj."departmentId" IN (:ids)${cond} GROUP BY pj."departmentId", ps.id, ps.name, cj.id, cs.id, cs.name, sc.id, cu.id`, rep)) {
+      WHERE pj."companyId" = :cid AND cj."companyId" = :cid AND sc."companyId" = :cid AND pj."departmentId" IN (:ids)${cond} GROUP BY pj."departmentId", ps.id, ps.name, cj.id, cs.id, cs.name, sc.id, cu.id`, rep)) {
     rows.push({ date: ymd(r.date), order: 2, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: 'Sent on', ref: `Job# ${r.jobNo}`, inMeters: 0, outMeters: r.meters, detail: `To ${r.toDepartment}` });
   }
   // the thaans a department wrote: what it sent on can differ from what it received (cut, shrink): the difference is a line of its own, so the balance stays right
   for (const r of await q(`SELECT pj."departmentId", svc_name(ps.id, sc."companyId", ps.name) AS department, cj."jobDate" AS date, cj."jobNo", CASE WHEN sc."isGreyReturn" THEN 'FR-' || sc."cardNo" ELSE sc."cardNo"::text END AS "cardNo", cu.name AS party, SUM(pi.meters - ci.meters)::float AS diff
       FROM job_items ci JOIN jobs cj ON cj.id = ci."jobId" AND cj.status <> 'REJECTED' JOIN job_items pi ON pi.id = ci."sourceJobItemId" JOIN jobs pj ON pj.id = pi."jobId" AND pj.status <> 'REJECTED'
       JOIN services ps ON ps.id = pj."departmentId" JOIN so_cards sc ON sc.id = ci."soCardId" JOIN customers cu ON cu.id = sc."customerId"
-      WHERE pj."departmentId" IN (:ids)${cond} AND EXISTS (SELECT 1 FROM job_item_thaans t WHERE t."jobItemId" = pi.id) GROUP BY pj."departmentId", ps.id, ps.name, cj.id, sc.id, cu.id HAVING ABS(SUM(pi.meters - ci.meters)) > 0.004`, rep)) {
+      WHERE pj."companyId" = :cid AND cj."companyId" = :cid AND sc."companyId" = :cid AND pj."departmentId" IN (:ids)${cond} AND EXISTS (SELECT 1 FROM job_item_thaans t WHERE t."jobItemId" = pi.id) GROUP BY pj."departmentId", ps.id, ps.name, cj.id, sc.id, cu.id HAVING ABS(SUM(pi.meters - ci.meters)) > 0.004`, rep)) {
     rows.push({ date: ymd(r.date), order: 3, departmentId: r.departmentId, department: r.department, soNo: r.cardNo, party: r.party, type: r.diff > 0 ? 'Process loss (thaans)' : 'Process gain (thaans)', ref: `Job# ${r.jobNo}`, inMeters: r.diff < 0 ? -r.diff : 0, outMeters: r.diff > 0 ? r.diff : 0, detail: 'Thaans made by the department' });
   }
   const ledger = runLedger(rows, f, { group: (r) => r.departmentId, delta: (r) => r.inMeters - r.outMeters, label: (r) => ({ department: r.department }) })
