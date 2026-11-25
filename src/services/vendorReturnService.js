@@ -16,20 +16,31 @@ const q = (sql, replacements, transaction) => sequelize.query(sql, { replacement
 const NO = (store) => `store_vendor_return_no:${store}`;
 const REASON_TEXT = { DAMAGED: 'Damaged / bad', WRONG_ITEM: 'Wrong item', EXPIRED: 'Expired', QUALITY: 'Quality not accepted', EXCESS: 'Extra / not needed', OTHER: 'Other' };
 const text = (n) => `VR-${String(n).padStart(5, '0')}`;
+// the goods leave with a gate pass (out pass) and a delivery challan of ours; both are numbered when the return is made
+const GP = (store) => `store_vendor_return_gp:${store}`;
+const DC = (store) => `store_vendor_return_dc:${store}`;
+const gatePassText = (n) => (n ? `OP-${String(n).padStart(5, '0')}` : null);
+const challanText = (n) => (n ? `RDC-${String(n).padStart(5, '0')}` : null);
 
 async function load(id, companyId, store, transaction) {
   const [r] = await q(`SELECT x.*, v.name AS "vendorName", v.code AS "vendorCode", u.name AS "byName", cu.name AS "cancelledByName" FROM store_vendor_returns x JOIN vendors v ON v.id = x."vendorId" LEFT JOIN users u ON u.id = x."createdById" LEFT JOIN users cu ON cu.id = x."cancelledById"
     WHERE x.id = :id AND x."companyId" = :companyId AND x.store = :store`, { id, companyId, store }, transaction);
   if (!r) throw AppError.notFound('Return');
   const lines = await q(`SELECT l.id, l."itemId", it.name AS item, it.unit, c.name AS category, l."inwardId", i."ipNo", i."dcNo", i."inwardDate", l."inwardLineId", l.qty::float AS qty, l.rate::float AS rate, l.value::float AS value,
-      l."packType", l."packCount", l."qtyPerPack"::float AS "qtyPerPack"
+      l."packType", l."packCount", l."qtyPerPack"::float AS "qtyPerPack",
+      (SELECT pil."invoiceId" FROM purchase_invoice_lines pil WHERE pil."inwardId" = l."inwardId") AS "purchaseInvoiceId",
+      (SELECT p."voucherNo" FROM purchase_invoice_lines pil JOIN purchase_invoices p ON p.id = pil."invoiceId" WHERE pil."inwardId" = l."inwardId") AS "purchaseInvoiceNo"
     FROM store_vendor_return_lines l JOIN store_items it ON it.id = l."itemId" LEFT JOIN store_categories c ON c.id = it."categoryId" JOIN store_inwards i ON i.id = l."inwardId"
     WHERE l."returnId" = :id ORDER BY it.name`, { id }, transaction);
+  // the purchase return invoice (debit note) this return is on, if any
+  const [pr] = await q(`SELECT p.id, p."voucherNo", p.status FROM purchase_return_lines l JOIN purchase_returns p ON p.id = l."returnInvoiceId" WHERE l."vendorReturnId" = :id LIMIT 1`, { id }, transaction);
   return {
     id: r.id, store: r.store, returnNo: r.returnNo, returnText: text(r.returnNo), returnDate: r.returnDate, status: r.status,
+    gatePassNo: r.gatePassNo, gatePassText: gatePassText(r.gatePassNo), challanNo: r.challanNo, challanText: challanText(r.challanNo), vehicleNo: r.vehicleNo, driverName: r.driverName,
+    purchaseReturn: pr ? { id: pr.id, voucherNo: pr.voucherNo, voucherLabel: String(pr.voucherNo).padStart(5, '0'), status: pr.status } : null,
     vendor: { id: r.vendorId, name: r.vendorName, code: r.vendorCode }, reason: r.reason, reasonText: REASON_TEXT[r.reason], notes: r.notes, totalValue: Number(r.totalValue), createdBy: r.byName, createdAt: r.createdAt,
     cancelReason: r.cancelReason, cancelledAt: r.cancelledAt, cancelledBy: r.cancelledByName,
-    lines: lines.map((l) => ({ ...l, itemName: l.item, qtySplit: m.splitQty(l.qty, l.unit) })),
+    lines: lines.map((l) => ({ ...l, itemName: l.item, qtySplit: m.splitQty(l.qty, l.unit), purchaseInvoiceLabel: l.purchaseInvoiceNo ? String(l.purchaseInvoiceNo).padStart(5, '0') : null })),
   };
 }
 
@@ -79,8 +90,11 @@ async function create(req, store, data) {
     }
     const returnNo = await counters.take(companyId, NO(store), async () => ((await q('SELECT COALESCE(MAX("returnNo"), 0) AS n FROM store_vendor_returns WHERE "companyId" = :companyId AND store = :store', { companyId, store }, transaction))[0].n) + 1, transaction);
     const total = m.round(prepared.reduce((t, p) => t + p.value, 0), 2);
-    const [row] = await q(`INSERT INTO store_vendor_returns ("companyId", store, "returnNo", "returnDate", "vendorId", reason, notes, "totalValue", "createdById") VALUES (:companyId, :store, :returnNo, :date, :vendorId, :reason, :notes, :total, :by) RETURNING id`,
-      { companyId, store, returnNo, date, vendorId: data.vendorId, reason: data.reason, notes: data.notes || null, total, by: req.user.id }, transaction);
+    const gatePassNo = await counters.take(companyId, GP(store), async () => ((await q('SELECT COALESCE(MAX("gatePassNo"), 0) AS n FROM store_vendor_returns WHERE "companyId" = :companyId AND store = :store', { companyId, store }, transaction))[0].n) + 1, transaction);
+    const challanNo = await counters.take(companyId, DC(store), async () => ((await q('SELECT COALESCE(MAX("challanNo"), 0) AS n FROM store_vendor_returns WHERE "companyId" = :companyId AND store = :store', { companyId, store }, transaction))[0].n) + 1, transaction);
+    const [row] = await q(`INSERT INTO store_vendor_returns ("companyId", store, "returnNo", "returnDate", "vendorId", reason, notes, "totalValue", "gatePassNo", "challanNo", "vehicleNo", "driverName", "createdById")
+      VALUES (:companyId, :store, :returnNo, :date, :vendorId, :reason, :notes, :total, :gatePassNo, :challanNo, :vehicleNo, :driverName, :by) RETURNING id`,
+      { companyId, store, returnNo, date, vendorId: data.vendorId, reason: data.reason, notes: data.notes || null, total, gatePassNo, challanNo, vehicleNo: data.vehicleNo || null, driverName: data.driverName || null, by: req.user.id }, transaction);
     for (const p of prepared) {
       await sequelize.query(`INSERT INTO store_vendor_return_lines ("returnId", "itemId", "inwardId", "inwardLineId", "batchId", qty, rate, value, "packType", "packCount", "qtyPerPack")
         VALUES (:rid, :itemId, :inwardId, :inwardLineId, :batchId, :qty, :rate, :value, :packType, :packCount, :qtyPerPack)`,
@@ -103,6 +117,7 @@ async function cancel(req, store, id, { reason }) {
     const companyId = req.user.companyId;
     const before = await load(id, companyId, store, transaction);
     if (before.status !== 'POSTED') throw AppError.rule('ALREADY_CANCELLED', 'This return is already cancelled');
+    if (before.purchaseReturn) throw AppError.rule('RETURN_INVOICED', `This return is on purchase return invoice ${before.purchaseReturn.voucherLabel}: delete or un-approve that invoice first`, { purchaseReturnId: before.purchaseReturn.id });
     const lines = await q('SELECT "itemId", "inwardId", "batchId", qty::float AS qty, value::float AS value FROM store_vendor_return_lines WHERE "returnId" = :id', { id }, transaction);
     const items = Object.fromEntries((await StoreItem.findAll({ where: { id: [...new Set(lines.map((l) => l.itemId))] }, order: [['id', 'ASC']], lock: transaction.LOCK.UPDATE, transaction })).map((i) => [i.id, i]));
     for (const l of lines) {
@@ -130,11 +145,12 @@ async function list(req, store, f) {
   if (f.itemId) { where.push('EXISTS (SELECT 1 FROM store_vendor_return_lines l WHERE l."returnId" = x.id AND l."itemId" = :itemId)'); rep.itemId = f.itemId; }
   const [{ n }] = await q(`SELECT count(*)::int AS n FROM store_vendor_returns x WHERE ${where.join(' AND ')}`, rep);
   const rows = await q(`SELECT x.id, x."returnNo", x."returnDate", x.reason, x.status, x."totalValue"::float AS "totalValue", v.name AS vendor, v.id AS "vendorId",
-      (SELECT string_agg(it.name, ', ' ORDER BY it.name) FROM store_vendor_return_lines l JOIN store_items it ON it.id = l."itemId" WHERE l."returnId" = x.id) AS items
+      (SELECT string_agg(it.name, ', ' ORDER BY it.name) FROM store_vendor_return_lines l JOIN store_items it ON it.id = l."itemId" WHERE l."returnId" = x.id) AS items,
+      x."gatePassNo", x."challanNo", (SELECT p."voucherNo" FROM purchase_return_lines l JOIN purchase_returns p ON p.id = l."returnInvoiceId" WHERE l."vendorReturnId" = x.id LIMIT 1) AS "purchaseReturnNo"
     FROM store_vendor_returns x JOIN vendors v ON v.id = x."vendorId" WHERE ${where.join(' AND ')} ORDER BY x."returnDate" DESC, x."returnNo" DESC LIMIT :limit OFFSET :offset`, { ...rep, limit: f.limit, offset: (f.page - 1) * f.limit });
-  return { data: rows.map((r) => ({ ...r, returnText: text(r.returnNo), reasonText: REASON_TEXT[r.reason] })), page: f.page, limit: f.limit, total: n };
+  return { data: rows.map((r) => ({ ...r, returnText: text(r.returnNo), reasonText: REASON_TEXT[r.reason], gatePassText: gatePassText(r.gatePassNo), challanText: challanText(r.challanNo), purchaseReturnLabel: r.purchaseReturnNo ? String(r.purchaseReturnNo).padStart(5, '0') : null })), page: f.page, limit: f.limit, total: n };
 }
 
 const get = (req, store, id) => load(id, req.user.companyId, store);
 
-module.exports = { create, cancel, list, get, returnable, REASON_TEXT, text };
+module.exports = { create, cancel, list, get, returnable, REASON_TEXT, text, gatePassText, challanText };

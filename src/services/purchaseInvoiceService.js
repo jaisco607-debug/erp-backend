@@ -356,7 +356,7 @@ async function writeLines(invoiceId, companyId, lines, transaction) {
 
 const COLS = `p.id, p.kind, p."voucherNo", p."billNo", to_char(p."invoiceDate", 'YYYY-MM-DD') AS "invoiceDate", to_char(p."dueDate", 'YYYY-MM-DD') AS "storedDue",
   to_char(COALESCE(p."dueDate", p."invoiceDate" + v."creditDays"), 'YYYY-MM-DD') AS "dueDate", p.notes, p."billDetails",
-  p."taxRate"::float AS "taxRate", p."othersAmount"::float AS others, p."othersNote", p."grossAmount"::float AS gross, p."taxAmount"::float AS tax, p."netAmount"::float AS net, p."paidAmount"::float AS paid, p.status, p."approvedAt", p."createdAt", p."updatedAt",
+  p."taxRate"::float AS "taxRate", p."othersAmount"::float AS others, p."othersNote", p."grossAmount"::float AS gross, p."taxAmount"::float AS tax, p."netAmount"::float AS net, p."paidAmount"::float AS paid, p."returnedAmount"::float AS returned, p.status, p."approvedAt", p."createdAt", p."updatedAt",
   v.id AS "vendorId", v.code AS "vendorCode", v.name AS "vendorName", v.ntn AS "vendorNtn", v.address AS "vendorAddress", v.city AS "vendorCity",
   ((SELECT count(*) FROM purchase_invoice_lines l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_fabric_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_store_yarn_inwards l WHERE l."invoiceId" = p.id) + (SELECT count(*) FROM purchase_invoice_sizing_batches l WHERE l."invoiceId" = p.id))::int AS "inwardCount", ab.name AS "approvedByName"`;
 const FROM = `FROM purchase_invoices p JOIN vendors v ON v.id = p."vendorId" LEFT JOIN users ab ON ab.id = p."approvedById"`;
@@ -367,7 +367,7 @@ function invoiceJson(r) {
     isOverdue: r.status === 'APPROVED' && r.net - r.paid > 0 && r.dueDate < today(),
     vendor: { id: r.vendorId, code: r.vendorCode, name: r.vendorName, ntn: r.vendorNtn, address: r.vendorAddress, city: r.vendorCity },
     notes: r.notes, billDetails: r.billDetails, inwardCount: r.inwardCount,
-    taxRate: r.taxRate, othersAmount: r.others, othersNote: r.othersNote, othersEffect: 'DEDUCT', gross: r.gross, tax: r.tax, net: r.net, paid: r.paid, balance: round(r.net - r.paid),
+    taxRate: r.taxRate, othersAmount: r.others, othersNote: r.othersNote, othersEffect: 'DEDUCT', gross: r.gross, tax: r.tax, net: r.net, paid: round(r.paid - r.returned), returnedAmount: r.returned, balance: round(r.net - r.paid),
     paymentStatus: r.paid <= 0 ? 'UNPAID' : r.paid >= r.net ? 'PAID' : 'PARTIAL',
     status: r.status, statusText: STATUS_TEXT[r.status], approvedAt: r.approvedAt, approvedBy: r.approvedAt ? { name: r.approvedByName } : null,
     canEdit: r.status === 'UNAPPROVED', canDelete: r.status === 'UNAPPROVED', canApprove: r.status === 'UNAPPROVED', canUnapprove: r.status === 'APPROVED' && r.paid === 0,
@@ -418,6 +418,9 @@ async function get(req, id, transaction) {
       return { lineNo: s.lineNo, ...inwardLine({ ...r, amount: s.amount, salesTax: s.salesTax }) };
     });
   }
+  // the purchase return invoices (debit notes) made against this bill
+  inv.returns = (await q(`SELECT id, "voucherNo", to_char("returnDate", 'YYYY-MM-DD') AS "returnDate", "netAmount"::float AS net, "appliedAmount"::float AS applied, status FROM purchase_returns WHERE "purchaseInvoiceId" = :id ORDER BY "voucherNo"`, { id }, transaction))
+    .map((p) => ({ ...p, voucherLabel: label(p.voucherNo), statusText: STATUS_TEXT[p.status] }));
   // the money paid against the invoice: the confirmed payment vouchers (the "Payments" tab)
   inv.payments = (await q(`SELECT pv.id AS "voucherId", pv."voucherNo", to_char(pv."voucherDate", 'YYYY-MM-DD') AS "voucherDate", pv."paymentMode", pv."chequeNo", l.amount::float AS amount
     FROM payment_voucher_lines l JOIN payment_vouchers pv ON pv.id = l."voucherId" WHERE l."purchaseInvoiceId" = :id AND pv.status = 'CONFIRMED' ORDER BY pv."voucherDate", pv."voucherNo"`, { id }, transaction))
@@ -450,11 +453,11 @@ async function list(req, { page, limit, status, kind, dateFrom, dateTo, vendorId
   }
   const w = where.join(' AND ');
   const [sum] = await q(`SELECT count(*)::int AS invoices, COALESCE(SUM(p."grossAmount"), 0)::float AS amount, COALESCE(SUM(p."taxAmount"), 0)::float AS tax,
-      COALESCE(SUM(p."netAmount"), 0)::float AS net, COALESCE(SUM(p."paidAmount"), 0)::float AS paid FROM purchase_invoices p JOIN vendors v ON v.id = p."vendorId" WHERE ${w}`, r);
+      COALESCE(SUM(p."netAmount"), 0)::float AS net, COALESCE(SUM(p."paidAmount"), 0)::float AS paid, COALESCE(SUM(p."returnedAmount"), 0)::float AS returned FROM purchase_invoices p JOIN vendors v ON v.id = p."vendorId" WHERE ${w}`, r);
   const rows = await q(`SELECT ${COLS} ${FROM} WHERE ${w} ORDER BY p."voucherNo" DESC LIMIT :limit OFFSET :offset`, { ...r, limit, offset: (page - 1) * limit });
   return {
     data: rows.map(invoiceJson), page, limit, total: sum.invoices,
-    summary: { invoices: sum.invoices, amount: round(sum.amount), tax: round(sum.tax), net: round(sum.net), paid: round(sum.paid), balance: round(sum.net - sum.paid) },
+    summary: { invoices: sum.invoices, amount: round(sum.amount), tax: round(sum.tax), net: round(sum.net), paid: round(sum.paid - sum.returned), returnedAmount: round(sum.returned), balance: round(sum.net - sum.paid) },
   };
 }
 
@@ -589,6 +592,7 @@ async function unapprove(req, id, { reason } = {}) {
     await lockPurchases(req.user.companyId, transaction);
     const cur = await load(req, id, transaction, true);
     if (cur.status !== 'APPROVED') throw AppError.rule('NOT_APPROVED', 'This invoice is not approved');
+    if (cur.returned > 0 || (await q('SELECT 1 FROM purchase_returns WHERE "purchaseInvoiceId" = :id LIMIT 1', { id }, transaction)).length) throw AppError.rule('HAS_RETURNS', 'Goods were returned against this invoice (purchase return invoice): delete or un-approve the return invoice first');
     if (cur.paid > 0) throw AppError.rule('HAS_PAYMENTS', 'Money was paid against this invoice; it cannot be un-approved');
     const [entry] = await q(`SELECT id, "entryNo" FROM journal_entries WHERE "companyId" = :companyId AND "sourceType" = :source AND "sourceId" = :id AND status = 'POSTED' AND "reversalOfId" IS NULL`,
       { companyId: req.user.companyId, source: SOURCE, id }, transaction);

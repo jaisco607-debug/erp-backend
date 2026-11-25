@@ -79,7 +79,7 @@ module.exports = {
     list: { query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), dateFrom: date, dateTo: date, vendorId: id, itemId: id, status: Joi.string().valid('POSTED', 'CANCELLED') }) },
     returnable: { query: Joi.object({ vendorId: id.required(), itemId: id, dateTo: date }) },
     get: { params },
-    create: { body: Joi.object({ returnDate: date, vendorId: id.required(), reason: Joi.string().valid(...REASONS).required(), notes: text(500), lines: Joi.array().items(vendorReturnLine).min(1).max(100).required() }) },
+    create: { body: Joi.object({ returnDate: date, vendorId: id.required(), reason: Joi.string().valid(...REASONS).required(), notes: text(500), vehicleNo: text(30), driverName: text(60), lines: Joi.array().items(vendorReturnLine).min(1).max(100).required() }) },
     cancel: { params, body: Joi.object({ reason: Joi.string().trim().min(3).max(300).required() }) },
   },
   VENDOR_STATUS, VENDOR_TYPES, VENDOR_PAYMENT, vendorFields,

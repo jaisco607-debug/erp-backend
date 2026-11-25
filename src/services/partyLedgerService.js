@@ -14,7 +14,7 @@ const pad5 = (n) => (n == null ? null : String(n).padStart(5, '0'));
 
 const PARTY_TABLE = { CUSTOMER: 'customers', VENDOR: 'vendors' };
 const SOURCE_TEXT = {
-  OPENING: 'Opening balance', SALES_INVOICE: 'Sales invoice', PURCHASE_INVOICE: 'Purchase invoice',
+  OPENING: 'Opening balance', SALES_INVOICE: 'Sales invoice', PURCHASE_INVOICE: 'Purchase invoice', PURCHASE_RETURN: 'Purchase return',
   PAYMENT_VOUCHER: 'Vendor payment', RECEIPT_VOUCHER: 'Customer receipt', JOURNAL_VOUCHER: 'Journal voucher', CONTRA_VOUCHER: 'Contra',
 };
 
@@ -25,14 +25,15 @@ const SOURCE_JOINS = `
   LEFT JOIN journal_vouchers jv ON e."sourceType" = 'JOURNAL_VOUCHER' AND jv.id = e."sourceId"
   LEFT JOIN contra_vouchers cv ON e."sourceType" = 'CONTRA_VOUCHER' AND cv.id = e."sourceId"
   LEFT JOIN purchase_invoices pi ON e."sourceType" = 'PURCHASE_INVOICE' AND pi.id = e."sourceId"
+  LEFT JOIN purchase_returns pr ON e."sourceType" = 'PURCHASE_RETURN' AND pr.id = e."sourceId"
   LEFT JOIN sales_invoices si ON e."sourceType" = 'SALES_INVOICE' AND si.id = e."sourceId"`;
-const SOURCE_COLS = `COALESCE(pv."voucherNo", rv."voucherNo", jv."voucherNo", cv."voucherNo", pi."voucherNo", si."invoiceNo") AS "docNo",
+const SOURCE_COLS = `COALESCE(pv."voucherNo", rv."voucherNo", jv."voucherNo", cv."voucherNo", pi."voucherNo", pr."voucherNo", si."invoiceNo") AS "docNo",
   COALESCE(pv."chequeNo", rv."chequeNo") AS "chequeNo", to_char(COALESCE(pv."chequeDate", rv."chequeDate"), 'YYYY-MM-DD') AS "chequeDate", pi."billNo" AS "billNo"`;
 
 // What the screen shows next to a line without another call: the money breakdown of an invoice and the texts of the invoice / voucher.
-const DOC_COLS = `COALESCE(si."grossAmount", pi."grossAmount")::text AS "grossAmount", COALESCE(si."taxAmount", pi."taxAmount")::text AS "taxAmount",
+const DOC_COLS = `COALESCE(si."grossAmount", pi."grossAmount", pr."grossAmount")::text AS "grossAmount", COALESCE(si."taxAmount", pi."taxAmount", pr."taxAmount")::text AS "taxAmount",
   COALESCE(si."taxRate", pi."taxRate")::float AS "taxRate", COALESCE(si."othersAmount", pi."othersAmount")::text AS "othersAmount", COALESCE(si."othersNote", pi."othersNote") AS "othersNote",
-  COALESCE(si.notes, pi.notes, pv.notes, rv.notes) AS "docNotes", COALESCE(si."invoiceDetails", pi."billDetails") AS "docDetails", COALESCE(jv.narration, cv.narration) AS "voucherNarration"`;
+  COALESCE(si.notes, pi.notes, pr.notes, pv.notes, rv.notes) AS "docNotes", COALESCE(si."invoiceDetails", pi."billDetails") AS "docDetails", COALESCE(jv.narration, cv.narration) AS "voucherNarration"`;
 // the entry a reversal undoes / the entry that undid this one, so the screen can pair and hide both
 const PAIR_COLS = `e."reversalOfId" AS "reversesEntryId", (SELECT o."entryNo" FROM journal_entries o WHERE o.id = e."reversalOfId") AS "reversesEntryNo",
   (SELECT r.id FROM journal_entries r WHERE r."reversalOfId" = e.id) AS "reversedByEntryId", (SELECT r."entryNo" FROM journal_entries r WHERE r."reversalOfId" = e.id) AS "reversedByEntryNo"`;

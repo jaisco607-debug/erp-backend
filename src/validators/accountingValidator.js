@@ -28,7 +28,7 @@ module.exports = {
     query: Joi.object({
       partyType: Joi.string().valid('CUSTOMER', 'VENDOR').required(), partyId: id.required(), dateFrom: ymdDate(), dateTo: ymdDate(), fiscalYear: Joi.number().integer().min(1990).max(2100),
       search: Joi.string().trim().max(100).allow(''),
-      kind: Joi.string().valid('SALES_INVOICE', 'PURCHASE_INVOICE', 'PAYMENT_VOUCHER', 'RECEIPT_VOUCHER', 'JOURNAL_VOUCHER', 'CONTRA_VOUCHER', 'EMPLOYEE_LOAN_VOUCHER', 'EMPLOYEE_ADVANCE_VOUCHER', 'SALARY_PAYMENT_VOUCHER', 'EOBI_VOUCHER', 'SALARY_TAX_VOUCHER'),
+      kind: Joi.string().valid('SALES_INVOICE', 'PURCHASE_INVOICE', 'PURCHASE_RETURN', 'PAYMENT_VOUCHER', 'RECEIPT_VOUCHER', 'JOURNAL_VOUCHER', 'CONTRA_VOUCHER', 'EMPLOYEE_LOAN_VOUCHER', 'EMPLOYEE_ADVANCE_VOUCHER', 'SALARY_PAYMENT_VOUCHER', 'EOBI_VOUCHER', 'SALARY_TAX_VOUCHER'),
     }),
   },
   parties: {

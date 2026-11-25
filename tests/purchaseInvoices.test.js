@@ -202,7 +202,7 @@ test('the purchase summary: totals of the list, filters and search', async () =>
 
   const all = await ok(w.api('get', '/purchase-invoices'), 200);
   expect(all.data.map((x) => x.voucherNo)).toEqual([2, 1]);
-  expect(all.summary).toEqual({ invoices: 2, amount: 6000, tax: 900, net: 6900, paid: 0, balance: 6900 });
+  expect(all.summary).toEqual({ invoices: 2, amount: 6000, tax: 900, net: 6900, paid: 0, returnedAmount: 0, balance: 6900 });
   expect((await ok(w.api('get', '/purchase-invoices?status=APPROVED'), 200)).summary).toMatchObject({ invoices: 1, net: 5900 });
   expect((await ok(w.api('get', `/purchase-invoices?vendorId=${p.b.id}`), 200)).summary).toMatchObject({ invoices: 1, net: 1000 });
   expect((await ok(w.api('get', '/purchase-invoices?dateFrom=2026-10-21&dateTo=2026-10-23'), 200)).data.map((x) => x.voucherNo)).toEqual([2]);
