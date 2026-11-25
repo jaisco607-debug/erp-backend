@@ -12,6 +12,7 @@ const issues = require('../services/fabricIssueService');
 const svc = require('../services/fabricInwardService');
 const { Joi, uuidParam, paging } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const view = requireService('FABRIC_STORE', 'VIEW');
 const full = requireService('FABRIC_STORE', 'FULL');
@@ -21,7 +22,7 @@ const deskView = requireAnyService(['FABRIC_STORE', 'SO_CARD'], 'VIEW');
 const deskFull = requireAnyService(['FABRIC_STORE', 'SO_CARD'], 'FULL');
 
 const text = (max) => Joi.string().trim().max(max).allow('', null);
-const meters = Joi.number().precision(2).positive().max(99999999);
+const meters = Joi.number().precision(2).positive().max(LIMITS.qty);
 const width = Joi.number().precision(2).positive().max(9999);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 

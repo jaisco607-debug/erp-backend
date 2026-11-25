@@ -1,5 +1,6 @@
 const { Joi, uuidParam, email } = require('./common');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const id = Joi.string().guid();
 const date = ymdDate();
@@ -20,6 +21,12 @@ const money = Joi.alternatives().try(
   Joi.string().trim().pattern(/^\d{1,10}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'an amount looks like 89000 or 89000.50' }),
   Joi.number().strict().precision(2).min(0).max(9999999999),
 );
+
+// the basic salary of a month: at most LIMITS.basicSalary (an amount like 89000 or 89000.50)
+const salary = Joi.alternatives().try(
+  Joi.string().trim().pattern(/^\d{1,7}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'an amount looks like 89000 or 89000.50' }),
+  Joi.number().strict().precision(2).min(0).max(LIMITS.basicSalary),
+).custom((v, h) => (Number(v) > LIMITS.basicSalary ? h.error('number.max', { limit: LIMITS.basicSalary }) : v));
 
 // IBAN: PK + 22 characters (24 in all): PK, 2 check digits, 4 letters of the bank, 16 letters / digits. Spaces are dropped and capitals are kept.
 const iban = Joi.string().trim().allow('', null).custom((v, h) => {
@@ -43,7 +50,7 @@ const fields = {
   groupId: id, departmentId: id.allow(null), designationId: id.allow(null), shiftId: id.allow(null),
   joiningDate: date,
   salaryType: Joi.string().valid('MONTHLY', 'FIXED', 'DAILY'),
-  basicSalary: money, foodAllowance: money, maintenanceAllowance: money, mobileAllowance: money, monthlyIncomeTax: money.allow(null), eobiNo: regNo, scssiNo: regNo,
+  basicSalary: salary, foodAllowance: money, maintenanceAllowance: money, mobileAllowance: money, monthlyIncomeTax: money.allow(null), eobiNo: regNo, scssiNo: regNo,
   paymentMethod: Joi.string().valid('BANK', 'CASH'),
   bankId: id.allow(null), accountNo: text(40), iban, accountTitle: text(120),
 };

@@ -1,11 +1,12 @@
 const { Joi } = require('./common');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const id = Joi.string().guid({ version: 'uuidv4' });
 // a decimal string ("1500.50") or a number with at most 2 decimals; never negative
 const amount = Joi.alternatives().try(
   Joi.string().trim().pattern(/^\d{1,13}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'amount must look like 1500.50' }),
-  Joi.number().strict().precision(2).min(0).max(9999999999999), // strict: 1.234 is an error, not rounded
+  Joi.number().strict().precision(2).min(0).max(LIMITS.voucherAmount), // strict: 1.234 is an error, not rounded
 );
 
 module.exports = {

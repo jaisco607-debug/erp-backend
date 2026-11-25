@@ -56,7 +56,7 @@ test('create: the loan cannot be more than the salary; the instalments, the firs
   await fails(w.hr('post', '/payroll/loans', loan(w, { deductFrom: '2026-13' })), 400, 'VALIDATION_FAILED');
   await fails(w.hr('post', '/payroll/loans', loan(w, { applicationDate: TODAY, deductFrom: '2020-01' })), 422, 'DEDUCT_FROM_BEFORE_APPLICATION');
   await fails(w.hr('post', '/payroll/loans', loan(w, { appliedAmount: 11, months: 12 })), 422, 'LOAN_TOO_SMALL_FOR_PERIOD');
-  await fails(w.hr('post', '/payroll/loans', loan(w, { applicationDate: '2999-01-01' })), 422, 'DATE_IN_FUTURE');
+  await fails(w.hr('post', '/payroll/loans', loan(w, { applicationDate: '2027-06-01' })), 422, 'DATE_IN_FUTURE');
   await fails(w.hr('post', '/payroll/loans', loan(w, { employeeId: '8f3c1a2e-1111-4222-8333-444455556666' })), 404, 'NOT_FOUND');
   await fails(w.hr('post', '/payroll/loans', { employeeId: w.faizan.id }), 400, 'VALIDATION_FAILED');
   // as much as the whole salary is allowed
@@ -179,7 +179,7 @@ test('the loan voucher: pays an approved loan from the bank (Debit Employee Loan
   await fails(v(payload(w, draftLoan.id)), 422, 'LOAN_NOT_APPROVED');
   await fails(v(payload(w, l.id, { amount: 25000.01 })), 422, 'AMOUNT_MORE_THAN_LOAN');
   await fails(v(payload(w, l.id, { payFromAccountId: w.receivable.id })), 422, 'NOT_BANK_OR_CASH');
-  await fails(v(payload(w, l.id, { voucherDate: '2020-01-01' })), 422, 'VOUCHER_BEFORE_APPLICATION');
+  await fails(v(payload(w, l.id, { voucherDate: '2022-01-01' })), 422, 'VOUCHER_BEFORE_APPLICATION');
   await fails(v(payload(w, l.id, { amount: 0 })), 422, 'BAD_AMOUNT');
   await fails(v({ loanId: l.id }), 400, 'VALIDATION_FAILED');
   await fails(v(payload(w, '8f3c1a2e-1111-4222-8333-444455556666')), 404, 'NOT_FOUND');

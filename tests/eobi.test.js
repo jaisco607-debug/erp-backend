@@ -369,3 +369,26 @@ test('masters and access: providers and locations (delete only when unused), rea
   await fails(other.accountant('post', '/eobi-vouchers', { providerId: w.delizia.id, locationId: w.gulshan.id, month: '2026-10', payFromAccountId: other.bank.id, paymentMode: 'ONLINE' }), 404, 'NOT_FOUND');
   await fails(w.api('delete', `/payroll/employees/${w.e[10].id}`), 422, 'EMPLOYEE_CONFIRMED');
 });
+
+// owner 2026-11-24 (A4.2): the voucher pays the employee share the payslips really withheld, not the share the list asks
+test('the EOBI voucher takes the employee share from the payslip; an employee with no payslip yet counts with the list', async () => {
+  const w = await setup();
+  const rows = [];
+  for (const d of ['01', '02', '03']) rows.push({ employeeId: 10, date: `2026-10-${d}`, time: '08:00' }, { employeeId: 10, date: `2026-10-${d}`, time: '16:00' });
+  await ok(w.api('post', '/payroll/attendance/punches/import', { rows }), 201);
+  const list = await makeList(w, '2026-10');
+  await add(w, list.list.id, [10], w.gulshan.id);
+  const run = await ok(w.api('post', '/payroll/runs', { month: '2026-10', groupId: w.factory.id }), 201);
+  const a = (await ok(w.api('get', `/payroll/runs/${run.id}/slips`))).data.find((s) => s.employee.code === 10);
+  const make = (body = {}) => ok(w.accountant('post', '/eobi-vouchers', { providerId: w.delizia.id, month: '2026-10', locationId: w.gulshan.id, payFromAccountId: w.bank.id, paymentMode: 'ONLINE', ...body }), 201);
+  // the payslip withheld 407 (the list's share): the same figures as before
+  expect((await ok(w.accountant('get', '/eobi-vouchers/locations?month=2026-10'))).data.find((x) => x.location === 'Gulshan')).toMatchObject({ employeeShare: 407 });
+  // HR changes the payslip to 350: the voucher follows what was really withheld
+  await ok(w.api('patch', `/payroll/slips/${a.id}`, { eobi: 350 }));
+  expect((await ok(w.accountant('get', '/eobi-vouchers/locations?month=2026-10'))).data.find((x) => x.location === 'Gulshan')).toMatchObject({ employeeShare: 350 });
+  const v = await make();
+  expect(v).toMatchObject({ employeeShare: 350, employer: 2035, amount: 2385 });
+  expect(v.lines[0]).toMatchObject({ employeeShare: 350, listShare: 407 });
+  const c = await ok(w.accountant('post', `/eobi-vouchers/${v.id}/confirm`));
+  expect(c).toMatchObject({ status: 'CONFIRMED', employeeShare: 350, amount: 2385 });
+});

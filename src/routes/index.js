@@ -54,6 +54,7 @@ router.use('/v1/processes', require('./processRoutes'));
 router.use('/v1/sales-invoices', require('./salesInvoiceRoutes'));
 router.use('/v1/purchase-invoices', require('./purchaseInvoiceRoutes'));
 router.use('/v1/purchase-returns', require('./purchaseReturnRoutes'));
+router.use('/v1/limits', require('./limitsRoutes'));
 const vouchers = require('./voucherRoutes');
 router.use('/v1/payment-vouchers', vouchers.payments);
 router.use('/v1/receipt-vouchers', vouchers.receipts);

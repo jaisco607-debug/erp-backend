@@ -50,7 +50,7 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
   expect((await api('get', '/stores/chemical/inwards?description=caustic')).body.total).toBe(2);
   expect(st.data[0].stock).toMatchObject({ main: 50, sub: 0, text: '50 KG' });
   // GST % from the dropdown, kg and grams in two boxes
-  const g = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', billType: 'GST', gstPercent: 18, lines: [{ itemId: soda.id, qtyMain: 3, qtySub: 500, rate: 1000 }] })).body;
+  const g = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorId: vendor.id, billType: 'GST', gstPercent: 18, lines: [{ itemId: soda.id, qtyMain: 3, qtySub: 500, rate: 1000 }] })).body;
   expect(g).toMatchObject({ totalQty: 3.5, totalQtyText: '3 KG 500 G', amount: 3500, gstPercent: null, salesTax: 0, billed: 3500, billType: 'OTHER' }); // billType and gstPercent sent are ignored
   expect(g.lines[0].qtySplit).toMatchObject({ main: 3, mainUnit: 'KG', sub: 500, subUnit: 'G' });
   expect((await api('patch', `/stores/chemical/inwards/${g.id}`, { lines: [{ itemId: soda.id, qtyMain: 1, qtySub: 1000, rate: 1 }] })).body.error.code).toBe('SUB_TOO_BIG');
@@ -65,15 +65,15 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
   await api('delete', `/stores/chemical/inwards/${t2.id}`);
   await api('delete', `/stores/chemical/inwards/${t3.id}`);
   // item typed: a new name is added to the store (in the dropdown next time), the same name is reused
-  const n1 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', lines: [{ itemName: 'Lemon Acid', categoryId: cat.id, qtyMain: 1, qtySub: 250 }] })).body;
+  const n1 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorId: vendor.id, lines: [{ itemName: 'Lemon Acid', categoryId: cat.id, qtyMain: 1, qtySub: 250 }] })).body;
   expect(n1.lines[0]).toMatchObject({ item: { name: 'Lemon Acid', unit: 'KG', category: 'Dyes' }, qty: 1.25 });
-  const n2 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', lines: [{ itemName: 'LEMON ACID', qty: 2 }] })).body;
+  const n2 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorId: vendor.id, lines: [{ itemName: 'LEMON ACID', qty: 2 }] })).body;
   expect(n2.lines[0].item.id).toBe(n1.lines[0].item.id);
   expect((await api('get', '/stores/chemical/inwards/form-data')).body.items.map((i) => i.label)).toContain('Dyes / Lemon Acid');
   await api('delete', `/stores/chemical/inwards/${n1.id}`);
   await api('delete', `/stores/chemical/inwards/${n2.id}`);
   // the same chemical typed again (no category, empty itemId) is NOT added twice
-  const n3 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorId: '', lines: [{ itemId: '', itemName: 'caustic soda', categoryId: null, qty: 1 }] })).body;
+  const n3 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', vendorId: vendor.id, lines: [{ itemId: '', itemName: 'caustic soda', categoryId: null, qty: 1 }] })).body;
   expect(n3.lines[0].item.id).toBe(soda.id);
   await api('delete', `/stores/chemical/inwards/${n3.id}`);
   expect((await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-16', lines: [{ itemId: '', qty: 1 }] })).body.error.code).toBe('ITEM_REQUIRED');
@@ -100,7 +100,7 @@ test('chemical store: vendor, items, draft without rate, approve adds stock with
   st = (await api('get', '/stores/chemical/stock')).body;
   expect(st.data[0]).toMatchObject({ stockQty: 24.5, stockValue: 2940, avgRate: 120 });
   expect((await api('delete', `/stores/chemical/inwards/${ok.id}`)).body.error.code).toBe('ENTRY_HAS_IP');
-  const d2 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-14', lines: [{ itemId: soda.id, qty: 1 }] })).body;
+  const d2 = (await api('post', '/stores/chemical/inwards', { inwardDate: '2026-10-14', vendorId: vendor.id, lines: [{ itemId: soda.id, qty: 1 }] })).body;
   expect((await api('delete', `/stores/chemical/inwards/${d2.id}`)).status).toBe(204);
 });
 

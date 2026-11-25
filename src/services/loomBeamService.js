@@ -221,6 +221,19 @@ async function putBeams(entryId, beams, startDate, transaction) {
   }
 }
 
+// A1.2 (owner 2026-11-24): a loom starts or is cut today or before, never on a day that has not come: a future start blocks cut-off, half-cut and the production register
+function notFuture(date, field) {
+  if (date && date > today()) throw AppError.rule('FUTURE_DATE', 'This date has not come yet; use today or an earlier day', { field });
+}
+
+/** The units of the loom that were entered on the days of this entry belong to it (and the days outside it do not), after the start or end date moved. */
+async function relinkProduction(e, startDate, endDate, transaction) {
+  await exec('UPDATE production_units SET "entryId" = NULL, "updatedAt" = now() WHERE "companyId" = :companyId AND "loomId" = :loomId AND "entryId" = :id AND ("workDate" < :startDate OR (CAST(:endDate AS date) IS NOT NULL AND "workDate" > :endDate))',
+    { companyId: e.companyId, loomId: e.loomId, id: e.id, startDate, endDate: endDate || null }, transaction);
+  await exec('UPDATE production_units SET "entryId" = :id, "updatedAt" = now() WHERE "companyId" = :companyId AND "loomId" = :loomId AND "entryId" IS NULL AND "workDate" >= :startDate AND (CAST(:endDate AS date) IS NULL OR "workDate" <= :endDate)',
+    { companyId: e.companyId, loomId: e.loomId, id: e.id, startDate, endDate: endDate || null }, transaction);
+}
+
 async function create(req, data) {
   const { companyId } = req.user;
   return sequelize.transaction(async (transaction) => {
@@ -228,6 +241,7 @@ async function create(req, data) {
     if (!loom.isActive) throw AppError.rule('LOOM_INACTIVE', 'This loom is switched off', { field: 'loomId' });
     const beamIds = data.beamIds || [];
     const startDate = data.startDate || today();
+    notFuture(startDate, 'startDate');
     const beams = await pickBeams(companyId, data.loomId, beamIds, startDate, transaction);
     const kId = await counters.take(companyId, 'loom_k_id', async () => Number((await q('SELECT COALESCE(MAX("kId"), 0) + 1 AS n FROM loom_entries WHERE "companyId" = :companyId', { companyId }, transaction))[0].n), transaction);
     const id = crypto.randomUUID();
@@ -260,10 +274,12 @@ async function update(req, id, changes) {
     const set = {};
     for (const f of ['factor', 'loomRpm', 'loomPick', 'reedSpace']) if (changes[f] !== undefined) set[f] = changes[f];
     if (changes.startDate) {
+      notFuture(changes.startDate, 'startDate');
       const rows = await beamRows(id, transaction);
       const since = rows.reduce((m, r) => (String(r.prevStatusDate) > m ? String(r.prevStatusDate) : m), '');
       if (changes.startDate < since) throw AppError.rule('BEFORE_FULL', `The beams came in full on ${since}: the start date cannot be before that`, { since });
       set.startDate = changes.startDate;
+      await relinkProduction(e, changes.startDate, e.endDay, transaction);
       await exec('UPDATE yarn_beams SET "statusDate" = :d, "updatedAt" = now() WHERE id IN (SELECT "beamId" FROM loom_entry_beams WHERE "entryId" = :id)', { d: changes.startDate, id }, transaction);
     }
     const keys = Object.keys(set);
@@ -336,6 +352,7 @@ async function cutOff(req, id, { endDate }) {
     needActive(e);
     if (!e.isConfirmed) throw AppError.rule('NOT_CONFIRMED', 'Confirm the entry before cutting the loom off');
     const date = endDate || today();
+    notFuture(date, 'endDate');
     if (date < e.startDay) throw AppError.rule('END_BEFORE_START', `The loom started on ${e.startDay}: the end date cannot be before that`, { startDate: e.startDay });
     for (const b of await beamRows(id, transaction)) {
       if (b.status !== 'AT_LOOM') throw AppError.rule('BEAM_MOVED_ON', `Beam ${b.beamNo} is not at the loom any more (it is ${BEAM_TEXT[b.status].toLowerCase()})`, { beamNo: b.beamNo, status: b.status });
@@ -355,6 +372,7 @@ async function halfCut(req, id, { endDate, leftM, beams: given }) {
     needActive(e);
     if (!e.isConfirmed) throw AppError.rule('NOT_CONFIRMED', 'Confirm the entry before taking the beams off the loom');
     const date = endDate || today();
+    notFuture(date, 'endDate');
     if (date < e.startDay) throw AppError.rule('END_BEFORE_START', `The loom started on ${e.startDay}: the date cannot be before that`, { startDate: e.startDay });
     const rows = await beamRows(id, transaction);
     if (!rows.length) throw AppError.rule('NO_BEAMS', 'This entry has no beams');

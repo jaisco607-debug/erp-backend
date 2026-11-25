@@ -44,4 +44,15 @@ async function loginAs(user, password = PASSWORD) {
   return res.body;
 }
 
-module.exports = { app, request, sequelize, clean, makeUser, makeCompany, loginAs, companyCodeOf, PASSWORD };
+/**
+ * Fires the same call twice at the same moment (a double click, or two users) and returns both answers.
+ * A reversal (cancel, undo, un-approve, delete) must succeed once: use expectOneSuccess on the answers.
+ */
+const raceTwice = (fn) => Promise.all([fn(), fn()]);
+const expectOneSuccess = (answers) => {
+  const good = answers.filter((r) => r.status < 300);
+  if (good.length !== 1) throw new Error(`expected exactly one success, got ${good.length}: ${answers.map((r) => r.status + ' ' + (r.body && r.body.error && r.body.error.code)).join(', ')}`);
+  return { good: good[0], bad: answers.find((r) => r.status >= 300) };
+};
+
+module.exports = { app, request, sequelize, clean, makeUser, makeCompany, loginAs, companyCodeOf, PASSWORD, raceTwice, expectOneSuccess };

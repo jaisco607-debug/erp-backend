@@ -15,6 +15,7 @@ const c = require('../controllers/greyController');
 const grey = require('../services/greyReturnService');
 const { Joi, paging } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const SERVICE = 'GREY_STORE';
 const view = requireService(SERVICE, 'VIEW');
@@ -65,8 +66,8 @@ lots.delete('/:id/give-back/:returnId', admin, full, validate(v.lot.undoGiveBack
 const retLine = Joi.object({
   greyLotId: Joi.string().guid().required(),
   thaanNos: Joi.array().items(Joi.number().integer().min(1)).min(1).max(2000).unique(),
-  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(99999999) })).min(1).max(2000).unique('thaanNo'),
-  meters: Joi.number().precision(2).positive().max(99999999),
+  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(LIMITS.qty) })).min(1).max(2000).unique('thaanNo'),
+  meters: Joi.number().precision(2).positive().max(LIMITS.qty),
   pieces: Joi.number().integer().min(0).max(1000000).default(0),
 }).xor('thaanNos', 'thaans', 'meters');
 lots.post('/fabric-return', full, validate({ body: Joi.object({

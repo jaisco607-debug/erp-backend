@@ -9,6 +9,7 @@
 const { Op } = require('sequelize');
 const { sequelize, GreyLot, GreyLotThaan, GreyReturn, Customer, Quality } = require('../models');
 const AppError = require('../utils/AppError');
+const LIMITS = require('../config/limits');
 const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
@@ -197,6 +198,8 @@ async function takeTypedLotNo(req, lotNo, transaction, exceptId) {
   if (exceptId) where.id = { [Op.ne]: exceptId };
   if (await GreyLot.findOne({ where, paranoid: false, transaction })) throw AppError.rule('LOT_NO_TAKEN', `Lot ${lotNo} already exists`);
   const next = await counters.peek(companyId, LOT, async () => ((await maxLot(companyId, transaction)) || 0) + 1, transaction);
+  // a typo (an extra digit) would push every automatic number after it: a typed number is at most `lotNoAhead` above the next one
+  if (lotNo > next + LIMITS.lotNoAhead) throw AppError.rule('LOT_NO_TOO_FAR', `Lot ${lotNo} is too far from the next lot number (${next}); the highest you can type is ${next + LIMITS.lotNoAhead}`, { nextLotNo: next, highest: next + LIMITS.lotNoAhead });
   if (lotNo >= next) await counters.set(companyId, LOT, lotNo + 1, transaction);
 }
 

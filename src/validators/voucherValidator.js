@@ -1,6 +1,7 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { MODES } = require('../services/voucherSupport');
+const LIMITS = require('../config/limits');
 
 const id = Joi.string().guid({ version: 'uuidv4' });
 const date = ymdDate();
@@ -8,7 +9,7 @@ const text = (max) => Joi.string().trim().max(max).allow('', null);
 // a decimal string ("1500.50") or a number with at most 2 decimals
 const amount = Joi.alternatives().try(
   Joi.string().trim().pattern(/^\d{1,13}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'amount must look like 1500.50' }),
-  Joi.number().strict().precision(2).min(0).max(9999999999999),
+  Joi.number().strict().precision(2).min(0).max(LIMITS.voucherAmount),
 );
 const rate = Joi.number().strict().precision(2).min(0).max(99.99); // income tax withheld, in percent
 

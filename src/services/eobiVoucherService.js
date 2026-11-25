@@ -29,12 +29,17 @@ async function options(req) {
   return { modes: MODES.map((code) => ({ code, text: MODE_TEXT[code] })), statuses: Object.entries(STATUS_TEXT).map(([code, text]) => ({ code, text })), payFromAccounts: await support.bankAndCashAccounts(req.user.companyId) };
 }
 
+// A4.2 (owner 2026-11-24): the employee share the voucher pays is what the payslips really withheld (the payroll may have changed it, e.g. a part month);
+// an employee with no payslip yet for the month still counts with the share of the list.
+const SLIP = `LEFT JOIN LATERAL (SELECT (CASE WHEN sl.status = 'SUSPENDED' THEN 0 ELSE sl."eobiAmount" END) AS amt FROM payroll_slips sl JOIN payroll_runs pr ON pr.id = sl."runId" WHERE sl."employeeId" = r."employeeId" AND pr.month = r.month ORDER BY sl."updatedAt" DESC LIMIT 1) s ON true`;
+const SHARE = 'COALESCE(s.amt, r."employeeAmount")';
+
 /** What the rows of a location say now: the number of employees and the two shares, in cents. */
 async function totalsOf(companyId, providerId, locationId, month, transaction) {
-  const [t] = await q(`SELECT count(*)::int AS employees, COALESCE(SUM(r."employerAmount"), 0)::text AS employer, COALESCE(SUM(r."employeeAmount"), 0)::text AS share
-    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" WHERE l."companyId" = :companyId AND l."providerId" = :providerId AND r."locationId" = :locationId AND r.month = :first`,
+  const [t] = await q(`SELECT count(*)::int AS employees, COALESCE(SUM(r."employerAmount"), 0)::text AS employer, COALESCE(SUM(${SHARE}), 0)::text AS share, COALESCE(SUM(r."employeeAmount"), 0)::text AS "listShare"
+    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" ${SLIP} WHERE l."companyId" = :companyId AND l."providerId" = :providerId AND r."locationId" = :locationId AND r.month = :first`,
   { companyId, providerId, locationId, first: `${month}-01` }, transaction);
-  return { employees: t.employees, employer: toCents(t.employer), share: toCents(t.share) };
+  return { employees: t.employees, employer: toCents(t.employer), share: toCents(t.share), listShare: toCents(t.listShare) };
 }
 
 function voucherJson(r) {
@@ -57,10 +62,10 @@ async function load(req, id, transaction, forUpdate = false) {
 async function get(req, id, transaction) {
   const r = await load(req, id, transaction);
   const v = voucherJson(r);
-  const lines = await q(`SELECT e.code, e.name, e.cnic, d.name AS department, r.wage::text AS wage, r."employerAmount"::text AS employer, r."employeeAmount"::text AS share
-    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" JOIN payroll_employees e ON e.id = r."employeeId" LEFT JOIN payroll_departments d ON d.id = e."departmentId"
+  const lines = await q(`SELECT e.code, e.name, e.cnic, d.name AS department, r.wage::text AS wage, r."employerAmount"::text AS employer, (${SHARE})::text AS share, r."employeeAmount"::text AS "listShare"
+    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" ${SLIP} JOIN payroll_employees e ON e.id = r."employeeId" LEFT JOIN payroll_departments d ON d.id = e."departmentId"
     WHERE l."companyId" = :companyId AND l."providerId" = :providerId AND r."locationId" = :locationId AND r.month = :first ORDER BY e.code`, { companyId: req.user.companyId, providerId: r.providerId, locationId: r.locationId, first: `${r.month}-01` }, transaction);
-  v.lines = lines.map((l) => ({ employee: { code: l.code, label: pad5(l.code), name: l.name, cnic: l.cnic, department: l.department }, wage: num(toCents(l.wage)), employer: num(toCents(l.employer)), employeeShare: num(toCents(l.share)), total: num(toCents(l.employer) + toCents(l.share)) }));
+  v.lines = lines.map((l) => ({ employee: { code: l.code, label: pad5(l.code), name: l.name, cnic: l.cnic, department: l.department }, wage: num(toCents(l.wage)), employer: num(toCents(l.employer)), employeeShare: num(toCents(l.share)), listShare: num(toCents(l.listShare)), total: num(toCents(l.employer) + toCents(l.share)) }));
   return v;
 }
 
@@ -90,9 +95,9 @@ async function locations(req, { month, providerId }) {
   const repl = { companyId: req.user.companyId, first: `${month}-01` };
   let extra = '';
   if (providerId) { extra = ' AND l."providerId" = :providerId'; repl.providerId = providerId; }
-  const rows = await q(`SELECT l."providerId", p.name AS provider, r."locationId", loc.name AS location, count(*)::int AS employees, SUM(r."employerAmount")::text AS employer, SUM(r."employeeAmount")::text AS share,
+  const rows = await q(`SELECT l."providerId", p.name AS provider, r."locationId", loc.name AS location, count(*)::int AS employees, SUM(r."employerAmount")::text AS employer, SUM(${SHARE})::text AS share,
       v.id AS "voucherId", v."voucherNo", v.status
-    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" JOIN eobi_providers p ON p.id = l."providerId" JOIN eobi_locations loc ON loc.id = r."locationId"
+    FROM eobi_list_rows r JOIN eobi_lists l ON l.id = r."listId" JOIN eobi_providers p ON p.id = l."providerId" JOIN eobi_locations loc ON loc.id = r."locationId" ${SLIP}
     LEFT JOIN eobi_vouchers v ON v."providerId" = l."providerId" AND v."locationId" = r."locationId" AND v.month = r.month
     WHERE l."companyId" = :companyId AND r.month = :first${extra} GROUP BY l."providerId", p.name, r."locationId", loc.name, v.id ORDER BY p.name, loc.name`, repl);
   return { month, monthLabel: monthLabel(month), data: rows.map((r) => ({ providerId: r.providerId, provider: r.provider, locationId: r.locationId, location: r.location, employees: r.employees, employer: num(toCents(r.employer)), employeeShare: num(toCents(r.share)),

@@ -210,3 +210,21 @@ test('Settings > Machines, machines on jobs (operator, meters in / out), the mac
   err(await api('post', `/departments/PRINTING/jobs/${prn.id}/machines`, { machineId: m1.id, operatorName: 'Xx' }), 422, 'MACHINES_OFF');
   expect((await api('get', '/departments/PRINTING/machines')).body).toMatchObject({ enabled: false, machines: [] });
 });
+
+// owner 2026-11-24 (A3.3): two admins together: machines are numbered once each; the same prefix goes to one department, the other gets a clear answer (not a 500)
+test('two admins adding machines and taking the same prefix at the same moment', async () => {
+  const { raceTwice } = require('./helpers');
+  const company = await makeCompany();
+  for (const code of ['DYEING', 'FINISHING']) await CompanyService.create({ companyId: company.id, serviceId: (await Service.findOne({ where: { code } })).id });
+  const admin = await makeUser({ userType: 'CLIENT_ADMIN', companyId: company.id });
+  const auth = { Authorization: `Bearer ${(await loginAs(admin)).accessToken}` };
+  const api = (m, url, body) => request(app)[m](`/api/v1${url}`).set(auth).send(body);
+  await api('patch', '/machine-settings/DYEING', { machinesEnabled: true });
+  const added = await raceTwice(() => api('post', '/machine-settings/DYEING/machines', { count: 2 }));
+  expect(added.map((r) => r.status)).toEqual([201, 201]);
+  const names = (await api('get', '/machine-settings/DYEING/machines')).body.data.map((m) => m.name).sort();
+  expect(names).toEqual(['DYE-01', 'DYE-02', 'DYE-03', 'DYE-04']);
+  const take = await Promise.all([api('patch', '/machine-settings/DYEING', { prefix: 'ZZ' }), api('patch', '/machine-settings/FINISHING', { machinesEnabled: true, prefix: 'ZZ' })]);
+  expect(take.map((r) => r.status).sort()).toEqual([200, 422]);
+  expect(take.find((r) => r.status === 422).body.error.code).toBe('PREFIX_TAKEN');
+});

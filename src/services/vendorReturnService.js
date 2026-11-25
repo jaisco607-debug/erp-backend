@@ -115,6 +115,9 @@ async function create(req, store, data) {
 async function cancel(req, store, id, { reason }) {
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
+    // the return row first, then the status: two cancels sent together cannot both put the stock back (the second waits here and then finds it cancelled)
+    const [locked] = await q('SELECT id FROM store_vendor_returns WHERE id = :id AND "companyId" = :companyId AND store = :store FOR UPDATE', { id, companyId, store }, transaction);
+    if (!locked) throw AppError.notFound('Return');
     const before = await load(id, companyId, store, transaction);
     if (before.status !== 'POSTED') throw AppError.rule('ALREADY_CANCELLED', 'This return is already cancelled');
     if (before.purchaseReturn) throw AppError.rule('RETURN_INVOICED', `This return is on purchase return invoice ${before.purchaseReturn.voucherLabel}: delete or un-approve that invoice first`, { purchaseReturnId: before.purchaseReturn.id });

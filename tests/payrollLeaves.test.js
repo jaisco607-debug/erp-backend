@@ -57,7 +57,7 @@ test('create: dates, reason and overlap are checked; the application shows its w
   await fails(w.hr('post', '/payroll/leaves', leave(w, { fromDate: '2026-10-09', toDate: '2026-10-05' })), 422, 'TO_BEFORE_FROM');
   await fails(w.hr('post', '/payroll/leaves', leave(w, { fromDate: '2024-12-30', toDate: '2025-01-02' })), 422, 'LEAVE_BEFORE_JOINING');
   await fails(w.hr('post', '/payroll/leaves', leave(w, { reason: 'x' })), 400, 'VALIDATION_FAILED');
-  await fails(w.hr('post', '/payroll/leaves', leave(w, { applicationDate: '2999-01-01' })), 422, 'DATE_IN_FUTURE');
+  await fails(w.hr('post', '/payroll/leaves', leave(w, { applicationDate: '2027-06-01' })), 422, 'DATE_IN_FUTURE');
   await fails(w.hr('post', '/payroll/leaves', { employeeId: w.vet.id }), 400, 'VALIDATION_FAILED');
   await fails(w.hr('post', '/payroll/leaves', leave(w, { employeeId: '8f3c1a2e-1111-4222-8333-444455556666' })), 404, 'NOT_FOUND');
   const a = await ok(w.hr('post', '/payroll/leaves', leave(w)), 201);

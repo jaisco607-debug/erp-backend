@@ -48,7 +48,7 @@ test('create: the application with the employee card; wrong data is refused; one
     employee: { code: 760, label: '00760', name: 'MUMTAZ ALI', fatherName: 'ALI BAIG', department: { name: 'Dishwash' }, designation: 'Worker', joiningDate: '2026-07-06', basicSalary: '25000.00', service: '0y 3m', isClosed: false, hasPhoto: false } });
   await fails(w.hr('post', '/payroll/resignations', form(w)), 422, 'RESIGNATION_EXISTS');
   await fails(w.hr('post', '/payroll/resignations', form(w, { employeeId: w.nadeem.id, lastWorkingDay: '2026-07-05' })), 422, 'LAST_DAY_BEFORE_JOINING');
-  await fails(w.hr('post', '/payroll/resignations', form(w, { employeeId: w.nadeem.id, applicationDate: '2999-01-01' })), 422, 'DATE_IN_FUTURE');
+  await fails(w.hr('post', '/payroll/resignations', form(w, { employeeId: w.nadeem.id, applicationDate: '2027-06-01' })), 422, 'DATE_IN_FUTURE');
   await fails(w.hr('post', '/payroll/resignations', form(w, { employeeId: w.nadeem.id, reason: 'x' })), 400, 'VALIDATION_FAILED');
   await fails(w.hr('post', '/payroll/resignations', { employeeId: w.nadeem.id }), 400, 'VALIDATION_FAILED');
   await fails(w.hr('post', '/payroll/resignations', form(w, { employeeId: '8f3c1a2e-1111-4222-8333-444455556666' })), 404, 'NOT_FOUND');
@@ -110,11 +110,11 @@ test('review and approval: HR cannot approve; approving posts it: the employee c
 
 test('a last working day still to come can be sent and reviewed but only approved from that day', async () => {
   const w = await setup();
-  const a = await ok(w.hr('post', '/payroll/resignations', form(w, { applicationDate: TODAY, lastWorkingDay: '2999-12-31' })), 201);
+  const a = await ok(w.hr('post', '/payroll/resignations', form(w, { applicationDate: TODAY, lastWorkingDay: '2027-06-30' })), 201);
   expect(a.gapDays).toBeLessThan(0);
   await ok(w.hr('post', `/payroll/resignations/${a.id}/submit`));
   const e = await fails(w.api('post', `/payroll/resignations/${a.id}/approve`), 422, 'LAST_DAY_IN_FUTURE');
-  expect(e.details).toEqual({ lastWorkingDay: '2999-12-31' });
+  expect(e.details).toEqual({ lastWorkingDay: '2027-06-30' });
   expect((await ok(w.api('get', `/payroll/employees/${w.mumtaz.id}`))).isClosed).toBe(false);
   await ok(w.api('patch', `/payroll/resignations/${a.id}/review`, { lastWorkingDay: TODAY }));
   expect((await ok(w.api('post', `/payroll/resignations/${a.id}/approve`))).posted).toBe(true);

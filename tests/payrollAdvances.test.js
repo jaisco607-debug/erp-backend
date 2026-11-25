@@ -29,7 +29,7 @@ test('advance: HR writes it down (no approval), the accountant pays it with an a
   const b = await ok(w.hrApp('post', '/payroll/advances', { employeeId: w.dan.id, amount: 2000, advanceDate: '2026-10-12' }), 201);
   await fails(w.hrApp('post', '/payroll/advances', { employeeId: w.zaid.id, amount: 0 }), 400, 'VALIDATION_FAILED');
   await fails(w.hrApp('post', '/payroll/advances', { employeeId: w.zaid.id, amount: '12.345' }), 400, 'VALIDATION_FAILED');
-  await fails(w.hrApp('post', '/payroll/advances', { employeeId: w.zaid.id, amount: 100, advanceDate: '2020-01-01' }), 422, 'BEFORE_JOINING');
+  await fails(w.hrApp('post', '/payroll/advances', { employeeId: w.zaid.id, amount: 100, advanceDate: '2022-01-01' }), 422, 'BEFORE_JOINING');
   expect((await ok(w.hrApp('get', `/payroll/advances/employee/${w.zaid.id}`))).advanceSummary).toEqual({ pending: '5000.00', count: 1 });
   expect(await ok(w.hrApp('get', '/payroll/advances/summary'))).toMatchObject({ total: 2, waitingVoucher: 2, paid: 0, recovered: 0, amount: '7000.00', toRecover: '0.00' });
   expect((await ok(w.hrApp('get', '/payroll/advances?status=WAITING_VOUCHER'))).total).toBe(2);

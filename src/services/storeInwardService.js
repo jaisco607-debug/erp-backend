@@ -236,6 +236,7 @@ async function create(req, store, data) {
   return sequelize.transaction(async (transaction) => {
     const companyId = req.user.companyId;
     const lines = await prepare(req, store, data, transaction);
+    if (!data.vendorId) throw AppError.rule('VENDOR_REQUIRED', 'Select the vendor of this purchase');
     const idNo = await counters.take(companyId, ID(store), async () => ((await StoreInward.max('idNo', { where: { companyId, store }, transaction })) || 0) + 1, transaction);
     const header = Object.fromEntries(headerFields.filter((f) => data[f] !== undefined).map((f) => [f, blank(data[f])]));
     const e = StoreInward.build({ ...header, billType: 'OTHER', gstPercent: null, salesTax: 0, companyId, store, idNo, ...totals(lines), createdById: req.user.id });

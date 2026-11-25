@@ -120,10 +120,16 @@ async function settings(req) {
 }
 
 /** PATCH /machine-settings/:code { machinesEnabled?, prefix? }. */
+// A3.3: two admins saving the same prefix or machine name together hit the unique index (23505): answer in plain words, not a 500
+const isDuplicate = (e) => Boolean(e && ((e.original && e.original.code === '23505') || (e.parent && e.parent.code === '23505') || e.name === 'SequelizeUniqueConstraintError'));
+const duplicateAsRule = (e, code, message, details) => { if (isDuplicate(e)) throw AppError.rule(code, message, details); throw e; };
+const lockMachines = (companyId, transaction) => exec('SELECT pg_advisory_xact_lock(hashtext(:k))', { k: `machines:${companyId}` }, transaction);
+
 async function setDepartment(req, code, { machinesEnabled, prefix }) {
   const { companyId } = req.user;
   return sequelize.transaction(async (transaction) => {
     const d = await deptByCode(req, code, transaction);
+    await lockMachines(companyId, transaction); // the same lock as adding machines: a rename of the prefix and an add cannot run together
     const flags = await flagsOf(companyId, transaction);
     const f = flags.get(d.id) || { enabled: false, prefix: null };
     const before = { machinesEnabled: f.enabled, prefix: f.prefix };
@@ -139,13 +145,17 @@ async function setDepartment(req, code, { machinesEnabled, prefix }) {
     let enabled = f.enabled;
     if (machinesEnabled !== undefined) {
       if (machinesEnabled === false && f.enabled) {
+        // a run starts under the lock of its machine: take the machines first, so switching off and starting a run cannot both win
+        await q('SELECT id FROM machines WHERE "companyId" = :companyId AND "departmentId" = :d ORDER BY id FOR UPDATE', { companyId, d: d.id }, transaction);
         const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM machine_runs WHERE "companyId" = :companyId AND "departmentId" = :d AND status = 'RUNNING'`, { companyId, d: d.id }, transaction);
         if (n) throw AppError.rule('MACHINES_RUNNING', `${n} machine(s) are running: finish their work before switching the machines off`, { running: n });
       }
       enabled = machinesEnabled;
     }
     if (enabled && !nextPrefix) nextPrefix = suggestPrefix(d.name, takenPrefixes(flags, d.id));
-    await exec('UPDATE company_services SET machines = :enabled, "machinePrefix" = :prefix WHERE "companyId" = :companyId AND "serviceId" = :d', { enabled, prefix: nextPrefix, companyId, d: d.id }, transaction);
+    try {
+      await exec('UPDATE company_services SET machines = :enabled, "machinePrefix" = :prefix WHERE "companyId" = :companyId AND "serviceId" = :d', { enabled, prefix: nextPrefix, companyId, d: d.id }, transaction);
+    } catch (e) { duplicateAsRule(e, 'PREFIX_TAKEN', `The prefix ${nextPrefix} is used by another department`, { field: 'prefix' }); }
     // a new prefix renames the machines of the department (DYE-03 -> DYG-03): the history keeps pointing at the same machines
     if (f.prefix && nextPrefix !== f.prefix) await exec("UPDATE machines SET name = :prefix || substring(name from position('-' in name)), \"updatedAt\" = now() WHERE \"companyId\" = :companyId AND \"departmentId\" = :d", { prefix: nextPrefix, companyId, d: d.id }, transaction);
     await audit.log(req, { action: 'DEPARTMENT_MACHINES_SET', entityType: 'Service', entityId: d.id, before: { department: d.name, ...before }, after: { machinesEnabled: enabled, prefix: nextPrefix } }, { transaction });
@@ -166,14 +176,16 @@ async function addMachines(req, code, { count = 1, notes }) {
   const { companyId } = req.user;
   await sequelize.transaction(async (transaction) => {
     const d = await deptByCode(req, code, transaction);
-    await exec('SELECT pg_advisory_xact_lock(hashtext(:k))', { k: `machines:${companyId}` }, transaction);
+    await lockMachines(companyId, transaction);
     const f = (await flagsOf(companyId, transaction)).get(d.id) || {};
     if (!f.enabled || !f.prefix) throw AppError.rule('MACHINES_OFF', 'Switch the machines of this department on first', { code: d.code });
     const [{ last }] = await q('SELECT COALESCE(MAX(number), 0) AS last FROM machines WHERE "companyId" = :companyId AND "departmentId" = :d', { companyId, d: d.id }, transaction);
     const names = [];
     for (let i = 1; i <= count; i += 1) {
       const number = Number(last) + i; const name = `${f.prefix}-${pad(number)}`;
-      await exec('INSERT INTO machines (id, "companyId", "departmentId", number, name, notes, "createdById") VALUES (:id, :companyId, :d, :number, :name, :notes, :userId)', { id: crypto.randomUUID(), companyId, d: d.id, number, name, notes: notes || null, userId: req.user.id }, transaction);
+      try {
+        await exec('INSERT INTO machines (id, "companyId", "departmentId", number, name, notes, "createdById") VALUES (:id, :companyId, :d, :number, :name, :notes, :userId)', { id: crypto.randomUUID(), companyId, d: d.id, number, name, notes: notes || null, userId: req.user.id }, transaction);
+      } catch (e) { duplicateAsRule(e, 'MACHINE_EXISTS', `${name} already exists: reload the list and add again`, { name }); }
       names.push(name);
     }
     await audit.log(req, { action: 'MACHINES_ADDED', entityType: 'Machine', entityId: d.id, after: { department: d.name, names } }, { transaction });
@@ -182,7 +194,8 @@ async function addMachines(req, code, { count = 1, notes }) {
 }
 
 async function machineOr404(req, id, transaction) {
-  const [m] = await q('SELECT id, "departmentId", name, "isActive" FROM machines WHERE id = :id AND "companyId" = :companyId AND "deletedAt" IS NULL', { id, companyId: req.user.companyId }, transaction);
+  // locked while it is read inside a transaction: starting a run on it (assign) locks the same row, so switching off / deleting and starting a run are one after the other
+  const [m] = await q(`SELECT id, "departmentId", name, "isActive" FROM machines WHERE id = :id AND "companyId" = :companyId AND "deletedAt" IS NULL${transaction ? ' FOR UPDATE' : ''}`, { id, companyId: req.user.companyId }, transaction);
   if (!m) throw AppError.notFound('Machine');
   return m;
 }
@@ -213,7 +226,9 @@ async function updateMachine(req, id, { name, isActive, notes }) {
     if (notes !== undefined) set.notes = notes || null;
     const keys = Object.keys(set);
     if (keys.length) {
-      await exec(`UPDATE machines SET ${keys.map((k) => `"${k}" = :${k}`).join(', ')}, "updatedAt" = now() WHERE id = :id`, { ...set, id }, transaction);
+      try {
+        await exec(`UPDATE machines SET ${keys.map((k) => `"${k}" = :${k}`).join(', ')}, "updatedAt" = now() WHERE id = :id`, { ...set, id }, transaction);
+      } catch (e) { duplicateAsRule(e, 'NAME_TAKEN', `${set.name || 'This name'} already exists`, { field: 'name' }); }
       await audit.log(req, { action: 'MACHINE_UPDATED', entityType: 'Machine', entityId: id, before: { name: m.name, isActive: m.isActive }, after: { name: m.name, ...set } }, { transaction });
     }
     return void companyId;

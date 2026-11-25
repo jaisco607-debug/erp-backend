@@ -320,3 +320,19 @@ test('production bill / wages: days x rate, extra looms, production amount, stop
     if (process.env.PDF_OUT) require('fs').writeFileSync(`${process.env.PDF_OUT}/${path.replace('/', '-')}`, file.body);
   }
 });
+
+// owner 2026-11-24 (A1.2): a loom does not start on a day that has not come; moving the start date moves the link of the units
+test('loom entry: no future start or end date; the units follow the start date when it moves', async () => {
+  const w = await setup();
+  const linked = async () => (await sequelize.query('SELECT "workDate"::text AS d, "entryId" FROM production_units WHERE "loomId" = :l ORDER BY "workDate"', { replacements: { l: w.looms['01'].id }, type: 'SELECT' })).map((r) => [r.d, r.entryId === w.entry.id]);
+  err(await w.api('patch', `/sizing/loom-beams/${w.entry.id}`, { startDate: '2027-06-01' }), 422, 'FUTURE_DATE');
+  err(await w.api('post', `/sizing/loom-beams/${w.entry.id}/cut-off`, { endDate: '2027-06-01' }), 422, 'FUTURE_DATE');
+  expect((await w.api('post', '/production/units/import', { departmentId: w.sulzer.id, rows: [{ date: '2026-11-12', shift: 'A', loom_no: '01', units: 40 }, { date: '2026-11-16', shift: 'A', loom_no: '01', units: 50 }] })).body.saved).toBe(2);
+  expect(await linked()).toEqual([['2026-11-12', true], ['2026-11-16', true]]);
+  // the start moves to 2026-11-14: the day before it no longer belongs to the entry
+  expect((await w.api('patch', `/sizing/loom-beams/${w.entry.id}`, { startDate: '2026-11-14' })).status).toBe(200);
+  expect(await linked()).toEqual([['2026-11-12', false], ['2026-11-16', true]]);
+  // and back: the day is linked again
+  expect((await w.api('patch', `/sizing/loom-beams/${w.entry.id}`, { startDate: '2026-11-10' })).status).toBe(200);
+  expect(await linked()).toEqual([['2026-11-12', true], ['2026-11-16', true]]);
+});

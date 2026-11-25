@@ -17,6 +17,7 @@ const AppError = require('../utils/AppError');
 const deptChem = require('../services/departmentChemicalService');
 const machineSvc = require('../services/machineService');
 const jobThaanSvc = require('../services/jobThaanService');
+const LIMITS = require('../config/limits');
 
 const router = express.Router();
 router.use(authenticate, requireUserType('CLIENT_ADMIN', 'USER'));
@@ -183,7 +184,7 @@ router.get('/:code/folding', validate({
   query: Joi.object({ ...paging, tab: Joi.string().valid('all', 'open', 'draft').default('all'), search: Joi.string().trim().max(20), dateFrom: ymd, dateTo: ymd }),
 }), async (req, res) => res.json(await foldingService.list(req, req.params.code, req.validatedQuery)));
 
-const meters = Joi.number().precision(2).min(0).max(99999999);
+const meters = Joi.number().precision(2).min(0).max(LIMITS.qty);
 router.get('/:code/folding/:jobId/:soCardId', validate({ params: Joi.object(foldingKey) }),
   async (req, res) => res.json(await foldingService.get(req, req.params.code, req.params.jobId, req.params.soCardId)));
 // page no only
@@ -223,8 +224,8 @@ const reqKey = Joi.object({ code: Joi.string().max(50).required(), id: Joi.strin
 const date = ymdDate();
 const chemLine = Joi.object({
   itemId: Joi.string().guid().required(),
-  qty: Joi.number().precision(3).positive().max(999999),
-  qtyMain: Joi.number().integer().min(0).max(999999),
+  qty: Joi.number().precision(3).positive().max(LIMITS.qty),
+  qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
   qtySub: Joi.number().integer().min(0).max(99999),
 });
 const reqBody = {
@@ -259,8 +260,8 @@ router.post('/:code/chemical-returns', validate({ body: Joi.object({
   notes: Joi.string().trim().max(500).allow('', null),
   lines: Joi.array().items(Joi.object({
     requestLineId: Joi.string().guid().required(),
-    qty: Joi.number().precision(3).positive().max(999999),
-    qtyMain: Joi.number().integer().min(0).max(999999),
+    qty: Joi.number().precision(3).positive().max(LIMITS.qty),
+    qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
     qtySub: Joi.number().integer().min(0).max(99999),
   })).min(1).max(100).required(),
 }) }), async (req, res) => res.status(201).json(await ret.create(req, req.params.code, req.body)));
@@ -290,7 +291,7 @@ router.get('/:code/jobs/:jobId/chemical-cost', validate({ params: jobKey }), asy
 
 // ---- Yarn requests to the Yarn Store (like the chemical requests; only departments the client admin switched on) ----
 const yreq = require('../services/yarnRequestService');
-const yarnLine = Joi.object({ yarnName: Joi.string().trim().min(1).max(120).required(), brand: Joi.string().trim().max(80).allow('', null), bags: Joi.number().integer().min(1).max(1000000).required() });
+const yarnLine = Joi.object({ yarnName: Joi.string().trim().min(1).max(120).required(), brand: Joi.string().trim().max(80).allow('', null), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() });
 const yarnReqBody = { jobId: Joi.string().guid(), soCardId: Joi.string().guid().allow(null, ''), notes: Joi.string().trim().max(500).allow('', null), lines: Joi.array().items(yarnLine).min(1).max(100) };
 router.get('/:code/yarn-requests/form-data', async (req, res) => res.json(await yreq.formData(req, req.params.code)));
 router.get('/:code/yarn-requests', validate({ query: reqList }), async (req, res) => res.json(await yreq.deptList(req, req.params.code, req.validatedQuery)));
@@ -309,7 +310,7 @@ router.get('/:code/yarn-usages', validate({ query: Joi.object({ ...paging, jobId
   async (req, res) => res.json(await yarn.usages(req, req.params.code, req.validatedQuery)));
 router.post('/:code/yarn-usages', validate({ body: Joi.object({
   usageDate: date, jobId: Joi.string().guid().required(), soCardId: Joi.string().guid().allow(null, ''), remarks: Joi.string().trim().max(300).allow('', null),
-  lines: Joi.array().items(Joi.object({ outwardLineId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(1000000).required() })).min(1).max(100).unique('outwardLineId').required(),
+  lines: Joi.array().items(Joi.object({ outwardLineId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() })).min(1).max(100).unique('outwardLineId').required(),
 }) }), async (req, res) => res.status(201).json(await yarn.use(req, req.params.code, { ...req.body, soCardId: req.body.soCardId || null })));
 router.get('/:code/jobs/:jobId/yarn-cost', validate({ params: jobKey }), async (req, res) => res.json(await yarn.jobCost(req, req.params.code, req.params.jobId)));
 router.get('/:code/so-cards/:soCardId/yarn-cost', validate({ params: Joi.object({ code: Joi.string().max(50).required(), soCardId: Joi.string().guid().required() }) }), async (req, res) => res.json(await yarn.soCardCost(req, req.params.code, req.params.soCardId)));
@@ -327,7 +328,7 @@ const packingHead = {
 const packingLines = Joi.array().min(1).max(2000).items(Joi.object({
   greyLotId: Joi.string().guid().required(), thaanId: Joi.string().guid().allow(null),
   thaanNo: Joi.number().integer().min(1).max(99999), grade: Joi.string().valid('A', 'B', 'CP').required(),
-  meters: Joi.number().precision(2).greater(0).max(99999999).required(),
+  meters: Joi.number().precision(2).greater(0).max(LIMITS.qty).required(),
 }));
 const listKey = Joi.object({ code: Joi.string().max(50).required(), id: Joi.string().guid().required() });
 router.get('/:code/packing/so-cards', validate({ query: Joi.object({ ...paging, tab: Joi.string().valid('open', 'all').default('open'), search: Joi.string().trim().max(20) }) }),
@@ -362,18 +363,18 @@ router.get('/:code/machine-report', validate({ params: codeP, query: Joi.object(
 router.get('/:code/machine-operators', validate({ params: codeP }), async (req, res) => res.json(await machineSvc.operators(req, req.params.code)));
 router.get('/:code/jobs/:jobId/machines', validate({ params: jobKey }), async (req, res) => res.json(await machineSvc.jobRuns(req, req.params.code, req.params.jobId)));
 router.post('/:code/jobs/:jobId/machines', validate({ params: jobKey, body: Joi.object({
-  machineId: Joi.string().guid().required(), operatorName: Joi.string().trim().min(2).max(80).required(), meters: Joi.number().precision(2).positive().max(99999999), notes: Joi.string().trim().max(200).allow('', null),
+  machineId: Joi.string().guid().required(), operatorName: Joi.string().trim().min(2).max(80).required(), meters: Joi.number().precision(2).positive().max(LIMITS.qty), notes: Joi.string().trim().max(200).allow('', null),
 }) }), async (req, res) => res.status(201).json(await machineSvc.assign(req, req.params.code, req.params.jobId, req.body)));
 router.post('/:code/machine-runs/:runId/finish', validate({ params: runKey, body: Joi.object({
-  outMeters: Joi.number().precision(2).min(0).max(99999999).required(), operatorName: Joi.string().trim().min(2).max(80), notes: Joi.string().trim().max(200).allow('', null),
+  outMeters: Joi.number().precision(2).min(0).max(LIMITS.qty).required(), operatorName: Joi.string().trim().min(2).max(80), notes: Joi.string().trim().max(200).allow('', null),
 }) }), async (req, res) => res.json(await machineSvc.finish(req, req.params.code, req.params.runId, req.body)));
 router.patch('/:code/machine-runs/:runId', validate({ params: runKey, body: Joi.object({
-  operatorName: Joi.string().trim().min(2).max(80), inMeters: Joi.number().precision(2).positive().max(99999999), outMeters: Joi.number().precision(2).min(0).max(99999999), notes: Joi.string().trim().max(200).allow('', null),
+  operatorName: Joi.string().trim().min(2).max(80), inMeters: Joi.number().precision(2).positive().max(LIMITS.qty), outMeters: Joi.number().precision(2).min(0).max(LIMITS.qty), notes: Joi.string().trim().max(200).allow('', null),
 }).min(1) }), async (req, res) => res.json(await machineSvc.updateRun(req, req.params.code, req.params.runId, req.body)));
 router.delete('/:code/machine-runs/:runId', validate({ params: runKey }), async (req, res) => res.json(await machineSvc.removeRun(req, req.params.code, req.params.runId)));
 router.get('/:code/jobs/:jobId/thaans', validate({ params: jobKey }), async (req, res) => res.json(await jobThaanSvc.get(req, req.params.code, req.params.jobId)));
 router.put('/:code/jobs/:jobId/thaans', validate({ params: jobKey, body: Joi.object({
-  items: Joi.array().min(1).max(50).unique('jobItemId').items(Joi.object({ jobItemId: Joi.string().guid().required(), thaans: Joi.array().max(300).items(Joi.alternatives(Joi.number().precision(2).positive().max(99999999), Joi.object({ meters: Joi.number().precision(2).positive().max(99999999).required() }))).required() })).required(),
+  items: Joi.array().min(1).max(50).unique('jobItemId').items(Joi.object({ jobItemId: Joi.string().guid().required(), thaans: Joi.array().max(300).items(Joi.alternatives(Joi.number().precision(2).positive().max(LIMITS.qty), Joi.object({ meters: Joi.number().precision(2).positive().max(LIMITS.qty).required() }))).required() })).required(),
 }) }), async (req, res) => res.json(await jobThaanSvc.set(req, req.params.code, req.params.jobId, req.body)));
 
 module.exports = router;

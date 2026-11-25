@@ -11,6 +11,7 @@ const billing = require('../services/weavingBillingService');
 const efficiency = require('../services/weavingEfficiencyService');
 const billSvc = require('../services/weavingBillService');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const router = express.Router();
 router.use(authenticate);
@@ -32,7 +33,7 @@ router.get('/period', view, validate({ query: Joi.object({ ...dept, from: ymd.re
 router.get('/day', view, validate({ query: Joi.object({ ...dept, date: ymd.required() }) }), async (req, res) => res.json(await svc.day(req, req.validatedQuery)));
 router.get('/day/check', view, validate({ query: Joi.object({ ...dept, date: ymd.required() }) }), async (req, res) => res.json(await svc.check(req, req.validatedQuery)));
 router.get('/day/csv', view, validate({ query: Joi.object({ ...dept, date: ymd.required() }) }), async (req, res) => sendCsv(res, await svc.dayCsv(req, req.validatedQuery)));
-router.put('/day', full, validate({ body: Joi.object({ ...dept, date: ymd.required(), rows: Joi.array().items(Joi.object({ loomId: id.required(), shift: shift.required(), units: Joi.number().precision(2).min(0).max(99999999).allow(null) })).min(1).max(1000).required() }) }), async (req, res) => res.json(await svc.saveDay(req, req.body)));
+router.put('/day', full, validate({ body: Joi.object({ ...dept, date: ymd.required(), rows: Joi.array().items(Joi.object({ loomId: id.required(), shift: shift.required(), units: Joi.number().precision(2).min(0).max(LIMITS.unitsPerShift).allow(null) })).min(1).max(1000).required() }) }), async (req, res) => res.json(await svc.saveDay(req, req.body)));
 router.post('/day/clear', full, validate({ body: Joi.object({ ...dept, date: ymd.required(), loomIds: Joi.array().items(id).min(1).max(500).required(), shift }) }), async (req, res) => res.json(await svc.clearDay(req, req.body)));
 router.get('/units/sample.csv', view, async (req, res) => sendCsv(res, svc.sampleUnits()));
 router.post('/units/import', full, validate({ body: uploadSchema }), async (req, res) => {

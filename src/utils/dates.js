@@ -24,4 +24,21 @@ const dayEnd = (ymd) => `${ymd}T23:59:59.999${OFFSET}`;
 const ymdDate = () => Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).custom((v, h) => (isRealDate(v) ? v : h.error('date.real')))
   .messages({ 'string.pattern.base': 'date must look like 2026-10-13', 'date.real': 'this is not a real date' });
 
-module.exports = { ZONE, today, isRealDate, dayStart, dayEnd, ymdDate };
+/** A date moved by whole years (29 February moves to 1 March in a year that has none). */
+function addYears(ymd, years) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const x = new Date(Date.UTC(y + years, m - 1, d));
+  return x.toISOString().slice(0, 10);
+}
+
+/**
+ * The dates a document may carry (owner 2026-11-24): not more than `years` years before or after today. A wrong year typed by mistake
+ * (2062, 1900, 2099) is refused; a date of this year or the last years is fine.
+ * @returns { min, max, today } as YYYY-MM-DD
+ */
+function businessRange(years = require('../config/limits').dateYears, backYears = years) {
+  const t = today();
+  return { min: addYears(t, -backYears), max: addYears(t, years), today: t };
+}
+
+module.exports = { ZONE, today, isRealDate, dayStart, dayEnd, ymdDate, addYears, businessRange };

@@ -28,6 +28,7 @@ const beamStock = require('../services/yarnBeamStockService');
 const sizingInwards = require('../services/yarnSizingInwardService');
 const { STATUSES: BEAM_STATUSES } = require('../models/YarnBeam');
 const { ymdDate } = require('../utils/dates');
+const LIMITS = require('../config/limits');
 
 const router = express.Router();
 router.use(authenticate);
@@ -85,7 +86,7 @@ const entry = {
   contractLineId: id.allow(null), // the contract line the yarn counts against: required for a customer (overhead) entry, optional for a vendor entry
   directVendorId: id.allow(null), // yarn the supplier delivered straight to this sizing party (never came to our factory); null = it came to the factory
   inwardDate: ymd, dcNo: Joi.string().trim().max(50).allow('', null), remarks: Joi.string().trim().max(300).allow('', null),
-  bags: Joi.number().integer().min(1).max(1000000), lbsPerBag: Joi.number().precision(2).positive().max(1000000), ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
+  bags: Joi.number().integer().min(1).max(LIMITS.qty), lbsPerBag: Joi.number().precision(2).positive().max(LIMITS.qty), ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
 };
 router.get('/yarn-inwards/form-data', view, async (req, res) => res.json(await inwards.formData(req))); // before '/:id'
 router.get('/yarn-inwards', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(50), search: Joi.string().trim().max(80),
@@ -105,7 +106,7 @@ router.patch('/looms/:id', full, validate({ params: uuidParam, body: Joi.object(
 router.delete('/looms/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await looms.remove(req, req.params.id)));
 
 // ---- Sizing Return: yarn and / or empty beams sent to a sizing party are called back WITHOUT sizing (an In Pass); beams go back to Empty, the yarn back into the stock ----
-const returnYarn = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(1000000).required() });
+const returnYarn = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() });
 const returnFields = { returnDate: ymd, refNo: Joi.string().trim().max(50).allow('', null), notes: Joi.string().trim().max(300).allow('', null), beamIds: Joi.array().items(id).max(200), yarns: Joi.array().items(returnYarn).max(100) };
 router.get('/sizing-returns/pending-beams', view, validate({ query: Joi.object({ vendorId: id.required(), search: Joi.string().trim().max(80) }) }), async (req, res) => res.json(await sizingBatches.pendingBeams(req, req.validatedQuery))); // the beams waiting at that sizing party
 router.get('/sizing-returns/yarn-available', view, validate({ query: Joi.object({ vendorId: id.required(), returnId: id, search: Joi.string().trim().max(80) }) }), async (req, res) => res.json(await sizingReturns.yarnAvailable(req, req.validatedQuery)));
@@ -117,7 +118,7 @@ router.delete('/sizing-returns/:id', full, validate({ params: uuidParam }), asyn
 
 // ---- Yarn Contracts: PURCHASE (with a vendor) and OVERHEAD (with a customer); lines = yarn counts; yarn inward entries count against the lines ----
 const contractLine = {
-  yarnCountId: id, bags: Joi.number().integer().min(1).max(1000000), bagWeight: Joi.number().precision(2).positive().max(1000000),
+  yarnCountId: id, bags: Joi.number().integer().min(1).max(LIMITS.qty), bagWeight: Joi.number().precision(2).positive().max(LIMITS.qty),
   lbs: Joi.number().precision(2).positive().max(1000000000), ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
 };
 const contractHead = {
@@ -147,7 +148,7 @@ router.get('/yarn-stock', view, validate({ query: Joi.object({ search: Joi.strin
   async (req, res) => res.json(await yarnStock.list(req, req.validatedQuery)));
 
 // ---- Yarn Outward > Weft: a delivery challan that takes yarn out of the stock (any bags of any stock entry) and sends it to the weft ----
-const outLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(1000000).required() });
+const outLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() });
 const outLines = Joi.array().items(outLine).min(1).max(200).unique('inwardId');
 const outFields = { outwardDate: ymd, department: Joi.string().trim().max(50).allow('', null), description: Joi.string().trim().max(300).allow('', null) };
 router.get('/yarn-weft/stock-entries', view, validate({ query: Joi.object({ search: Joi.string().trim().max(80), itemId: id, vendorId: id, customerId: id, type: Joi.string().uppercase().valid('PURCHASE', 'OVERHEAD') }) }),
@@ -173,7 +174,7 @@ router.delete('/yarn-returns/:id', full, validate({ params: uuidParam }), async 
 
 // ---- Yarn Outward > Sale: purchased yarn sold as it is. A delivery challan + gate pass only: the sales INVOICE is made in the accounts (Sales Invoice), or by "Generate invoice" ----
 const accFull = requireService('ACC_SALES', 'FULL'); // generating the invoice makes an accounting document (and the default accounts): the accounting right is needed
-const saleLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(1000000).required(), ratePerLb: Joi.number().precision(4).positive().max(1000000000).required() });
+const saleLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required(), ratePerLb: Joi.number().precision(4).positive().max(1000000000).required() });
 const saleLines = Joi.array().items(saleLine).min(1).max(200).unique('inwardId');
 const saleFields = { outwardDate: ymd, description: Joi.string().trim().max(300).allow('', null) };
 router.get('/yarn-sales/options', view, (req, res) => res.json(sales.options())); // before '/:id'
@@ -195,7 +196,7 @@ router.get('/yarn-sales/:id/gate-pass', view, validate({ params: uuidParam }), a
 const beamNo = Joi.number().integer().min(1).max(99999999);
 const beamName = Joi.string().trim().min(1).max(80);
 const beamStatus = Joi.string().uppercase().valid(...BEAM_STATUSES);
-const beamWeight = Joi.number().precision(2).positive().max(99999999).allow(null); // kg, null clears it
+const beamWeight = Joi.number().precision(2).positive().max(LIMITS.qty).allow(null); // kg, null clears it
 const beamDepartment = Joi.string().guid({ version: 'uuidv4' }).allow(null); // a department of Masters > Department, null clears it
 router.get('/beams/next', view, async (req, res) => res.json(await beams.next(req))); // before '/:id'
 router.get('/beams', view, validate({ query: Joi.object({ ...paging, limit: Joi.number().integer().min(1).max(500).default(100), search: Joi.string().trim().max(80), isActive: Joi.boolean(), status: beamStatus, departmentId: id, noDepartment: Joi.boolean(), dateFrom: ymd, dateTo: ymd }) }),
@@ -211,7 +212,7 @@ router.get('/beam-stock/:status', view, validate({ params: Joi.object({ status: 
   async (req, res) => res.json(await beamStock.details(req, req.params.status, req.validatedQuery)));
 
 // ---- Yarn Outward > Sizing: yarn bags AND empty beams to a sizing party (our vendor, we pay for the work), one challan, one gate pass ----
-const sizeLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(1000000).required() });
+const sizeLine = Joi.object({ inwardId: id.required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() });
 const sizeLines = Joi.array().items(sizeLine).max(200).unique('inwardId'); // may be empty when only beams go
 const sizeBeams = Joi.array().items(id).max(200).unique();
 const sizeFields = { outwardDate: ymd, description: Joi.string().trim().max(300).allow('', null) };
@@ -227,7 +228,7 @@ router.patch('/yarn-sizing/:id', full, validate({ params: uuidParam, body: Joi.o
 router.delete('/yarn-sizing/:id', full, validate({ params: uuidParam }), async (req, res) => res.json(await outwards.remove(req, 'SIZING', req.params.id)));
 
 // ---- Sizing Inward: the sized beams come back from the sizing party (meters on every beam, lbs used, cut cone, the sizing charge) ----
-const szBeam = Joi.object({ beamId: id.required(), meters: Joi.number().precision(2).positive().max(100000000).required() });
+const szBeam = Joi.object({ beamId: id.required(), meters: Joi.number().precision(2).positive().max(LIMITS.qty).required() });
 const szBeams = Joi.array().items(szBeam).min(1).max(200).unique('beamId');
 const szFields = {
   inwardDate: ymd, dcNo: Joi.string().trim().max(50).allow('', null), description: Joi.string().trim().max(300).allow('', null),

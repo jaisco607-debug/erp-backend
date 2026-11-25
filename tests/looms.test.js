@@ -101,8 +101,8 @@ test('loom beam entry (sizing): K-ID, 2 beams per loom, factor, confirm, cut-off
 
   // loom cut-off: the beams are empty, the loom idle; undo; cut off again
   err(await w.api('post', url('/cut-off'), { endDate: '2026-11-01' }), 422, 'END_BEFORE_START');
-  const c = await w.api('post', url('/cut-off'), { endDate: '2026-11-30' });
-  expect(c.body).toMatchObject({ status: 'CUT_OFF', statusText: 'Cut off', endDate: '2026-11-30', canReopen: true, canEdit: false });
+  const c = await w.api('post', url('/cut-off'), { endDate: '2026-11-24' });
+  expect(c.body).toMatchObject({ status: 'CUT_OFF', statusText: 'Cut off', endDate: '2026-11-24', canReopen: true, canEdit: false });
   expect(await beamStock(w)).toEqual([3, 0, 2, 0]);
   expect((await w.api('get', '/sizing/loom-beams?status=CUT_OFF')).body).toMatchObject({ total: 1, counts: { active: 1, cutOff: 1 } });
   expect((await w.api('get', '/sizing/loom-beams?status=ACTIVE')).body.idleLooms.map((x) => x.loomNo)).toEqual(['001']);
@@ -110,7 +110,7 @@ test('loom beam entry (sizing): K-ID, 2 beams per loom, factor, confirm, cut-off
   const r = await w.api('post', url('/reopen'));
   expect([r.body.status, r.body.endDate]).toEqual(['ACTIVE', null]);
   expect(await beamStock(w)).toEqual([1, 0, 4, 0]);
-  await w.api('post', url('/cut-off'), { endDate: '2026-11-30' });
+  await w.api('post', url('/cut-off'), { endDate: '2026-11-24' });
   expect((await w.api('get', `/weaving/looms/${a.id}`)).body).toMatchObject({ running: false, canTakeBeams: true });
   expect((await w.api('patch', `/weaving/looms/${a.id}`, { isActive: false })).body.isActive).toBe(false);
 

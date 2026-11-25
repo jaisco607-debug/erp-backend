@@ -1,10 +1,11 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { VENDOR_STATUS, VENDOR_PAYMENT, vendorFields } = require('./storeValidator');
+const LIMITS = require('../config/limits');
 
 // optional text; '' or null clears it (the services turn '' into null)
 const text = (max) => Joi.string().trim().max(max).allow('', null);
-const meters = Joi.number().precision(2).positive().max(99999999);
+const meters = Joi.number().precision(2).positive().max(LIMITS.qty);
 // the width of the cloth (inches or whatever the mill uses), typed at inward
 const width = Joi.number().precision(2).positive().max(9999);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
@@ -26,7 +27,7 @@ const lotFields = {
   // typed by hand instead of qualityId: existing quality is used, or a new one is added
   qualityName: Joi.string().trim().min(2).max(150),
   // typed by hand; leave out for the automatic number
-  lotNo: Joi.number().integer().min(1).max(99999999),
+  lotNo: Joi.number().integer().min(1).max(LIMITS.lotNo),
   unit: Joi.string().uppercase().valid('METER', 'YARD'),
   // length of every thaan in `unit`, e.g. [52.5, 48, 50]; pieces and totals are worked out
   // a thaan is its length, or { length, width } when it has its own width
@@ -109,7 +110,7 @@ module.exports = {
     undoGiveBack: { params: Joi.object({ id: Joi.string().guid().required(), returnId: Joi.string().guid().required() }) },
     numbering: {
       body: Joi.object({
-        nextLotNo: Joi.number().integer().min(1).max(99999999),
+        nextLotNo: Joi.number().integer().min(1).max(LIMITS.lotNo),
         nextTypeNo: Joi.number().integer().min(1).max(99999999),
       }).min(1),
     },
