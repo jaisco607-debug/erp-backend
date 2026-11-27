@@ -47,7 +47,7 @@ async function twoGatePasses({ api, s }, customerName = 'AZ TEXTILES') {
   const finish = async (body, destination) => {
     const pl = (await api('post', '/departments/PACKING/packing-lists', { soCardId: card.id, ...body })).body;
     await api('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-    return (await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { destination, vehicleNo: 'LEA-1', passDate: '2030-01-01' })).body;
+    return (await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { destination, vehicleNo: 'LEA-1', passDate: require('../src/utils/dates').today() })).body;
   };
   // list 1: A 100 + B 120 at 50 / 25  = 5,000 + 3,000 = 8,000, billed 220 m
   const gp1 = await finish({ rateA: 50, rateB: 25, lines: [line(t1, 'A', 100), line(t2, 'B', 120)] }, 'Lahore');

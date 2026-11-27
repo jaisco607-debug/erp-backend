@@ -8,8 +8,8 @@
 const crypto = require('crypto');
 const { sequelize } = require('../models');
 const AppError = require('../utils/AppError');
-const { today, isRealDate, businessRange } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { today, isRealDate } = require('../utils/dates');
+const limitsService = require('./limitsService');
 const { unitsToMeters } = require('../utils/loomUnits');
 const csv = require('../utils/csvRows');
 const audit = require('./auditService');
@@ -382,17 +382,20 @@ async function importUnits(req, { departmentId, input }) {
     const looms = new Map((await loomsOf(companyId, departmentId, transaction)).map((l) => [String(l.loomNo).toLowerCase(), l]));
     const entryCache = new Map();
     const errors = []; let saved = 0; const dates = new Set();
+    const own = await limitsService.forCompany(companyId); // the limit of the units and the oldest date of this company (Settings > Limits)
+    const maxUnits = own.numbers.unitsPerShift;
+    const oldest = own.windows.other.min;
     for (const r of rows) {
       const date = parseDate(r.date || input.date); const shift = parseShift(r.shift);
       const loomNo = String(pick(r, 'loomno', 'loom')).trim(); const unitsRaw = pick(r, 'units', 'unit');
       if (!date) { fail(errors, r, `"${r.date}" is not a date (use 2026-11-16 or 16/11/2026)`); continue; }
       if (date > today()) { fail(errors, r, `${date} has not come yet`); continue; }
-      if (date < businessRange().min) { fail(errors, r, `${date} is too old; the oldest date is ${businessRange().min}`); continue; }
+      if (date < oldest) { fail(errors, r, `${date} is too old; the oldest date is ${oldest}`); continue; }
       if (!shift) { fail(errors, r, `"${r.shift}" is not a shift (A, B or C)`); continue; }
       const loom = looms.get(loomNo.toLowerCase()) || looms.get(loomNo.replace(/^0+/, '').toLowerCase()) || [...looms.values()].find((l) => String(l.loomNo).replace(/^0+/, '') === loomNo.replace(/^0+/, ''));
       if (!loom) { fail(errors, r, `Loom "${loomNo}" is not a loom of this department`); continue; }
       const units = unitsRaw === '' ? null : Number(unitsRaw);
-      if (units !== null && (!Number.isFinite(units) || units < 0 || units > LIMITS.unitsPerShift)) { fail(errors, r, `"${unitsRaw}" is not a valid number of units (at most ${LIMITS.unitsPerShift})`); continue; }
+      if (units !== null && (!Number.isFinite(units) || units < 0 || units > maxUnits)) { fail(errors, r, `"${unitsRaw}" is not a valid number of units (at most ${maxUnits})`); continue; }
       if (!entryCache.has(date)) entryCache.set(date, await entriesOn(companyId, departmentId, date, transaction));
       const entry = entryCache.get(date).get(loom.id);
       const k = pick(r, 'kid', 'k', 'kno');
@@ -416,11 +419,12 @@ async function importWeavers(req, { departmentId, input }) {
     await department(companyId, departmentId, transaction);
     const looms = await loomsOf(companyId, departmentId, transaction);
     const errors = []; const groups = new Map(); const entryCache = new Map();
+    const oldest = (await limitsService.forCompany(companyId)).windows.other.min;
     for (const r of rows) {
       const date = parseDate(r.date || input.date); const shift = parseShift(r.shift); const code = Number(pick(r, 'employeeid', 'empid', 'employee', 'id', 'code'));
       if (!date) { fail(errors, r, `"${r.date}" is not a date (use 2026-11-16 or 16/11/2026)`); continue; }
       if (date > today()) { fail(errors, r, `${date} has not come yet`); continue; }
-      if (date < businessRange().min) { fail(errors, r, `${date} is too old; the oldest date is ${businessRange().min}`); continue; }
+      if (date < oldest) { fail(errors, r, `${date} is too old; the oldest date is ${oldest}`); continue; }
       if (!shift) { fail(errors, r, `"${r.shift}" is not a shift (A, B or C)`); continue; }
       if (!Number.isInteger(code) || code <= 0) { fail(errors, r, 'The employee ID is not a number'); continue; }
       const nos = String(pick(r, 'looms', 'loom', 'loomno', 'loomnos')).split(/[\s;|,]+/).filter(Boolean);

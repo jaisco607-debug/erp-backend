@@ -12,6 +12,8 @@ const { today } = require('../utils/dates');
 const audit = require('./auditService');
 const counters = require('./counterService');
 const m = require('./storeMasterService');
+const storeLimits = require('./storeLimitService');
+const poReceipts = require('./poReceiptService');
 const batches = require('./batchService');
 
 const ID = (store) => `store_inward_id:${store}`;
@@ -95,6 +97,7 @@ function json(e, withLines = true, ret = { value: 0, lines: new Map() }) {
       netQty: m.round(l.qty - ((ret.lines.get(l.id) || {}).qty || 0), 3),
       returnedValue: (ret.lines.get(l.id) || {}).value || 0,
       packType: l.packType, packCount: l.packCount, qtyPerPack: l.qtyPerPack,
+      ...(l.poLineId ? { poLineId: l.poLineId, poRateNote: l.poRateNote } : {}),
     }));
   }
   return out;
@@ -105,7 +108,11 @@ async function findOr404(req, store, id, transaction) {
   if (!e) throw AppError.notFound('Inward entry');
   return e;
 }
-const load = async (id, transaction) => json(await StoreInward.findByPk(id, { include, transaction }), true, (await returnedOf([id], transaction)).get(id));
+const load = async (id, transaction) => withPo(await loadRow(id, transaction), transaction);
+// the purchase order of the lines that came against one (nothing is added, and nothing asked, for the others)
+const withPo = async (loaded, transaction) => { await poReceipts.describe(loaded.companyId, loaded.out.lines || [], transaction); return loaded.out; };
+const loadRow = async (id, transaction) => { const row = await StoreInward.findByPk(id, { include, transaction }); return { companyId: row.companyId, out: await rowJson(row, id, transaction) }; };
+const rowJson = async (row, id, transaction) => json(row, true, (await returnedOf([id], transaction)).get(id));
 
 /** Next numbers and every dropdown the entry screen needs, in one call. */
 async function formData(req, store) {
@@ -130,7 +137,7 @@ async function formData(req, store) {
     subUnits: m.SUB_UNITS,
     units: UNITS,
     vendors: vendors.map(m.vendorJSON),
-    items: items.map(m.itemJSON),
+    items: await storeLimits.addWarnings(items.map(m.itemJSON)),
     categories: categories.map(m.namedJSON),
     brands: brands.map(m.namedJSON),
   };
@@ -237,6 +244,8 @@ async function create(req, store, data) {
     const companyId = req.user.companyId;
     const lines = await prepare(req, store, data, transaction);
     if (!data.vendorId) throw AppError.rule('VENDOR_REQUIRED', 'Select the vendor of this purchase');
+    // goods against a purchase order (optional): checked here, and the order's rate is used when none is typed
+    await poReceipts.storeLines(req, store, { vendorId: data.vendorId, input: data.lines, lines }, transaction);
     const idNo = await counters.take(companyId, ID(store), async () => ((await StoreInward.max('idNo', { where: { companyId, store }, transaction })) || 0) + 1, transaction);
     const header = Object.fromEntries(headerFields.filter((f) => data[f] !== undefined).map((f) => [f, blank(data[f])]));
     const e = StoreInward.build({ ...header, billType: 'OTHER', gstPercent: null, salesTax: 0, companyId, store, idNo, ...totals(lines), createdById: req.user.id });
@@ -256,6 +265,10 @@ async function update(req, store, id, data) {
     if (e.isApproved) throw AppError.rule('ENTRY_APPROVED', 'Approved entries cannot be changed');
     const before = await load(id, transaction);
     const lines = await prepare(req, store, data, transaction);
+    const oldLines = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
+    const vendorAfter = data.vendorId === undefined ? e.vendorId : data.vendorId || null;
+    if (lines) await poReceipts.storeLines(req, store, { vendorId: vendorAfter, input: data.lines, lines, oldLines, inwardId: id }, transaction);
+    else if (vendorAfter !== e.vendorId) await poReceipts.storeHeader(req, store, { vendorId: vendorAfter, oldLines }, transaction);
     for (const f of headerFields) if (data[f] !== undefined) e[f] = blank(data[f]);
     if (lines) {
       await StoreInwardLine.destroy({ where: { inwardId: id }, transaction });
@@ -335,6 +348,7 @@ async function correct(req, store, id, data) {
     if (!(data.vendorId ?? e.vendorId)) throw AppError.rule('VENDOR_MISSING', 'Select the vendor');
     const oldLines = await StoreInwardLine.findAll({ where: { inwardId: id }, transaction });
     const oldById = new Map(oldLines.map((l) => [l.id, l]));
+    await poReceipts.storeLines(req, store, { vendorId: data.vendorId ?? e.vendorId, input: data.lines, lines: fresh, oldLines, inwardId: id }, transaction);
     for (const l of fresh) if (l.lineId && !oldById.has(l.lineId)) throw AppError.rule('UNKNOWN_LINE', 'A line of this entry was not found');
     if (new Set(fresh.map((l) => l.lineId).filter(Boolean)).size !== fresh.filter((l) => l.lineId).length) throw AppError.rule('DUPLICATE_LINE', 'A line was sent twice');
     const batchRows = await sequelize.query('SELECT id, "inwardLineId", "qtyIn"::float AS "qtyIn", "qtyLeft"::float AS "qtyLeft", rate::float AS rate FROM store_batches WHERE "inwardId" = :id FOR UPDATE',
@@ -385,11 +399,12 @@ async function correct(req, store, id, data) {
         await sequelize.query('UPDATE store_batches SET "qtyIn" = "qtyIn" + :dq, "qtyLeft" = "qtyLeft" + :dq, "valueLeft" = "valueLeft" + :dv WHERE id = :bid', { replacements: { dq, dv, bid: b.id }, transaction });
         o.qty = n.qty; o.amount = m.round(n.qty * b.rate, 2);
       }
+      o.poLineId = n.poLineId; o.poRateNote = n.poRateNote;
       o.sortOrder = n.sortOrder; Object.assign(o, { packType: n.packType, packCount: n.packCount, qtyPerPack: n.qtyPerPack }); await o.save({ transaction });
     }
     for (const n of added) {
       change(n.itemId, n.qty, n.amount); await move(n.itemId, n.qty, n.amount);
-      const row = await StoreInwardLine.create({ inwardId: id, itemId: n.itemId, qty: n.qty, rate: n.rate, amount: n.amount, sortOrder: n.sortOrder, packType: n.packType, packCount: n.packCount, qtyPerPack: n.qtyPerPack }, { transaction });
+      const row = await StoreInwardLine.create({ poLineId: n.poLineId, poRateNote: n.poRateNote, inwardId: id, itemId: n.itemId, qty: n.qty, rate: n.rate, amount: n.amount, sortOrder: n.sortOrder, packType: n.packType, packCount: n.packCount, qtyPerPack: n.qtyPerPack }, { transaction });
       await batches.add(transaction, { companyId, store, itemId: n.itemId, source: 'INWARD', qty: n.qty, rate: n.qty ? n.amount / n.qty : n.rate, value: n.amount, inDate: date, inwardId: id, inwardLineId: row.id, vendorId });
     }
     for (const i of Object.values(items)) await i.save({ transaction });
@@ -496,9 +511,10 @@ async function stock(req, store, q) {
       WHERE l."itemId" IN (:ids) GROUP BY l."itemId"`,
     { replacements: { ids: rows.map((r) => r.id) }, type: sequelize.QueryTypes.SELECT },
   )).map((c) => [c.itemId, c])) : {};
-  const items = rows.map((r) => ({ ...m.itemJSON(r), purchaseCount: counts[r.id]?.purchases || 0, vendorCount: counts[r.id]?.vendors || 0 }));
+  // each item also carries its low-stock limit, the red warning (with the last inward) and `lastInward` (Store > Settings sets the limits)
+  const items = (await storeLimits.addWarnings(rows.map((r) => m.itemJSON(r)))).map((i) => ({ ...i, purchaseCount: counts[i.id]?.purchases || 0, vendorCount: counts[i.id]?.vendors || 0 }));
   const totalValue = m.round(items.reduce((s, i) => s + i.stockValue, 0), 2);
-  if (!q.groupBy) return { data: items, totalValue };
+  if (!q.groupBy) return { data: items, totalValue, lowCount: items.filter((i) => i.warning).length };
   const groups = {};
   for (const i of items) {
     const g = i[q.groupBy];
@@ -539,7 +555,7 @@ async function itemStock(req, store, itemId) {
     v.value = m.round(v.value + p.amount, 2);
   }
   return {
-    item: m.itemJSON(item),
+    item: await storeLimits.itemWithWarning(item),
     // one stock for the item, whichever vendor it came from
     stock: { qty: item.stockQty, qtySplit: split(item.stockQty), value: item.stockValue, avgRate: m.avgRate(item) },
     // stock batch by batch: 20 KG @ 40 (old) + 100 KG @ 45 (new)
@@ -563,7 +579,7 @@ async function itemMoves(req, store, itemId, q) {
     include: [{ model: StoreInward, as: 'inward', include: [{ model: Vendor, as: 'vendor' }] }, { model: Service, as: 'department' }],
   });
   return {
-    item: m.itemJSON(item),
+    item: await storeLimits.itemWithWarning(item),
     data: moves.map((mv) => ({
       id: mv.id,
       date: mv.moveDate,
@@ -586,21 +602,21 @@ async function itemMoves(req, store, itemId, q) {
 async function itemBatches(req, store, itemId) {
   const item = await StoreItem.findOne({ where: { id: itemId, companyId: req.user.companyId, store }, include: m.itemInclude });
   if (!item) throw AppError.notFound('Item');
-  return { item: m.itemJSON(item), ...(await batches.summary(item)) };
+  return { item: await storeLimits.itemWithWarning(item), ...(await batches.summary(item)) };
 }
 
 async function lastInwards(req, store, itemId, limit = 5) {
   const item = await StoreItem.findOne({ where: { id: itemId, companyId: req.user.companyId, store }, include: m.itemInclude });
   if (!item) throw AppError.notFound('Item');
   const data = await batches.lastInwards(itemId, limit);
-  return { item: m.itemJSON(item), isNew: data.length === 0, data, stock: await batches.summary(item) };
+  return { item: await storeLimits.itemWithWarning(item), isNew: data.length === 0, data, stock: await batches.summary(item) };
 }
 
 async function itemUsage(req, store, itemId) {
   const item = await StoreItem.findOne({ where: { id: itemId, companyId: req.user.companyId, store }, include: m.itemInclude });
   if (!item) throw AppError.notFound('Item');
   const data = await batches.usage('x."itemId" = :itemId', { itemId });
-  return { item: m.itemJSON(item), data, totals: usageTotals(data) };
+  return { item: await storeLimits.itemWithWarning(item), data, totals: usageTotals(data) };
 }
 
 async function batchUsage(req, store, batchId) {
@@ -614,7 +630,7 @@ async function batchUsage(req, store, batchId) {
   { replacements: { batchId }, type: sequelize.QueryTypes.SELECT });
   const data = await batches.usage('x."batchId" = :batchId', { batchId });
   return {
-    item: m.itemJSON(item),
+    item: await storeLimits.itemWithWarning(item),
     batch: { batchId: info.id, sourceText: batches.SOURCE_TEXT[info.source], inDate: info.inDate, vendor: info.vendorId ? { id: info.vendorId, name: info.vendorName } : null,
       ipNo: info.ipNo, dcNo: info.dcNo, rate: info.rate, qtyIn: info.qtyIn, qtyInSplit: m.splitQty(info.qtyIn, info.unit), qtyLeft: info.qtyLeft, qtyLeftSplit: m.splitQty(info.qtyLeft, info.unit), valueLeft: info.valueLeft },
     data, totals: usageTotals(data),

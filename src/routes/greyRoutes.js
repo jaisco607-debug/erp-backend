@@ -15,7 +15,7 @@ const c = require('../controllers/greyController');
 const grey = require('../services/greyReturnService');
 const { Joi, paging } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const SERVICE = 'GREY_STORE';
 const view = requireService(SERVICE, 'VIEW');
@@ -54,7 +54,7 @@ lots.get('/', view, validate(v.lot.list), c.lot.list);
 lots.post('/', full, validate(v.lot.create), c.lot.create);
 lots.get('/:id', view, validate(v.lot.get), c.lot.get);
 lots.patch('/:id', full, validate(v.lot.update), c.lot.update);
-lots.delete('/:id', full, validate(v.lot.get), c.lot.remove);
+lots.delete('/:id', full, validate(v.lot.remove), c.lot.remove);
 lots.put('/:id/active', full, validate(v.lot.active), c.lot.setActive);
 lots.post('/:id/approve', full, validate(v.lot.approve), c.lot.approve);
 lots.post('/:id/unapprove', admin, full, validate(v.lot.approve), c.lot.unapprove);
@@ -66,8 +66,8 @@ lots.delete('/:id/give-back/:returnId', admin, full, validate(v.lot.undoGiveBack
 const retLine = Joi.object({
   greyLotId: Joi.string().guid().required(),
   thaanNos: Joi.array().items(Joi.number().integer().min(1)).min(1).max(2000).unique(),
-  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(LIMITS.qty) })).min(1).max(2000).unique('thaanNo'),
-  meters: Joi.number().precision(2).positive().max(LIMITS.qty),
+  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(R.meters) })).min(1).max(2000).unique('thaanNo'),
+  meters: Joi.number().precision(2).positive().max(R.meters),
   pieces: Joi.number().integer().min(0).max(1000000).default(0),
 }).xor('thaanNos', 'thaans', 'meters');
 lots.post('/fabric-return', full, validate({ body: Joi.object({

@@ -50,7 +50,7 @@ async function scenario(w) {
   const form = await w.ok('get', `/departments/PACKING/packing/so-cards/${out.dispatched.id}/form`);
   const pl = await w.ok('post', '/departments/PACKING/packing-lists', { soCardId: out.dispatched.id, rateA: 10, rateB: 5, lines: form.lots[0].thaans.flatMap((t) => t.suggestedLines.map((s) => ({ greyLotId: lotA.id, thaanId: t.thaanId, grade: s.grade, meters: s.meters }))) }, 201);
   await w.ok('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: '2030-01-01' });
+  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: require('../../src/utils/dates').today() });
   // BB: rejected back and sent again
   const jb = await w.sendCard(out.bb, 'SINGEING');
   await w.accept('SINGEING', jb);

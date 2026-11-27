@@ -91,7 +91,7 @@ test('take the approval of a lot back after cloth left it: its thaans and quanti
   const ok = await w.ok('patch', `/grey-lots/${lot.id}`, { thaans: [100, 120, 80] });
   expect(ok.inwardMeters).toBe(300);
   expect(await w.err('patch', `/grey-lots/${lot.id}`, { customerId: (await w.customer('Other')).id })).toBe('LOT_IN_USE');
-  expect(await w.err('delete', `/grey-lots/${lot.id}`)).toBe('LOT_IN_USE');
+  expect(await w.err('delete', `/grey-lots/${lot.id}`, { reason: 'Entered by mistake' })).toBe('LOT_IN_USE');
   await expectClean();
 });
 
@@ -258,7 +258,7 @@ test('a packing list that already has a gate pass cannot be reopened, changed or
   const form = await w.ok('get', `/departments/PACKING/packing/so-cards/${card.id}/form`);
   const pl = await w.ok('post', '/departments/PACKING/packing-lists', { soCardId: card.id, rateA: 10, lines: form.lots[0].thaans.map((t) => ({ greyLotId: lot.id, thaanId: t.thaanId, grade: 'A', meters: t.meters })) }, 201);
   await w.ok('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: '2030-01-01' });
+  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: require('../../src/utils/dates').today() });
   // the cloth has left: the list must be frozen
   const reopen = await w.api('post', `/departments/PACKING/packing-lists/${pl.id}/reopen`);
   expect(reopen.status).toBeGreaterThanOrEqual(400);
@@ -340,7 +340,7 @@ test('after the gate pass is made, reopening and deleting the packing list must 
   const form = await w.ok('get', `/departments/PACKING/packing/so-cards/${card.id}/form`);
   const pl = await w.ok('post', '/departments/PACKING/packing-lists', { soCardId: card.id, rateA: 10, lines: form.lots[0].thaans.map((t) => ({ greyLotId: lot.id, thaanId: t.thaanId, grade: 'A', meters: t.meters })) }, 201);
   await w.ok('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: '2030-01-01' });
+  await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: require('../../src/utils/dates').today() });
   await w.api('post', `/departments/PACKING/packing-lists/${pl.id}/reopen`);
   await w.api('delete', `/departments/PACKING/packing-lists/${pl.id}`);
   expect((await w.ok('get', '/departments/PACKING/gate-passes')).total).toBe(1);

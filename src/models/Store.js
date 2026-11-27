@@ -72,6 +72,7 @@ function init(sequelize) {
       stockQty: { ...dec('stockQty', 16, 3), allowNull: false, defaultValue: 0 },
       stockValue: { ...dec('stockValue', 16, 2), allowNull: false, defaultValue: 0 },
       reorderLevel: { ...dec('reorderLevel', 16, 3), allowNull: true },
+      orderQty: { ...dec('orderQty', 16, 3), allowNull: true }, // the usual order quantity (low stock -> Create PO)
     },
     { sequelize, modelName: 'StoreItem', tableName: 'store_items' },
   );
@@ -109,6 +110,9 @@ function init(sequelize) {
       packType: { type: DataTypes.STRING(10), allowNull: true },
       packCount: { type: DataTypes.INTEGER, allowNull: true },
       qtyPerPack: { ...dec('qtyPerPack', 16, 3), allowNull: true },
+      // the purchase order line these goods came against (empty: bought without an order)
+      poLineId: { type: DataTypes.UUID, allowNull: true },
+      poRateNote: { type: DataTypes.STRING(300), allowNull: true },
     },
     { sequelize, modelName: 'StoreInwardLine', tableName: 'store_inward_lines', timestamps: false },
   );

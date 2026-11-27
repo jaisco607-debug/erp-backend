@@ -16,7 +16,7 @@ const c = require('../controllers/storeController');
 const deptChem = require('../services/departmentChemicalService');
 const { Joi } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const ymdDay = ymdDate();
 const SERVICE = { chemical: 'CHEMICAL_STORE', general: 'GENERAL_STORE' };
@@ -75,6 +75,15 @@ stores.get('/:store/items/:id/last-inwards', view, validate({ params: idP, query
 stores.get('/:store/items/:id/usage', view, validate({ params: idP }), async (req, res) => res.json(await inw.itemUsage(req, req.store, req.params.id)));
 stores.get('/:store/batches/:id/usage', view, validate({ params: idP }), async (req, res) => res.json(await inw.batchUsage(req, req.store, req.params.id)));
 stores.get('/:store/stock', view, validate({ query: v.stock.query }), c.stock);
+// Store > Settings: the low-stock limit of each item that is in stock (owner 2026-11-25)
+const stockLimits = require('../services/storeLimitService');
+stores.get('/:store/stock-limits', view, validate({ query: Joi.object({ scope: Joi.string().valid('inStock', 'withLimit').default('inStock'), search: Joi.string().trim().max(100).allow(''), categoryId: Joi.string().guid(), low: Joi.boolean(), page: Joi.number().integer().min(1).default(1), limit: Joi.number().integer().min(1).max(200).default(50) }) }),
+  async (req, res) => res.json(await stockLimits.list(req, req.store, req.validatedQuery)));
+// the low-stock list's "Create PO": what to order, grouped by the last vendor (client admin / store people; nothing is created)
+stores.get('/:store/stock-limits/po-suggestion', view, validate({ query: Joi.object({ itemIds: Joi.alternatives().try(Joi.array().items(Joi.string().guid()).max(200), Joi.string().guid()) }) }),
+  async (req, res) => res.json(await stockLimits.poSuggestion(req, req.store, { itemIds: req.validatedQuery.itemIds && [].concat(req.validatedQuery.itemIds) })));
+stores.put('/:store/stock-limits', full, validate({ body: Joi.object({ items: Joi.array().min(1).max(200).items(Joi.object({ itemId: Joi.string().guid().required(), limit: Joi.number().precision(3).positive().max(R.storeQty).allow(null).required(), orderQty: Joi.number().precision(3).positive().max(R.storeQty).allow(null) })).required() }) }),
+  async (req, res) => res.json(await stockLimits.save(req, req.store, req.body)));
 
 // bought stock sent back to the vendor (owner 2026-10-22)
 stores.get('/:store/vendor-returns/returnable', view, validate(v.vendorReturn.returnable), c.vendorReturn.returnable);
@@ -134,14 +143,14 @@ stores.post('/:store/requests/:id/send', chemicalOnly, full, validate({ params: 
   sentThrough: Joi.string().trim().max(120).allow('', null),
   lines: Joi.array().items(Joi.object({
     lineId: Joi.string().guid().required(),
-    qty: Joi.number().precision(3).min(0).max(LIMITS.qty),
-    qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
+    qty: Joi.number().precision(3).min(0).max(R.storeQty),
+    qtyMain: Joi.number().integer().min(0).max(R.storeQty),
     qtySub: Joi.number().integer().min(0).max(99999),
     // which batches to give (owner 2026-10-19); none = oldest first
     batches: Joi.array().items(Joi.object({
       batchId: Joi.string().guid().required(),
-      qty: Joi.number().precision(3).min(0).max(LIMITS.qty),
-      qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
+      qty: Joi.number().precision(3).min(0).max(R.storeQty),
+      qtyMain: Joi.number().integer().min(0).max(R.storeQty),
       qtySub: Joi.number().integer().min(0).max(99999),
     })).max(50),
   })).max(100),
@@ -150,8 +159,8 @@ stores.post('/:store/requests/:id/send', chemicalOnly, full, validate({ params: 
 const lineParam = Joi.object({ store: Joi.string(), id: Joi.string().guid().required(), lineId: Joi.string().guid().required() });
 stores.post('/:store/requests/:id/lines/:lineId/alternate', chemicalOnly, full, validate({ params: lineParam, body: Joi.object({
   itemId: Joi.string().guid().required(),
-  qty: Joi.number().precision(3).positive().max(LIMITS.qty),
-  qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
+  qty: Joi.number().precision(3).positive().max(R.storeQty),
+  qtyMain: Joi.number().integer().min(0).max(R.storeQty),
   qtySub: Joi.number().integer().min(0).max(99999),
   note: Joi.string().trim().max(300).allow('', null),
 }) }), async (req, res) => res.json(await chem.offerAlternate(req, req.params.id, req.params.lineId, req.body)));
@@ -180,8 +189,8 @@ stores.post('/:store/adjustments', full, validate({ body: Joi.object({
   lines: Joi.array().items(Joi.object({
     itemId: Joi.string().guid().required(),
     mode: Joi.string().valid('COUNT', 'IN', 'OUT').required(),
-    qty: Joi.number().precision(3).min(0).max(LIMITS.qty),
-    qtyMain: Joi.number().integer().min(0).max(LIMITS.qty),
+    qty: Joi.number().precision(3).min(0).max(R.storeQty),
+    qtyMain: Joi.number().integer().min(0).max(R.storeQty),
     qtySub: Joi.number().integer().min(0).max(99999),
     rate: Joi.number().precision(4).min(0).max(999999999),
     batchId: Joi.string().guid(),

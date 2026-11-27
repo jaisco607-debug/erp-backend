@@ -49,7 +49,7 @@ test('issue store cloth to an SO card, linked to the spoilt card: customer comes
   expect((await w.api('get', '/so-cards/available-lots?source=CUSTOMER')).body.data.some((l) => l.fromStore)).toBe(false);
   // the grey inward screen cannot change it
   err(await w.api('patch', `/grey-lots/${is.body.greyLotId}`, { remarks: 'x' }), 422, 'STORE_LOT');
-  err(await w.api('delete', `/grey-lots/${is.body.greyLotId}`), 422, 'STORE_LOT');
+  err(await w.api('delete', `/grey-lots/${is.body.greyLotId}`, { reason: 'Entered by mistake' }), 422, 'STORE_LOT');
   err(await w.api('post', `/grey-lots/${is.body.greyLotId}/unapprove`), 422, 'STORE_LOT');
   err(await w.api('post', `/grey-lots/${is.body.greyLotId}/give-back`, { thaanNos: [1] }), 422, 'STORE_LOT');
   expect((await w.api('get', '/grey-lots?source=STORE')).body.data.map((l) => l.source)).toEqual(['STORE']);

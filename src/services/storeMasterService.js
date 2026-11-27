@@ -98,6 +98,10 @@ async function checkLinks(req, store, data, transaction) {
   }
 }
 
+// an item (chemical) is always shown with its low-stock limit, the red warning and the last inward (owner 2026-11-25); the other kinds as they are
+const present = async (kind, one) => (kind === 'item' ? (await require('./storeLimitService').addWarnings([one]))[0] : one);
+const presentAll = async (kind, many) => (kind === 'item' ? require('./storeLimitService').addWarnings(many) : many);
+
 async function list(kind, req, store, { page, limit, search, isActive, categoryId, brandId, export: exporting }) {
   const { Model, json, include } = KINDS[kind];
   const where = scope(kind, req, store);
@@ -111,7 +115,7 @@ async function list(kind, req, store, { page, limit, search, isActive, categoryI
   }
   if (exporting) return exportList(kind, await Model.findAll({ where, include, order: [[kind === 'vendor' ? 'code' : 'name', 'ASC']] }), store, { search, isActive, categoryId, brandId });
   const { rows, count } = await Model.findAndCountAll({ where, include, order: [[kind === 'vendor' ? 'code' : 'name', 'ASC']], limit, offset: (page - 1) * limit, distinct: true });
-  return { data: rows.map(json), page, limit, total: count };
+  return { data: await presentAll(kind, rows.map(json)), page, limit, total: count };
 }
 
 const col = (key, label, type = 'text') => ({ key, label, type });
@@ -135,7 +139,7 @@ function exportList(kind, rows, store, filters) {
 }
 
 async function get(kind, req, store, id) {
-  return KINDS[kind].json(await findOr404(kind, req, store, id));
+  return present(kind, KINDS[kind].json(await findOr404(kind, req, store, id)));
 }
 
 async function create(kind, req, store, data) {
@@ -155,7 +159,7 @@ async function create(kind, req, store, data) {
     const row = await Model.create(fields, { transaction });
     const after = KINDS[kind].json(await findOr404(kind, req, store, row.id, transaction));
     await audit.log(req, { action: `${entity.toUpperCase()}_CREATED`, entityType: entity, entityId: row.id, after }, { transaction });
-    return after;
+    return present(kind, after);
   });
 }
 
@@ -178,7 +182,7 @@ async function update(kind, req, store, id, changes) {
     await row.save({ transaction });
     const after = json(await findOr404(kind, req, store, id, transaction));
     await audit.log(req, { action: `${entity.toUpperCase()}_UPDATED`, entityType: entity, entityId: id, before, after }, { transaction });
-    return after;
+    return present(kind, after);
   });
 }
 

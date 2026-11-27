@@ -34,6 +34,8 @@ function init(sequelize) {
       width: { ...num('width'), allowNull: true },
       // the rate the cloth was bought at: per METER or per YARD; amount = the sum of the thaan amounts (empty until a rate is given)
       rateUnit: { type: DataTypes.STRING(5), allowNull: true },
+      poLineId: { type: DataTypes.UUID, allowNull: true },
+      poRateNote: { type: DataTypes.STRING(300), allowNull: true },
       rate: { type: DataTypes.DECIMAL(14, 4), allowNull: true, get() { const v = this.getDataValue('rate'); return v === null || v === undefined ? v : Number(v); } },
       amount: { ...num('amount'), allowNull: true },
       partyRef: { type: DataTypes.STRING(80), allowNull: true },

@@ -11,6 +11,7 @@ const { today } = require('../utils/dates');
 const { round: r2 } = require('../utils/money');
 const audit = require('./auditService');
 const counters = require('./counterService');
+const poReceipts = require('./poReceiptService');
 const m = require('./storeMasterService');
 
 const NO = 'fabric_inward_no';
@@ -90,7 +91,13 @@ async function findOr404(req, id, transaction, lock = false) {
   if (!e) throw AppError.notFound('Fabric inward');
   return e;
 }
-const load = async (id, transaction) => json(await FabricInward.findByPk(id, { include: fullInclude, transaction }));
+const load = async (id, transaction) => {
+  const row = await FabricInward.findByPk(id, { include: fullInclude, transaction });
+  const out = json(row);
+  if (row.poLineId) Object.assign(out, { poLineId: row.poLineId, poRateNote: row.poRateNote });
+  await poReceipts.describe(row.companyId, [out], transaction); // the purchase order, when it came against one
+  return out;
+};
 
 /** Quantity from the form: thaans [52.5, { length: 48, width: 58 } ...] in `unit`, or a plain total (inwardMeters / inwardYards) + pieces. */
 function quantities(data, current = {}) {
@@ -228,11 +235,15 @@ async function create(req, data) {
     if (data.inwardNo) await takeTypedNo(req, data.inwardNo, transaction);
     const inwardNo = data.inwardNo || await counters.take(companyId, NO, async () => ((await maxNo(companyId, transaction)) || 0) + 1, transaction);
     const typeNo = typeText(await counters.take(companyId, TYPE, async () => (await maxType(companyId, transaction)) + 1, transaction));
+    // goods against a purchase order (optional): the order's rate when none is typed
+    const orderLine = data.poLineId ? await poReceipts.fabricLine(req, data.poLineId, transaction) : null;
+    if (data.poLineId && orderLine && data.rate === undefined) Object.assign(data, { rate: orderLine.rate, rateUnit: orderLine.unit });
     const q = quantities(data);
     if (q.lot.inwardMeters === undefined || q.lot.pieces === undefined) throw AppError.rule('QTY_REQUIRED', 'Enter the thaans, or the total quantity and pieces');
     const rate = blank(data.rate);
     const e = await FabricInward.create({ ...blanks(without(data, [...QTY_FIELDS, 'inwardNo', 'rate', 'rateUnit'])), ...q.lot, rate: rate ?? null, rateUnit: rate == null ? null : data.rateUnit || q.lot.unit, companyId, inwardNo, typeNo, createdById: req.user.id }, { transaction });
     if (q.thaans) await FabricInwardThaan.bulkCreate(q.thaans.map((t) => ({ ...t, inwardId: e.id })), { transaction });
+    e.poRateNote = data.poLineId ? await poReceipts.fabric(req, e, orderLine, { inwardId: e.id, note: data.poRateNote }, transaction) : null;
     await reprice(e, transaction);
     const after = await load(e.id, transaction);
     await audit.log(req, { action: 'FABRIC_INWARD_CREATED', entityType: 'FabricInward', entityId: e.id, after }, { transaction });
@@ -264,6 +275,8 @@ async function update(req, id, changes) {
     }
     const before = await load(e.id, transaction);
     const oldWidth = e.width ?? null;
+    const wasOnOrder = { poLineId: e.poLineId, meters: Number(e.inwardMeters), yards: Number(e.inwardYards) };
+    if (changes.poLineId !== undefined) e.poLineId = changes.poLineId || null;
     for (const f of EDITABLE) if (changes[f] !== undefined) e[f] = blank(changes[f]);
     if (q) {
       Object.assign(e, q.lot);
@@ -289,6 +302,12 @@ async function update(req, id, changes) {
       e.rate = changes.rate;
       e.rateUnit = changes.rate === null ? null : changes.rateUnit || e.rateUnit || e.unit;
     } else if (changes.rateUnit !== undefined && e.rate != null) e.rateUnit = changes.rateUnit;
+    if (e.poLineId) {
+      const orderLine = await poReceipts.fabricLine(req, e.poLineId, transaction);
+      if (orderLine && e.rate == null && changes.rate === undefined) { e.rate = orderLine.rate; e.rateUnit = orderLine.unit; }
+      const had = orderLine ? { poLineId: wasOnOrder.poLineId, qty: orderLine.unit === 'YARD' ? wasOnOrder.yards : wasOnOrder.meters } : undefined;
+      e.poRateNote = await poReceipts.fabric(req, e, orderLine, { before: had, inwardId: e.id, note: changes.poRateNote !== undefined ? changes.poRateNote : e.poRateNote }, transaction);
+    } else e.poRateNote = null;
     await e.save({ transaction });
     await reprice(e, transaction);
     if (changes.width !== undefined && !(q && q.thaans)) {

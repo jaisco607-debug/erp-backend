@@ -1,7 +1,7 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { STATUSES } = require('../models/SoCard');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 // a lot with a thaan list: thaanNos; a lot without one: meters (+ pieces)
@@ -9,9 +9,9 @@ const lotLines = Joi.array().items(Joi.object({
   greyLotId: Joi.string().guid().required(),
   thaanNos: Joi.array().items(Joi.number().integer().min(1)).min(1).max(2000).unique(),
   // part of a thaan: meters left out = all that is free of it
-  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(LIMITS.qty) }))
+  thaans: Joi.array().items(Joi.object({ thaanNo: Joi.number().integer().min(1).required(), meters: Joi.number().precision(2).positive().max(R.meters) }))
     .min(1).max(2000).unique('thaanNo'),
-  meters: Joi.number().precision(2).positive().max(LIMITS.qty),
+  meters: Joi.number().precision(2).positive().max(R.meters),
   pieces: Joi.number().integer().min(0).max(1000000).default(0),
 }).xor('thaanNos', 'thaans', 'meters')).min(1).max(50).unique('greyLotId');
 const text = (max) => Joi.string().trim().max(max).allow('', null);

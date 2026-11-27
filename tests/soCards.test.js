@@ -62,7 +62,7 @@ test('one card from two lots takes meters out of grey; more than the balance is 
 
   // the used lot cannot be deleted or shrunk below what went out
   await request(app).post(`/api/v1/grey-lots/${t.b.id}/unapprove`).set(t.auth);
-  expect((await request(app).delete(`/api/v1/grey-lots/${t.b.id}`).set(t.auth)).body.error.code).toBe('LOT_IN_USE');
+  expect((await request(app).delete(`/api/v1/grey-lots/${t.b.id}`).set(t.auth).send({ reason: 'Entered by mistake' })).body.error.code).toBe('LOT_IN_USE');
   expect((await request(app).patch(`/api/v1/grey-lots/${t.b.id}`).set(t.auth).send({ inwardMeters: 1000 })).body.error.code).toBe('BELOW_OUTWARD');
 });
 

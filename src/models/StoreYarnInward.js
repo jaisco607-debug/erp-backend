@@ -34,6 +34,8 @@ function init(sequelize) {
       approvedAt: { type: DataTypes.DATE, allowNull: true },
       isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       createdById: { type: DataTypes.UUID, allowNull: true },
+      poLineId: { type: DataTypes.UUID, allowNull: true },
+      poRateNote: { type: DataTypes.STRING(300), allowNull: true },
     },
     { sequelize, modelName: 'StoreYarnInward', tableName: 'store_yarn_inwards', paranoid: true },
   );

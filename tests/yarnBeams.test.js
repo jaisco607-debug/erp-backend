@@ -46,8 +46,8 @@ test('beams: add with the next number or a typed one, name and date (default tod
   expect((await w.api('post', '/weaving/beams', { name: 'N', beamDate: '2026-13-40' })).status).toBe(400);
 
   // update: name, date, number (its own number again is fine, another beam's is not), switch
-  const u = await w.api('patch', `/weaving/beams/${a.body.id}`, { name: 'Beam A1', beamDate: '2026-12-25', beamNo: 1 });
-  expect(u.body).toMatchObject({ beamNo: 1, name: 'Beam A1', beamDate: '2026-12-25' });
+  const u = await w.api('patch', `/weaving/beams/${a.body.id}`, { name: 'Beam A1', beamDate: '2026-11-20', beamNo: 1 });
+  expect(u.body).toMatchObject({ beamNo: 1, name: 'Beam A1', beamDate: '2026-11-20' });
   err(await w.api('patch', `/weaving/beams/${a.body.id}`, { beamNo: 2 }), 422, 'BEAM_NO_TAKEN');
   expect((await w.api('patch', `/weaving/beams/${a.body.id}`, { beamNo: 7 })).body.beamNo).toBe(7);
   expect((await w.api('patch', `/weaving/beams/${b.body.id}`, { isActive: false })).body.isActive).toBe(false);
@@ -60,7 +60,7 @@ test('beams: add with the next number or a typed one, name and date (default tod
   expect((await w.api('get', '/weaving/beams?search=typed')).body.data.map((x) => x.beamNo)).toEqual([50]);
   expect((await w.api('get', '/weaving/beams?search=50')).body.data.map((x) => x.beamNo)).toEqual([50]);
   expect((await w.api('get', '/weaving/beams?isActive=false')).body.data.map((x) => x.beamNo)).toEqual([2]);
-  expect((await w.api('get', '/weaving/beams?dateFrom=2026-12-01&dateTo=2026-12-31')).body.data.map((x) => x.beamNo)).toEqual([7]);
+  expect((await w.api('get', '/weaving/beams?dateFrom=2026-11-15&dateTo=2026-11-24')).body.data.map((x) => x.beamNo)).toEqual([7]);
   expect((await w.viewer('get', `/weaving/beams/${c.body.id}`)).body.name).toBe('Typed number');
   expect((await w.viewer('post', '/weaving/beams', { name: 'V' })).status).toBe(403);
   expect((await w.viewer('delete', `/weaving/beams/${c.body.id}`)).status).toBe(403);

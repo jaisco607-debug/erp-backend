@@ -12,7 +12,7 @@ const issues = require('../services/fabricIssueService');
 const svc = require('../services/fabricInwardService');
 const { Joi, uuidParam, paging } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const view = requireService('FABRIC_STORE', 'VIEW');
 const full = requireService('FABRIC_STORE', 'FULL');
@@ -22,7 +22,7 @@ const deskView = requireAnyService(['FABRIC_STORE', 'SO_CARD'], 'VIEW');
 const deskFull = requireAnyService(['FABRIC_STORE', 'SO_CARD'], 'FULL');
 
 const text = (max) => Joi.string().trim().max(max).allow('', null);
-const meters = Joi.number().precision(2).positive().max(LIMITS.qty);
+const meters = Joi.number().precision(2).positive().max(R.meters);
 const width = Joi.number().precision(2).positive().max(9999);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 
@@ -48,6 +48,7 @@ const fields = {
   // the rate per meter or per yard (the unit defaults to the entry's unit); null clears it. Every thaan's amount = its length x the rate
   rate: Joi.number().precision(4).positive().max(99999999).allow(null),
   rateUnit: Joi.string().uppercase().valid('METER', 'YARD'),
+  poLineId: Joi.string().guid().allow(null, ''), poRateNote: text(300), // goods against a purchase order (optional)
 };
 
 const r = express.Router();

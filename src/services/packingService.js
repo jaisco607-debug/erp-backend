@@ -90,7 +90,12 @@ async function soCards(req, code, query) {
 }
 
 /** Everything the packing list screen needs for one SO card: lots, their thaans (Folding's grade prefilled). */
+// Packing (and so the gate pass) shows the inspection grade of a thaan that was inspected (owner plan N-B1); nothing else changes
+const withGrades = async (req, out) => { await require('./inspectionService').attachGrades(req.user.companyId, (out.lots || []).flatMap((l) => l.thaans || [])); return out; };
 async function form(req, code, soCardId, exceptListId) {
+  return withGrades(req, await formOf(req, code, soCardId, exceptListId));
+}
+async function formOf(req, code, soCardId, exceptListId) {
   const d = await packingDept(req, code, 'VIEW');
   const info = (await cardInfo(req, d.id, [soCardId])).get(soCardId);
   if (!info) throw AppError.notFound('SO card');
@@ -175,6 +180,9 @@ function summary(lines, rates) {
 }
 
 async function load(req, depId, id, transaction) {
+  return withGrades(req, await loadOf(req, depId, id, transaction));
+}
+async function loadOf(req, depId, id, transaction) {
   const [p] = await q(`
     SELECT p.*, cb.name AS "createdByName", ub.name AS "updatedByName", fb.name AS "finalizedByName"
     FROM packing_lists p LEFT JOIN users cb ON cb.id = p."createdById" LEFT JOIN users ub ON ub.id = p."updatedById" LEFT JOIN users fb ON fb.id = p."finalizedById"

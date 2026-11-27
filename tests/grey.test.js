@@ -156,14 +156,14 @@ test('lot delete hides it, keeps its number used; approved lots cannot be delete
   const s = await setup();
   const a = (await request(app).post('/api/v1/grey-lots').set(s.auth).send(lotBody(s))).body;
   const b = (await request(app).post('/api/v1/grey-lots').set(s.auth).send(lotBody(s))).body;
-  expect((await request(app).delete(`/api/v1/grey-lots/${b.id}`).set(s.auth)).status).toBe(204);
+  expect((await request(app).delete(`/api/v1/grey-lots/${b.id}`).set(s.auth).send({ reason: 'Entered by mistake' })).status).toBe(204);
   expect((await request(app).get('/api/v1/grey-lots').set(s.auth)).body.total).toBe(1);
   expect((await request(app).get(`/api/v1/grey-lots/${b.id}`).set(s.auth)).status).toBe(404);
   const c = (await request(app).post('/api/v1/grey-lots').set(s.auth).send(lotBody(s))).body;
   expect(c.lotNo).toBe(3);
 
   await request(app).post(`/api/v1/grey-lots/${a.id}/approve`).set(s.auth);
-  const no = await request(app).delete(`/api/v1/grey-lots/${a.id}`).set(s.auth);
+  const no = await request(app).delete(`/api/v1/grey-lots/${a.id}`).set(s.auth).send({ reason: 'Entered by mistake' });
   expect(no.body.error.code).toBe('LOT_APPROVED');
   expect((await AuditLog.findOne({ where: { action: 'GREY_LOT_DELETED' } })).entityId).toBe(b.id);
 });

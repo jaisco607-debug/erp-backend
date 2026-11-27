@@ -43,6 +43,12 @@ const REPORTS = [
   { key: 'active-fabric', title: 'Active fabric (now)', url: '/v1/reports/active-fabric', reportCode: 'REPORT_ACTIVE_FABRIC', dataCodes: ['GREY_STORE', 'SO_CARD', 'FOLDING'], depts: true, filters: ['customerId', 'departmentId', 'tab', 'by'] },
   { key: 'packing-lists', title: 'Packing lists', url: '/v1/reports/packing-lists', reportCode: 'REPORT_PACKING', dataCodes: ['PACKING'], filters: [...COMMON, 'customerId', 'qualityId', 'status', 'gatePass', 'search'] },
   { key: 'packing-lines', title: 'Packing lists: thaan wise', url: '/v1/reports/packing-lists/lines', reportCode: 'REPORT_PACKING', dataCodes: ['PACKING'], filters: [...COMMON, 'customerId', 'qualityId', 'status', 'gatePass', 'grade', 'search'] },
+  { key: 'shrinkage', title: 'Wastage and shrinkage', url: '/v1/reports/shrinkage', reportCode: 'REPORT_DEPARTMENTS', depts: true, filters: [...COMMON, 'departmentId', 'customerId', 'qualityId', 'lotNo', 'jobNo', 'groupBy'] },
+  { key: 'so-card-margin', title: 'SO card cost and margin', url: '/v1/reports/so-card-margin', reportCode: 'ACC_REPORTS', dataCodes: ['ACC_SALES'], filters: [...COMMON, 'customerId', 'qualityId', 'soNo'] },
+  { key: 'receivable-ageing', title: 'Receivable ageing', url: '/v1/reports/receivable-ageing', reportCode: 'ACC_REPORTS', dataCodes: ['ACC_SALES', 'ACC_RECEIPTS'], filters: ['asOf', 'customerId', 'search', 'tab'] },
+  { key: 'inspection-summary', title: 'Fabric inspection summary', url: '/v1/reports/inspection-summary', reportCode: 'INSPECTION', filters: ['dateFrom', 'dateTo', 'customerId', 'qualityId', 'departmentId'] },
+  { key: 'po-status', title: 'Purchase orders: open and received', url: '/v1/reports/po-status', reportCode: 'CHEMICAL_STORE', dataCodes: ['GENERAL_STORE', 'YARN_STORE', 'FABRIC_STORE'], filters: ['dateFrom', 'dateTo', 'vendorId', 'poStore', 'tab'] },
+  { key: 'po-price-difference', title: 'Purchase orders: price difference', url: '/v1/reports/po-price-difference', reportCode: 'CHEMICAL_STORE', dataCodes: ['GENERAL_STORE', 'YARN_STORE', 'FABRIC_STORE'], filters: ['dateFrom', 'dateTo', 'vendorId', 'poStore'] },
   { key: 'gate-passes', title: 'Gate passes', url: '/v1/reports/gate-passes', reportCode: 'REPORT_GATE_PASSES', dataCodes: ['PACKING', 'GATE_PASS'], filters: [...COMMON, 'customerId', 'search'] },
 ];
 

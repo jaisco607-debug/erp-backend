@@ -121,7 +121,7 @@ test('fabric return screen works with Grey Store only (no SO Card service), and 
   list = (await api('get', '/grey-lots/fabric-returns')).body;
   expect(list.data[0]).toMatchObject({ stage: 'PACKING_LIST', packingLists: [{ listNo: pl.listNo, status: 'DRAFT', thaans: 2, meters: 200, gatePass: null }] });
   await api('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1', destination: 'Faisalabad', passDate: '2030-01-01' });
+  await api('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'Akram', vehicleNo: 'LEA-1', destination: 'Faisalabad', passDate: require('../src/utils/dates').today() });
   list = (await api('get', '/grey-lots/fabric-returns')).body;
   expect(list.data[0]).toMatchObject({ stage: 'DISPATCHED', gatePassCount: 1 });
   expect(list.data[0].packingLists[0]).toMatchObject({ status: 'FINAL', gatePass: { gatePassNo: 1, vehicleNo: 'LEA-1', driverName: 'Akram', destination: 'Faisalabad' } });

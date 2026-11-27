@@ -1,11 +1,11 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { VENDOR_STATUS, VENDOR_PAYMENT, vendorFields } = require('./storeValidator');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 // optional text; '' or null clears it (the services turn '' into null)
 const text = (max) => Joi.string().trim().max(max).allow('', null);
-const meters = Joi.number().precision(2).positive().max(LIMITS.qty);
+const meters = Joi.number().precision(2).positive().max(R.meters);
 // the width of the cloth (inches or whatever the mill uses), typed at inward
 const width = Joi.number().precision(2).positive().max(9999);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
@@ -27,7 +27,7 @@ const lotFields = {
   // typed by hand instead of qualityId: existing quality is used, or a new one is added
   qualityName: Joi.string().trim().min(2).max(150),
   // typed by hand; leave out for the automatic number
-  lotNo: Joi.number().integer().min(1).max(LIMITS.lotNo),
+  lotNo: Joi.number().integer().min(1).max(R.lotNo),
   unit: Joi.string().uppercase().valid('METER', 'YARD'),
   // length of every thaan in `unit`, e.g. [52.5, 48, 50]; pieces and totals are worked out
   // a thaan is its length, or { length, width } when it has its own width
@@ -85,6 +85,8 @@ module.exports = {
       }),
     },
     get: { params: uuidParam },
+    // deleting a lot needs a reason (owner 2026-11-25): it is shown in Deleted items
+    remove: { params: uuidParam, body: Joi.object({ reason: Joi.string().trim().min(5).max(300).required() }) },
     create: {
       body: Joi.object({
         ...lotFields,
@@ -110,7 +112,7 @@ module.exports = {
     undoGiveBack: { params: Joi.object({ id: Joi.string().guid().required(), returnId: Joi.string().guid().required() }) },
     numbering: {
       body: Joi.object({
-        nextLotNo: Joi.number().integer().min(1).max(LIMITS.lotNo),
+        nextLotNo: Joi.number().integer().min(1).max(R.lotNo),
         nextTypeNo: Joi.number().integer().min(1).max(99999999),
       }).min(1),
     },

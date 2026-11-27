@@ -1,6 +1,6 @@
 const { Joi, uuidParam, email } = require('./common');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const id = Joi.string().guid();
 const date = ymdDate();
@@ -22,11 +22,11 @@ const money = Joi.alternatives().try(
   Joi.number().strict().precision(2).min(0).max(9999999999),
 );
 
-// the basic salary of a month: at most LIMITS.basicSalary (an amount like 89000 or 89000.50)
+// the basic salary of a month (an amount like 89000 or 89000.50): at most the limit of the company (Settings > Limits)
 const salary = Joi.alternatives().try(
-  Joi.string().trim().pattern(/^\d{1,7}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'an amount looks like 89000 or 89000.50' }),
-  Joi.number().strict().precision(2).min(0).max(LIMITS.basicSalary),
-).custom((v, h) => (Number(v) > LIMITS.basicSalary ? h.error('number.max', { limit: LIMITS.basicSalary }) : v));
+  Joi.string().trim().pattern(/^\d{1,10}(\.\d{1,2})?$/).messages({ 'string.pattern.base': 'an amount looks like 89000 or 89000.50' }),
+  Joi.number().strict().precision(2).min(0).max(R.basicSalary),
+).custom((v, h) => { const max = h.prefs.context.limits.basicSalary; return Number(v) > max ? h.error('number.max', { limit: max }) : v; });
 
 // IBAN: PK + 22 characters (24 in all): PK, 2 check digits, 4 letters of the bank, 16 letters / digits. Spaces are dropped and capitals are kept.
 const iban = Joi.string().trim().allow('', null).custom((v, h) => {

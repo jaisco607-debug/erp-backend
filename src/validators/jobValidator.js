@@ -1,7 +1,7 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { STATUSES } = require('../models/Job');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 const text = (max) => Joi.string().trim().max(max).allow('', null);
@@ -37,7 +37,7 @@ module.exports = {
       instructions: text(1000),
       items: Joi.array().items(Joi.object({
         soCardLotId: Joi.string().guid(),
-        meters: Joi.number().precision(2).positive().max(LIMITS.qty),
+        meters: Joi.number().precision(2).positive().max(R.meters),
         jobItemId: Joi.string().guid(),
       }).xor('soCardLotId', 'jobItemId')).unique((a, b) => (a.soCardLotId || a.jobItemId) === (b.soCardLotId || b.jobItemId)).messages({ 'array.unique': 'The same row is in the list twice' }).min(1).max(100).required(),
     }),

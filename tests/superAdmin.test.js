@@ -15,7 +15,8 @@ test('only super admins can manage super admins and read the audit log', async (
   const { accessToken } = await loginAs(clientAdmin);
   const auth = { Authorization: `Bearer ${accessToken}` };
   expect((await request(app).get('/api/v1/super-admins').set(auth)).status).toBe(403);
-  expect((await request(app).get('/api/v1/audit-logs').set(auth)).status).toBe(403);
+  // a client admin reads the log of his own company only, and only for a chosen range (the audit screen); the whole log is for super admins
+  expect((await request(app).get('/api/v1/audit-logs').set(auth)).status).toBe(422);
 });
 
 test('create, list, rename, switch off, reset password, all audited', async () => {

@@ -15,7 +15,7 @@ const text = (max) => Joi.string().trim().max(max).allow('', null);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-13' });
 
 const yreq = require('../services/yarnRequestService');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const r = express.Router();
 r.use(authenticate);
@@ -31,8 +31,8 @@ r.post('/requests/:id/reject', full, validate({ params: uuidParam, body: Joi.obj
 r.post('/requests/:id/send', full, validate({ params: uuidParam, body: Joi.object({
   sentThrough: text(120),
   lines: Joi.array().items(Joi.object({
-    lineId: Joi.string().guid().required(), bags: Joi.number().integer().min(0).max(LIMITS.qty),
-    allocations: Joi.array().items(Joi.object({ inwardId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() })).min(1).max(50),
+    lineId: Joi.string().guid().required(), bags: Joi.number().integer().min(0).max(R.yarnBags),
+    allocations: Joi.array().items(Joi.object({ inwardId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(R.yarnBags).required() })).min(1).max(50),
   }).oxor('bags', 'allocations')).max(100),
 }) }), async (req, res) => res.json(await yreq.send(req, req.params.id, req.body)));
 r.get('/form-data', view, async (req, res) => res.json(await svc.formData(req)));
@@ -41,7 +41,7 @@ r.get('/summary', view, validate({ query: Joi.object({ ...filters, groupBy: Joi.
 r.get('/', view, validate({ query: Joi.object({ ...paging, ...filters }) }), async (req, res) => res.json(await svc.list(req, req.validatedQuery)));
 r.post('/', full, validate({ body: Joi.object({
   outwardDate: date, departmentId: Joi.string().guid().required(), dcNo: text(50), sentThrough: text(120), remarks: text(300),
-  lines: Joi.array().items(Joi.object({ inwardId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(LIMITS.qty).required() })).min(1).max(100).unique('inwardId').required(),
+  lines: Joi.array().items(Joi.object({ inwardId: Joi.string().guid().required(), bags: Joi.number().integer().min(1).max(R.yarnBags).required() })).min(1).max(100).unique('inwardId').required(),
 }) }), async (req, res) => res.status(201).json(await svc.create(req, req.body)));
 r.get('/:id', view, validate({ params: uuidParam }), async (req, res) => res.json(await svc.get(req, req.params.id)));
 r.post('/:id/cancel', full, validate({ params: uuidParam }), async (req, res) => res.json(await svc.cancel(req, req.params.id)));

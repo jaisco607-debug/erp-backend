@@ -372,7 +372,15 @@ async function storeList(req, q) {
 
 async function storeGet(req, id) {
   await findOr404(req, id, {});
-  return load(id);
+  const out = await load(id);
+  // the stock of each chemical asked for, with its low-stock warning (Store > Settings sets the limits)
+  const items = await StoreItem.findAll({ where: { id: [...new Set(out.lines.map((l) => l.item.id))] }, include: m.itemInclude });
+  const byId = new Map((await require('./storeLimitService').addWarnings(items.map((i) => m.itemJSON(i)))).map((i) => [i.id, i]));
+  for (const l of out.lines) {
+    const i = byId.get(l.item.id);
+    l.itemStock = i ? { stockQty: i.stockQty, stock: i.stock, limit: i.limit, isLow: i.isLow, warning: i.warning, lastInward: i.lastInward } : null;
+  }
+  return out;
 }
 
 async function accept(req, id) {

@@ -47,7 +47,7 @@ test('services list: kinds, menu groups, a module can be given to companies from
   const { sup, company } = await setup();
   const all = (await sup('get', '/services')).body.data;
   const by = (g) => all.filter((s) => s.menuGroup === g).map((s) => s.code);
-  expect(by('PRODUCTION').sort()).toEqual(['GATE_PASS', 'GREY_STORE', 'PACKING', 'SO_CARD']);
+  expect(by('PRODUCTION').sort()).toEqual(['GATE_PASS', 'GREY_STORE', 'INSPECTION', 'PACKING', 'SO_CARD']);
   expect(by('STORE').sort()).toEqual(['CHEMICAL_STORE', 'FABRIC_STORE', 'GENERAL_STORE', 'STORE_REPORTS', 'YARN_STORE']);
   expect(by('REPORTS')).toHaveLength(9);
   expect(by('PROCESS')).toEqual(expect.arrayContaining(['DYEING', 'FOLDING']));

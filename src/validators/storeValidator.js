@@ -1,12 +1,12 @@
 const { Joi, uuidParam, paging } = require('./common');
 const { ymdDate } = require('../utils/dates');
 const { UNITS } = require('../models');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const text = (max) => Joi.string().trim().max(max).allow('', null);
 const date = ymdDate().messages({ 'string.pattern.base': 'date must look like 2026-10-14' });
 const id = Joi.string().guid();
-const qty = Joi.number().precision(3).positive().max(LIMITS.qty); // kg with grams: 2.5 = 2 kg 500 g
+const qty = Joi.number().precision(3).positive().max(R.storeQty); // kg with grams: 2.5 = 2 kg 500 g
 const money = Joi.number().precision(4).min(0).max(999999999);
 
 const VENDOR_STATUS = ['INDIVIDUAL', 'COMPANY', 'AOP'];
@@ -51,8 +51,9 @@ const master = (kind) => ({
 const PACK_TYPES = ['DRUM', 'BAG', 'CAN', 'CARTON', 'BOX', 'BARREL', 'OTHER'];
 const REASONS = ['DAMAGED', 'WRONG_ITEM', 'EXPIRED', 'QUALITY', 'EXCESS', 'OTHER'];
 const line = Joi.object({
-  packType: Joi.string().valid(...PACK_TYPES), packCount: Joi.number().integer().min(1).max(99999), qtyPerPack: Joi.number().precision(3).positive().max(LIMITS.qty),
-  lineId: id, itemId: id.allow('', null), itemName: Joi.string().trim().max(150).allow('', null), categoryId: id.allow('', null), unit: Joi.string().valid(...UNITS), qty, qtyMain: Joi.number().integer().min(0).max(LIMITS.qty), qtySub: Joi.number().precision(3).min(0).max(999999), rate: money.allow(null),
+  poLineId: id.allow(null, ''), poRateNote: Joi.string().trim().max(300).allow('', null), // goods against a purchase order (optional)
+  packType: Joi.string().valid(...PACK_TYPES), packCount: Joi.number().integer().min(1).max(99999), qtyPerPack: Joi.number().precision(3).positive().max(R.storeQty),
+  lineId: id, itemId: id.allow('', null), itemName: Joi.string().trim().max(150).allow('', null), categoryId: id.allow('', null), unit: Joi.string().valid(...UNITS), qty, qtyMain: Joi.number().integer().min(0).max(R.storeQty), qtySub: Joi.number().precision(3).min(0).max(999999), rate: money.allow(null),
 }).or('qty', 'qtyMain', 'qtySub', 'packCount').oxor('qty', 'qtyMain').oxor('qty', 'qtySub').with('packCount', 'qtyPerPack').without('packCount', ['qty', 'qtyMain', 'qtySub']);
 const inwardBody = {
   inwardDate: date,
@@ -71,7 +72,7 @@ const inwardBody = {
 
 // return to vendor: lines name the purchase line they come from; qty, or packs x qty per pack
 const vendorReturnLine = Joi.object({
-  inwardLineId: id.required(), qty, packType: Joi.string().valid(...PACK_TYPES), packCount: Joi.number().integer().min(1).max(99999), qtyPerPack: Joi.number().precision(3).positive().max(LIMITS.qty),
+  inwardLineId: id.required(), qty, packType: Joi.string().valid(...PACK_TYPES), packCount: Joi.number().integer().min(1).max(99999), qtyPerPack: Joi.number().precision(3).positive().max(R.storeQty),
 }).or('qty', 'packCount').with('packCount', 'qtyPerPack').without('packCount', 'qty');
 
 module.exports = {

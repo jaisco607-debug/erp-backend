@@ -37,11 +37,11 @@ test('a document date more than 5 years from today is refused; the report filter
 
   for (const bad of ['2062-01-01', '1900-01-01', '2099-12-31', addYears(r.today, -6), addYears(r.today, 6)]) {
     const e = await fails(lot(bad), 422, 'DATE_OUT_OF_RANGE');
-    expect(e.details).toMatchObject({ field: 'inwardDate', value: bad, min: r.min, max: r.max });
+    expect(e.details).toMatchObject({ field: 'inwardDate', value: bad, min: r.min, max: r.today });
   }
-  // the first and the last allowed day, and today
+  // the first allowed day and today (a stock document is not dated ahead)
   await ok(lot(r.min), 201);
-  await ok(lot(r.max), 201);
+
   await ok(lot(r.today), 201);
   // a store purchase with the same rule, another module
   const vendor = await ok(w.api('post', '/vendors', { name: 'V1' }), 201);
@@ -78,4 +78,75 @@ test('thaan length, quantities, lot number and vendor limits; rates have none', 
   await fails(inward({ lines: [{ itemId: item.id, qty: 5, rate: 10 }] }), 422, 'VENDOR_REQUIRED');
   await validation(inward({ vendorId: vendor.id, lines: [{ itemId: item.id, qty: 100001, rate: 10 }] }), 'qty');
   await ok(inward({ vendorId: vendor.id, lines: [{ itemId: item.id, qty: 100000, rate: 5000000 }] }), 201);
+});
+
+// owner 2026-11-25: every company sets its own limits (one value for all the quantities, or one for each); rates stay free
+test('Settings > Limits: one value for all the quantities, a value for each, back to the standard; another company is not touched; rates have none', async () => {
+  const w = await setup();
+  const other = await setup();
+  const today = businessRange().today;
+  const cu = await ok(w.api('post', '/customers', { name: 'AZ' }), 201);
+  const ql = await ok(w.api('post', '/qualities', { name: 'PC TWILL' }), 201);
+  const lot = (thaans) => w.api('post', '/grey-lots', { inwardDate: today, customerId: cu.id, qualityId: ql.id, thaans });
+  const validation = async (p) => { const r = await p; expect(r.status).toBe(400); return r.body.error; };
+  const vendor = await ok(w.api('post', '/vendors', { name: 'V1' }), 201);
+  const item = await ok(w.api('post', '/stores/chemical/items', { name: 'Acid', unit: 'KG' }), 201);
+  const inward = (qty, rate = 10) => w.api('post', '/stores/chemical/inwards', { vendorId: vendor.id, inwardDate: today, lines: [{ itemId: item.id, qty, rate }] });
+
+  const s0 = await ok(w.api('get', '/limits/settings'));
+  expect(s0).toMatchObject({ allQuantities: null });
+  expect(s0.items.find((i) => i.key === 'meters')).toMatchObject({ standard: 100000, custom: null, effective: 100000, group: 'quantity' });
+
+  // one value for all the quantities
+  await ok(w.api('put', '/limits/settings', { allQuantities: 500 }));
+  expect((await ok(w.api('get', '/limits'))).numbers).toMatchObject({ meters: 500, storeQty: 500, bags: 500, unitsPerShift: 500, lotNo: 999999, voucherAmount: 1000000000 }); // the lot number and the money are not quantities
+  await validation(lot([501]));
+  await ok(lot([500]), 201);
+  await validation(inward(501));
+  await ok(inward(500, 5000000), 201); // a rate of any size
+  // a value for one item wins over the value for all
+  await ok(w.api('put', '/limits/settings', { limits: { meters: 2000 } }));
+  await ok(lot([2000]), 201);
+  await validation(lot([2001]));
+  await validation(inward(501)); // the store quantity is still the value for all
+  // the other company keeps the standard values
+  expect((await ok(other.api('get', '/limits'))).numbers.meters).toBe(100000);
+  // back to the standard: null for one item, null for all
+  await ok(w.api('put', '/limits/settings', { allQuantities: null, limits: { meters: null } }));
+  expect((await ok(w.api('get', '/limits'))).numbers).toMatchObject({ meters: 100000, storeQty: 100000 });
+  await ok(lot([100000]), 201);
+  // refused: above what the database holds, a name that is not a limit, a normal user
+  await validation(w.api('put', '/limits/settings', { limits: { yarnBags: 5000000 } }));
+  await validation(w.api('put', '/limits/settings', { limits: { rate: 5 } }));
+  const user = await makeUser({ userType: 'USER', companyId: w.company.id });
+  const token = (await loginAs(user)).accessToken;
+  expect((await request(app).put('/api/v1/limits/settings').set({ Authorization: `Bearer ${token}` }).send({ allQuantities: 5 })).status).toBe(403);
+  expect((await request(app).get('/api/v1/limits').set({ Authorization: `Bearer ${token}` })).status).toBe(200); // everybody reads the numbers
+});
+
+test('date rules of a company: stock documents are not dated ahead, vouchers a few days ahead, nothing before the opening date', async () => {
+  const w = await setup();
+  const { windowsOf } = require('../src/services/limitsService');
+  const r = businessRange();
+  const std = windowsOf(null);
+  expect(std.stock).toEqual({ min: r.min, max: r.today }); // 0 days ahead
+  const plus = (n) => { const d = new Date(`${r.today}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  expect(std.voucher.max).toBe(plus(31));
+  expect(std.other.max).toBe(r.max);
+
+  const cu = await ok(w.api('post', '/customers', { name: 'AZ' }), 201);
+  const ql = await ok(w.api('post', '/qualities', { name: 'PC TWILL' }), 201);
+  const lot = (inwardDate) => w.api('post', '/grey-lots', { inwardDate, customerId: cu.id, qualityId: ql.id, thaans: [100] });
+  const e = await fails(lot(plus(1)), 422, 'DATE_OUT_OF_RANGE'); // tomorrow: a stock document is not dated ahead
+  expect(e.details).toMatchObject({ field: 'inwardDate', max: r.today });
+  await ok(lot(r.today), 201);
+  // the company allows 3 days ahead for stock, and an opening date 10 days ago
+  await ok(w.api('put', '/limits/settings', { maxFutureDaysStock: 3, openingDate: plus(-10) }));
+  await ok(lot(plus(3)), 201);
+  await fails(lot(plus(4)), 422, 'DATE_OUT_OF_RANGE');
+  await fails(lot(plus(-11)), 422, 'DATE_OUT_OF_RANGE'); // before the opening date
+  await ok(lot(plus(-10)), 201);
+  await fails(w.api('put', '/limits/settings', { openingDate: plus(5) }), 422, 'OPENING_DATE_FUTURE');
+  const l = await ok(w.api('get', '/limits'));
+  expect(l.dates).toMatchObject({ openingDate: plus(-10), stock: { min: plus(-10), max: plus(3) } });
 });

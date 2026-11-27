@@ -89,7 +89,7 @@ async function seedEverything(w) {
   const pl = await w.ok('post', '/departments/PACKING/packing-lists', { soCardId: card.id, rateA: 10, lines: form.lots[0].thaans.map((t) => ({ greyLotId: lot.id, thaanId: t.thaanId, grade: 'A', meters: t.meters })) }, 201);
   ids.packingList = pl.id;
   await w.ok('post', `/departments/PACKING/packing-lists/${pl.id}/final`);
-  const gp = await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: '2030-01-01' });
+  const gp = await w.ok('put', `/departments/PACKING/packing-lists/${pl.id}/gate-pass`, { driverName: 'D', vehicleNo: 'V-1', passDate: require('../../src/utils/dates').today() });
   ids.gatePass = gp.id;
   // people
   const emp = await w.ok('post', '/users', { name: 'Aslam', email: 'aslam@audit.com', password: 'Employee-Pass-123', services: [{ serviceId: w.s.DYEING.id, access: 'FULL' }] }, 201);

@@ -10,6 +10,7 @@ const { today } = require('../utils/dates');
 const { round: r2 } = require('../utils/money');
 const audit = require('./auditService');
 const counters = require('./counterService');
+const poReceipts = require('./poReceiptService');
 const m = require('./storeMasterService');
 
 const NO = 'store_yarn_inward_no';
@@ -48,6 +49,7 @@ function json(e, extra = {}) {
     approvedAt: e.approvedAt,
     isActive: e.isActive,
     createdAt: e.createdAt,
+    ...(e.poLineId ? { poLineId: e.poLineId, poRateNote: e.poRateNote } : {}),
     ...extra,
   };
 }
@@ -57,7 +59,12 @@ async function findOr404(req, id, transaction, lock = false) {
   if (!e) throw AppError.notFound('Yarn inward');
   return e;
 }
-const load = async (id, transaction) => json(await StoreYarnInward.findByPk(id, { include, transaction }));
+const load = async (id, transaction) => {
+  const row = await StoreYarnInward.findByPk(id, { include, transaction });
+  const out = json(row);
+  await poReceipts.describe(row.companyId, [out], transaction); // the purchase order, when it came against one
+  return out;
+};
 
 async function checkVendor(req, vendorId, transaction) {
   const v = await Vendor.findOne({ where: { id: vendorId, companyId: req.user.companyId }, transaction });
@@ -153,7 +160,10 @@ async function create(req, data) {
     const e = StoreYarnInward.build({
       companyId, inwardNo, inwardDate: data.inwardDate, vendorId: data.vendorId, yarnName: squeeze(data.yarnName), brand: squeeze(data.brand) || null,
       bags: data.bags, lbsPerBag: data.lbsPerBag, ratePerLb: data.ratePerLb ?? null, dcNo: data.dcNo || null, remarks: data.remarks || null, createdById: req.user.id,
+      poLineId: data.poLineId || null,
     });
+    // goods against a purchase order (optional): checked, and the order's rate when none is typed
+    await poReceipts.yarn(req, e, { note: data.poRateNote }, transaction);
     worked(e);
     await e.save({ transaction });
     const after = await load(e.id, transaction);
@@ -173,10 +183,13 @@ async function update(req, id, changes) {
       e.inwardNo = changes.inwardNo;
     }
     const before = await load(e.id, transaction);
+    const wasOnOrder = { poLineId: e.poLineId, qty: Number(e.totalLbs) };
+    if (changes.poLineId !== undefined) e.poLineId = changes.poLineId || null;
     for (const f of ['inwardDate', 'vendorId', 'bags', 'lbsPerBag', 'ratePerLb']) if (changes[f] !== undefined) e[f] = changes[f];
     if (changes.yarnName !== undefined) e.yarnName = squeeze(changes.yarnName);
     if (changes.brand !== undefined) e.brand = squeeze(changes.brand) || null;
     for (const f of ['dcNo', 'remarks']) if (changes[f] !== undefined) e[f] = changes[f] || null;
+    await poReceipts.yarn(req, e, { before: wasOnOrder, inwardId: e.id, note: changes.poRateNote !== undefined ? changes.poRateNote : e.poRateNote }, transaction);
     worked(e);
     await e.save({ transaction });
     const after = await load(e.id, transaction);

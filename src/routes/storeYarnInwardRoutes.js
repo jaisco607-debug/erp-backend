@@ -10,7 +10,7 @@ const requireService = require('../middlewares/requireService');
 const svc = require('../services/storeYarnInwardService');
 const { Joi, uuidParam, paging } = require('../validators/common');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const view = requireService('YARN_STORE', 'VIEW');
 const full = requireService('YARN_STORE', 'FULL');
@@ -25,11 +25,12 @@ const fields = {
   vendorId: Joi.string().guid(),
   yarnName: Joi.string().trim().min(1).max(120), // typed: e.g. "22/s Cotton"
   brand: text(80),
-  bags: Joi.number().integer().min(1).max(LIMITS.qty), // every bag of the arrival weighs the same
+  bags: Joi.number().integer().min(1).max(R.yarnBags), // every bag of the arrival weighs the same
   lbsPerBag: Joi.number().precision(2).positive().max(9999),
   ratePerLb: Joi.number().precision(4).positive().max(99999999).allow(null), // the vendor's rate per lb
   dcNo: text(50),
   remarks: text(300),
+  poLineId: Joi.string().guid().allow(null, ''), poRateNote: text(300), // goods against a purchase order (optional)
 };
 
 const r = express.Router();

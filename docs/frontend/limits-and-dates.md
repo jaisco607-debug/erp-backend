@@ -1,5 +1,7 @@
 # LIMITS ON NUMBERS, DATES (5 years), and the double-cancel fix
 
+**Update 2026-11-25: the numbers and the date windows are now the company's own and have 3 kinds of dates (stock / voucher / other). Read `settings-limits.md` first; the sections below describe the standard values.**
+
 Owner rules of 2026-11-24. The server now refuses a typed extra zero and a wrong year. The screens should stop it earlier, with the same numbers.
 
 ## 1. Read the numbers once: `GET /api/v1/limits` (any signed-in user)

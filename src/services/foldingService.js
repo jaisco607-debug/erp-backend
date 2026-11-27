@@ -63,6 +63,12 @@ const sum3 = (x) => round(x.a + x.b + x.cp);
 
 /** Builds the rows: lots -> lines (thaans) with received / A / B / CP / sent / left, plus cost. */
 async function rows(req, depId, extra, replacements, transaction) {
+  const out = await rowsOf(req, depId, extra, replacements, transaction);
+  await require('./inspectionService').attachGrades(req.user.companyId, out.flatMap((r) => r.lots.flatMap((l) => l.lines)));
+  return out;
+}
+
+async function rowsOf(req, depId, extra, replacements, transaction) {
   const base = await q(ROWS_SQL.replace('%EXTRA%', extra), { companyId: req.user.companyId, dep: depId, ...replacements }, transaction);
   if (!base.length) return [];
   const jobIds = [...new Set(base.map((r) => r.jobId))];

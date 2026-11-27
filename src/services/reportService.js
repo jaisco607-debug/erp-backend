@@ -752,4 +752,4 @@ async function gatePasses(req, f) {
   return respond('Gate passes', f, [section('passes', 'Gate passes', columns, rows.map(({ customerId, ...r }) => r), ['thaans'])], f);
 }
 
-module.exports = { _x: { q, round, col, section, respond, clothNow, chemLines, needAnyService, myDepartments, hasReportService, STATUS_TEXT, CARD_STATUS, CARD_POSITIONS, cardPositions, positionKey, jobCards, costMap, lotsText }, greyParties, greyLots, soCards, soCardMovement, soCardDetail, departmentSummary, departmentJobs, operators, chemicalUsage, chemicalStock, chemicalPurchases, folding, clothInProcess, packingLists, gatePasses };
+module.exports = { _x: { q, round, col, section, respond, clothNow, chemLines, yarnLines, needAnyService, myDepartments, hasReportService, STATUS_TEXT, CARD_STATUS, CARD_POSITIONS, cardPositions, positionKey, jobCards, costMap, lotsText }, greyParties, greyLots, soCards, soCardMovement, soCardDetail, departmentSummary, departmentJobs, operators, chemicalUsage, chemicalStock, chemicalPurchases, folding, clothInProcess, packingLists, gatePasses };

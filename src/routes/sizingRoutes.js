@@ -10,7 +10,7 @@ const contractsSvc = require('../services/yarnContractService');
 const loomBeams = require('../services/loomBeamService');
 const production = require('../services/weavingProductionService');
 const { ymdDate } = require('../utils/dates');
-const LIMITS = require('../config/limits');
+const { REFS: R } = require('../config/limits');
 
 const router = express.Router();
 router.use(authenticate);
@@ -30,7 +30,7 @@ const batchFields = {
   ratePerLb: Joi.number().precision(4).min(0).max(1000000000).allow(null),
   sizingLengthM: Joi.number().precision(2).min(0).max(1000000000).allow(null), // the length the sizing party says it sized (optional; empty = the length received)
 };
-const beamRow = Joi.object({ beamId: id.required(), lengthM: Joi.number().precision(2).positive().max(LIMITS.qty).required(), weightKg: Joi.number().precision(2).positive().max(100000).allow(null) });
+const beamRow = Joi.object({ beamId: id.required(), lengthM: Joi.number().precision(2).positive().max(R.beamMeters).required(), weightKg: Joi.number().precision(2).positive().max(100000).allow(null) });
 const coneRow = Joi.object({ type: Joi.string().trim().min(1).max(40), kg: Joi.number().precision(2).positive().max(1000000).required(), cones: Joi.number().integer().min(0).max(10000000), bags: Joi.number().integer().min(0).max(10000000) });
 const receiptFields = { receiptDate: ymd, refNo: Joi.string().trim().max(50).allow('', null), notes: Joi.string().trim().max(300).allow('', null), beams: Joi.array().max(200).items(beamRow), cutCones: Joi.array().max(50).items(coneRow) };
 
@@ -82,7 +82,7 @@ router.delete('/loom-beams/:id/beams/:beamId', full, validate({ params: Joi.obje
 router.get('/loom-beams/:id/production', view, validate({ params: uuidParam }), async (req, res) => res.json(await production.entryRegister(req, req.params.id)));
 router.post('/loom-beams/:id/confirm', full, validate({ params: uuidParam }), async (req, res) => res.json(await loomBeams.confirm(req, req.params.id)));
 router.post('/loom-beams/:id/cut-off', full, validate({ params: uuidParam, body: Joi.object({ endDate: ymd }) }), async (req, res) => res.json(await loomBeams.cutOff(req, req.params.id, req.body)));
-router.post('/loom-beams/:id/half-cut', full, validate({ params: uuidParam, body: Joi.object({ endDate: ymd, leftM: Joi.number().precision(2).positive().max(LIMITS.qty), beams: Joi.array().items(Joi.object({ beamId: id.required(), leftM: Joi.number().precision(2).positive().max(LIMITS.qty).required() })).max(loomBeams.MAX_BEAMS) }) }), async (req, res) => res.json(await loomBeams.halfCut(req, req.params.id, req.body)));
+router.post('/loom-beams/:id/half-cut', full, validate({ params: uuidParam, body: Joi.object({ endDate: ymd, leftM: Joi.number().precision(2).positive().max(R.beamMeters), beams: Joi.array().items(Joi.object({ beamId: id.required(), leftM: Joi.number().precision(2).positive().max(R.beamMeters).required() })).max(loomBeams.MAX_BEAMS) }) }), async (req, res) => res.json(await loomBeams.halfCut(req, req.params.id, req.body)));
 router.post('/loom-beams/:id/reopen', full, validate({ params: uuidParam }), async (req, res) => res.json(await loomBeams.reopen(req, req.params.id)));
 
 module.exports = router;

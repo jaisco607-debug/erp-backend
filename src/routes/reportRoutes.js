@@ -8,6 +8,11 @@ const authenticate = require('../middlewares/authenticate');
 const validate = require('../middlewares/validate');
 const { Joi } = require('../validators/common');
 const reports = require('../services/reportService');
+const shrinkage = require('../services/shrinkageService');
+const soMargin = require('../services/soCardMarginService');
+const ageing = require('../services/receivableAgeingService');
+const inspectionReport = require('../services/inspectionReportService');
+const poReport = require('../services/poReportService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -25,12 +30,12 @@ const query = Joi.object({
   limit: Joi.number().integer().min(1).max(100000).default(50),
   export: Joi.boolean().default(false), all: Joi.boolean().default(false),
   dateFrom: opt(day), dateTo: opt(day), customerId: opt(id), qualityId: opt(id), departmentId: opt(id), fromDepartmentId: opt(id), itemId: opt(id),
-  soNo: opt(Joi.number().integer().min(1)), jobNo: opt(Joi.number().integer().min(1)),
+  soNo: opt(Joi.number().integer().min(1)), jobNo: opt(Joi.number().integer().min(1)), lotNo: opt(Joi.number().integer().min(1)), asOf: opt(day), vendorId: opt(id), poStore: opt(Joi.string().lowercase().valid('chemical', 'general', 'yarn', 'fabric')),
   status: opt(Joi.string().trim().max(20)), operator: opt(Joi.string().trim().max(80)), operatorName: opt(Joi.string().trim().max(80)), search: opt(Joi.string().trim().max(40)),
   stock: opt(Joi.string().trim().max(20)), by: opt(Joi.string().trim().max(30)), tab: opt(Joi.string().trim().max(30)),
   gatePass: opt(Joi.string().trim().lowercase().valid('yes', 'no', 'all')), grade: opt(Joi.string().trim().uppercase().valid('A', 'B', 'CP', 'ALL')),
   isGreyReturn: opt(Joi.boolean()), onlyProcess: opt(Joi.boolean()),
-  groupBy: opt(Joi.string().valid('none', 'chemical', 'department', 'job', 'so_card', 'party', 'party_department', 'detail')),
+  groupBy: opt(Joi.string().valid('none', 'chemical', 'department', 'job', 'so_card', 'party', 'party_department', 'detail', 'quality', 'customer', 'month')),
   store: opt(Joi.string().valid('chemical', 'general')), view: opt(Joi.string().valid('lists', 'lines')),
 });
 
@@ -104,5 +109,17 @@ router.get('/cloth-now', ...run('REPORT_ACTIVE_FABRIC', reports.clothInProcess))
 router.get('/packing-lists', ...run('REPORT_PACKING', reports.packingLists));
 router.get('/packing-lists/lines', ...run('REPORT_PACKING', reports.packingLists, { view: 'lines' }));
 router.get('/gate-passes', ...run('REPORT_GATE_PASSES', reports.gatePasses));
+// owner plan N-B4 and N-C1
+router.get('/shrinkage', ...run('REPORT_DEPARTMENTS', shrinkage.report));
+router.get('/so-card-margin', ...run('ACC_REPORTS', soMargin.report));
+// owner plan N-C2
+router.get('/receivable-ageing', ...run('ACC_REPORTS', ageing.report));
+// owner plan N-B1
+router.get('/inspection-summary', ...run('INSPECTION', inspectionReport.summary));
+// owner plan N-D1
+router.get('/po-status', ...run('CHEMICAL_STORE', poReport.status));
+router.get('/po-price-difference', ...run('CHEMICAL_STORE', poReport.priceDifference));
+router.get('/receivable-ageing/:customerId', needs('ACC_REPORTS'), validate({ params: Joi.object({ customerId: Joi.string().guid().required() }) }), async (req, res) => res.json(await ageing.detail(req, req.params.customerId)));
+router.get('/so-card-margin/:soCardId', needs('ACC_REPORTS'), validate({ params: Joi.object({ soCardId: Joi.string().guid().required() }) }), async (req, res) => res.json(await soMargin.detail(req, req.params.soCardId)));
 
 module.exports = router;
